@@ -1,0 +1,27 @@
+[package]
+name = "rvpacker-txt-rs-lib"
+version = "3.0.5"
+authors = ["savannstm <savannstm@gmail.com>"]
+edition = "2021"
+rust-version = "1.76.0"
+description = "Library providing functions for rvpacker-txt-rs."
+documentation = "https://docs.rs/rvpacker-txt-rs-lib"
+readme = "README.md"
+repository = "https://github.com/savannstm/rvpacker-txt-rs-lib"
+license-file = "LICENSE.md"
+
+[features]
+log = ["dep:log"]
+
+[dependencies]
+encoding_rs = "0.8.35"
+fastrand = "2.2.0"
+flate2 = "1.0.35"
+indexmap = "2.6.0"
+xxhash-rust = { version = "0.8.12", features = ["xxh3"] }
+marshal-rs = { version = "0.3.2", features = ["sonic"] }
+once_cell = "1.20.2"
+rayon = "1.10.0"
+regex = "1.11.1"
+sonic-rs = "0.3.16"
+log = { version = "0.4.22", optional = true }
