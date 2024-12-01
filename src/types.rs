@@ -1,3 +1,8 @@
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Deserializer};
+#[cfg(feature = "serde")]
+use std::mem::transmute;
+
 #[cfg(feature = "log")]
 use log;
 
@@ -139,4 +144,37 @@ macro_rules! eprintln {
     ($($arg:tt)*) => {{
         log::error!($($arg)*);
     }};
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for MapsProcessingMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: u8 = Deserialize::deserialize(deserializer)?;
+        Ok(unsafe { transmute::<u8, MapsProcessingMode>(value) })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for EngineType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: u8 = Deserialize::deserialize(deserializer)?;
+        Ok(unsafe { transmute::<u8, EngineType>(value) })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for ProcessingMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: u8 = Deserialize::deserialize(deserializer)?;
+        Ok(unsafe { transmute::<u8, ProcessingMode>(value) })
+    }
 }
