@@ -1823,6 +1823,16 @@ pub fn write_plugins(
     }
 }
 
+/// Writes scripts.txt file back to its initial form.
+///
+/// For inner code documentation, check read_system function.
+/// # Parameters
+/// * `scripts_file_path` - path to the original system file
+/// * `other_path` - path to the other directory
+/// * `output_path` - path to the output directory
+/// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
+/// * `logging` - whether to log or not
+/// * `engine_type` - engine type for right files processing
 pub fn write_scripts(
     scripts_file_path: &Path,
     other_path: &Path,

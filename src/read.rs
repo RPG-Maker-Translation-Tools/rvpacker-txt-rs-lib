@@ -489,6 +489,7 @@ fn parse_list<'a>(
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
+/// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_map(
     original_path: &Path,
     output_path: &Path,
@@ -1092,9 +1093,7 @@ pub fn read_map(
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
-/// * `file_parsed_msg` - message to log when file is parsed
-/// * `file_already_parsed_msg` - message to log when file that's about to be parsed already exists (default processing mode)
-/// * `file_is_not_parsed_msg` - message to log when file that's about to be parsed not exist (append processing mode)
+/// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_other(
     original_path: &Path,
     output_path: &Path,
@@ -1445,9 +1444,7 @@ pub fn read_other(
 /// * `logging` - whether to log
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
-/// * `file_parsed_msg` - message to log when file is parsed
-/// * `file_already_parsed_msg` - message to log when file that's about to be parsed already exists (default processing mode)
-/// * `file_is_not_parsed_msg` - message to log when file that's about to be parsed not exist (append processing mode)
+/// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_system(
     system_file_path: &Path,
     output_path: &Path,
@@ -1937,6 +1934,13 @@ pub fn read_system(
     }
 }
 
+/// Reads Scripts file of scripts_file_path and parses it into .txt file of output_path.
+/// # Parameters
+/// * `scripts_file_path` - path to directory than contains game files
+/// * `output_path` - path to output directory
+/// * `romanize` - whether to romanize text
+/// * `logging` - whether to log
+/// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_scripts(
     scripts_file_path: &Path,
     other_path: &Path,
