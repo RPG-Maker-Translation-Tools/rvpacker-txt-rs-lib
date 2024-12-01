@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 #[cfg(feature = "log")]
-use crate::{eprintln, println};
+use crate::println;
 use crate::{
     functions::{determine_extension, extract_strings, get_object_data, romanize_string},
     statics::{
