@@ -1938,10 +1938,8 @@ pub fn write_scripts(
                 .write_all(code.as_bytes())
                 .unwrap_log(file!(), line!());
 
-            let data: Array = Array::from(buf);
-
-            if let Some(arr) = script[2].as_array_mut() {
-                arr[2]["data"] = data.into()
+            if let Some(obj) = script[2].as_object_mut() {
+                obj["data"] = Array::from(buf).into()
             };
         });
 
