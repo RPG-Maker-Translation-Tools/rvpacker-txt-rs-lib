@@ -1906,7 +1906,7 @@ pub fn write_scripts(
 
             let (strings_array, indices_array) = extract_strings(&code, true);
 
-            for (mut string, index) in strings_array.into_iter().zip(indices_array).rev() {
+            for (mut string, range) in strings_array.into_iter().zip(indices_array).rev() {
                 if string.is_empty() || !lines_map.contains_key(&string) {
                     continue;
                 }
@@ -1919,15 +1919,7 @@ pub fn write_scripts(
 
                 if let Some(translated) = translated {
                     if !translated.is_empty() {
-                        let before: Option<&str> = code.get(..index);
-                        let after: Option<&str> = code.get(index + string.len()..);
-
-                        if before.is_some() && after.is_some() {
-                            code.replace_range(index..index + string.len(), translated);
-                        } else {
-                            eprintln!("Couldn't replace string in scripts file. {}", string);
-                            return;
-                        }
+                        code.replace_range(range, translated);
                     }
                 }
             }

@@ -100,7 +100,10 @@ pub fn get_object_data(object: &Object) -> String {
 pub fn extract_strings(
     ruby_code: &str,
     mode: bool,
-) -> (IndexSet<String, BuildHasherDefault<Xxh3>>, Vec<usize>) {
+) -> (
+    IndexSet<String, BuildHasherDefault<Xxh3>>,
+    Vec<std::ops::Range<usize>>,
+) {
     fn is_escaped(index: usize, string: &str) -> bool {
         let mut backslash_count: u8 = 0;
 
@@ -116,7 +119,7 @@ pub fn extract_strings(
     }
 
     let mut strings: IndexSet<String, BuildHasherDefault<Xxh3>> = IndexSet::default();
-    let mut indices: Vec<usize> = Vec::new();
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
     let mut inside_string: bool = false;
     let mut inside_multiline_comment: bool = false;
     let mut string_start_index: usize = 0;
@@ -156,16 +159,18 @@ pub fn extract_strings(
                 string_start_index = global_index + i;
                 current_quote_type = char;
             } else if inside_string && char == current_quote_type && !is_escaped(i, &line) {
-                let extracted_string: String = ruby_code[string_start_index + 1..global_index + i]
+                let range: std::ops::Range<usize> = string_start_index + 1..global_index + i;
+
+                let extracted_string: String = ruby_code[range.clone()]
                     .replace("\r\n", NEW_LINE)
                     .replace('\n', NEW_LINE);
 
                 if !strings.contains(&extracted_string) {
                     strings.insert(extracted_string);
-                }
 
-                if mode {
-                    indices.push(string_start_index + 1);
+                    if mode {
+                        ranges.push(range);
+                    }
                 }
 
                 inside_string = false;
@@ -176,7 +181,7 @@ pub fn extract_strings(
         global_index += line.len();
     }
 
-    (strings, indices)
+    (strings, ranges)
 }
 
 pub fn determine_extension(engine_type: EngineType) -> &'static str {
