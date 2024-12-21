@@ -3,15 +3,13 @@
 use crate::{eprintln, println};
 use crate::{
     functions::{determine_extension, extract_strings, get_object_data, romanize_string},
-    statics::{ENDS_WITH_IF_RE, LINES_SEPARATOR, LISA_PREFIX_RE, NEW_LINE, _SELECT_WORDS_RE},
+    statics::{ENDS_WITH_IF_RE, LINES_SEPARATOR, LISA_PREFIX_RE, NEW_LINE},
     types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, Variable},
 };
 use encoding_rs::Encoding;
-use fastrand::shuffle;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
-use regex::{Captures, Match};
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Object, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -27,19 +25,6 @@ use std::{
 use xxhash_rust::xxh3::Xxh3;
 
 type StringHashMap = HashMap<String, String, BuildHasherDefault<Xxh3>>;
-
-fn _shuffle_words(string: &str) -> String {
-    let mut words: Vec<&str> = _SELECT_WORDS_RE
-        .find_iter(string)
-        .map(|m: Match| m.as_str())
-        .collect();
-
-    shuffle(&mut words);
-
-    _SELECT_WORDS_RE
-        .replace_all(string, |_: &Captures| words.pop().unwrap_or(""))
-        .into_owned()
-}
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
 fn get_translated_parameter<'a>(
