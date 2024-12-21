@@ -84,26 +84,23 @@ impl EachLine for str {
 }
 
 pub trait OptionExt<T> {
-    fn unwrap_log(self, file: &str, line: u32) -> T;
+    fn unwrap_log(self) -> T;
 }
 
 pub trait ResultExt<T, E> {
-    fn unwrap_log(self, file: &str, line: u32) -> T
+    fn unwrap_log(self) -> T
     where
         E: std::fmt::Debug;
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn unwrap_log(self, _file: &str, _line: u32) -> T {
+    #[track_caller]
+    fn unwrap_log(self) -> T {
         match self {
             Some(value) => value,
             None => {
                 #[cfg(feature = "log")]
-                log::error!(
-                    "FILE: {} LINE: {} - called `Option::unwrap_log()` on a `None` value",
-                    _file,
-                    _line
-                );
+                log::error!("called `Option::unwrap_log()` on a `None` value",);
                 panic!("called `Option::unwrap_log()` on a `None` value");
             }
         }
@@ -111,7 +108,8 @@ impl<T> OptionExt<T> for Option<T> {
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn unwrap_log(self, _file: &str, _line: u32) -> T
+    #[track_caller]
+    fn unwrap_log(self) -> T
     where
         E: std::fmt::Debug,
     {
@@ -119,12 +117,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
             Ok(value) => value,
             Err(err) => {
                 #[cfg(feature = "log")]
-                log::error!(
-                    "FILE: {} LINE: {} - called `Result::unwrap_log()` on an `Err` value: {:?}",
-                    _file,
-                    _line,
-                    err
-                );
+                log::error!("called `Result::unwrap_log()` on an `Err` value: {:?}", err);
                 panic!("called `Result::unwrap_log()` on an `Err` value: {:?}", err);
             }
         }
