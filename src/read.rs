@@ -318,7 +318,7 @@ fn parse_list<'a>(
     let set_ref: &Xxh3IndexSet = unsafe { &*set.get() };
 
     for item in list {
-        let code: u16 = item[code_label].as_u64().unwrap_log(file!(), line!()) as u16;
+        let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
         if in_sequence && ![401, 405].contains(&code) {
             let line: &mut Vec<String> = if code != 401 {
@@ -356,9 +356,7 @@ fn parse_list<'a>(
             continue;
         }
 
-        let parameters: &Array = item[parameters_label]
-            .as_array()
-            .unwrap_log(file!(), line!());
+        let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
         match code {
             401 => {
@@ -392,7 +390,7 @@ fn parse_list<'a>(
                 in_sequence = true;
             }
             102 => {
-                for i in 0..parameters[0].as_array().unwrap_log(file!(), line!()).len() {
+                for i in 0..parameters[0].as_array().unwrap_log().len() {
                     let subparameter_string: String = parameters[0][i]
                         .as_str()
                         .map(str::to_owned)
@@ -559,9 +557,8 @@ pub fn read_map(
         return;
     }
 
-    let obj_vec_iter = read_dir(original_path)
-        .unwrap_log(file!(), line!())
-        .filter_map(|entry: Result<DirEntry, std::io::Error>| match entry {
+    let obj_vec_iter = read_dir(original_path).unwrap_log().filter_map(
+        |entry: Result<DirEntry, std::io::Error>| match entry {
             Ok(entry) => {
                 let filename: OsString = entry.file_name();
                 let filename_str: &str =
@@ -574,15 +571,9 @@ pub fn read_map(
                     && filename_str.ends_with(determine_extension(engine_type))
                 {
                     let json: Value = if engine_type == EngineType::New {
-                        from_str(&read_to_string(entry.path()).unwrap_log(file!(), line!()))
-                            .unwrap_log(file!(), line!())
+                        from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
                     } else {
-                        load(
-                            &read(entry.path()).unwrap_log(file!(), line!()),
-                            None,
-                            Some(""),
-                        )
-                        .unwrap_log(file!(), line!())
+                        load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                     };
 
                     Some((filename_str.to_owned(), json))
@@ -591,7 +582,8 @@ pub fn read_map(
                 }
             }
             Err(_) => None,
-        });
+        },
+    );
 
     if maps_processing_mode != MapsProcessingMode::Preserve {
         let mut lines_vec: Vec<String> = Vec::new();
@@ -603,7 +595,7 @@ pub fn read_map(
         let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
         let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log(file!(), line!())
+            read_to_string(output_path).unwrap_log()
         } else {
             String::new()
         };
@@ -611,9 +603,7 @@ pub fn read_map(
         if processing_mode == ProcessingMode::Append {
             if output_path.exists() {
                 for line in original_content.split('\n') {
-                    let (original, translated) = line
-                        .split_once(LINES_SEPARATOR)
-                        .unwrap_log(file!(), line!());
+                    let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                     lines_map.insert(original, translated);
                 }
             } else {
@@ -704,14 +694,14 @@ pub fn read_map(
             let events_arr: Vec<&Value> = if engine_type == EngineType::New {
                 obj[events_label]
                     .as_array()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter()
                     .skip(1)
                     .collect()
             } else {
                 obj[events_label]
                     .as_object()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter()
                     .map(|(_, value)| value)
                     .collect()
@@ -722,9 +712,9 @@ pub fn read_map(
                     continue;
                 }
 
-                for page in event[pages_label].as_array().unwrap_log(file!(), line!()) {
+                for page in event[pages_label].as_array().unwrap_log() {
                     parse_list(
-                        page[list_label].as_array().unwrap_log(file!(), line!()),
+                        page[list_label].as_array().unwrap_log(),
                         &ALLOWED_CODES,
                         romanize,
                         game_type,
@@ -745,16 +735,16 @@ pub fn read_map(
                 write(
                     output_path
                         .parent()
-                        .unwrap_log(file!(), line!())
+                        .unwrap_log()
                         .parent()
-                        .unwrap_log(file!(), line!())
+                        .unwrap_log()
                         .join(format!(
                             "json/{}.json",
-                            &filename[..filename.rfind('.').unwrap_log(file!(), line!())]
+                            &filename[..filename.rfind('.').unwrap_log()]
                         )),
-                    to_string(&obj).unwrap_log(file!(), line!()),
+                    to_string(&obj).unwrap_log(),
                 )
-                .unwrap_log(file!(), line!());
+                .unwrap_log();
             }
         }
 
@@ -782,14 +772,14 @@ pub fn read_map(
 
         output_content.pop();
 
-        write(output_path, output_content).unwrap_log(file!(), line!());
+        write(output_path, output_content).unwrap_log();
     } else {
         let mut names_lines_vec: VecDeque<String> = VecDeque::new();
         let mut lines_vec: Vec<(String, String)> = Vec::new();
         let mut lines_pos: usize = 0;
 
         let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log(file!(), line!())
+            read_to_string(output_path).unwrap_log()
         } else {
             String::new()
         };
@@ -797,9 +787,7 @@ pub fn read_map(
         if processing_mode == ProcessingMode::Append {
             if output_path.exists() {
                 for line in original_content.split('\n') {
-                    let (original, translated) = line
-                        .split_once(LINES_SEPARATOR)
-                        .unwrap_log(file!(), line!());
+                    let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
                     if original.starts_with("<!-- Map") {
                         if original.len() > 20 {
@@ -874,7 +862,7 @@ pub fn read_map(
                 (
                     filename_comment,
                     if filename_comment_len > 20 && names_lines_vec.front().is_some() {
-                        names_lines_vec.pop_front().unwrap_log(file!(), line!())
+                        names_lines_vec.pop_front().unwrap_log()
                     } else {
                         String::new()
                     },
@@ -885,14 +873,14 @@ pub fn read_map(
             let events_arr: Vec<&Value> = if engine_type == EngineType::New {
                 obj[events_label]
                     .as_array()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter()
                     .skip(1)
                     .collect()
             } else {
                 obj[events_label]
                     .as_object()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter()
                     .map(|(_, value)| value)
                     .collect()
@@ -903,14 +891,13 @@ pub fn read_map(
                     continue;
                 }
 
-                for page in event[pages_label].as_array().unwrap_log(file!(), line!()) {
-                    let list: &Array = page[list_label].as_array().unwrap_log(file!(), line!());
+                for page in event[pages_label].as_array().unwrap_log() {
+                    let list: &Array = page[list_label].as_array().unwrap_log();
                     let mut in_sequence: bool = false;
                     let mut line: Vec<String> = Vec::with_capacity(4);
 
                     for item in list {
-                        let code: u16 =
-                            item[code_label].as_u64().unwrap_log(file!(), line!()) as u16;
+                        let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
                         if in_sequence && code != 401 {
                             if !line.is_empty() {
@@ -953,9 +940,7 @@ pub fn read_map(
                             continue;
                         }
 
-                        let parameters: &Array = item[parameters_label]
-                            .as_array()
-                            .unwrap_log(file!(), line!());
+                        let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
                         match code {
                             401 => {
@@ -975,9 +960,7 @@ pub fn read_map(
                                 }
                             }
                             102 => {
-                                for i in
-                                    0..parameters[0].as_array().unwrap_log(file!(), line!()).len()
-                                {
+                                for i in 0..parameters[0].as_array().unwrap_log().len() {
                                     let subparameter_string: String = parameters[0][i]
                                         .as_str()
                                         .map(str::to_owned)
@@ -1111,16 +1094,16 @@ pub fn read_map(
                 write(
                     output_path
                         .parent()
-                        .unwrap_log(file!(), line!())
+                        .unwrap_log()
                         .parent()
-                        .unwrap_log(file!(), line!())
+                        .unwrap_log()
                         .join(format!(
                             "json/{}.json",
-                            &filename[..filename.rfind('.').unwrap_log(file!(), line!())]
+                            &filename[..filename.rfind('.').unwrap_log()]
                         )),
-                    to_string(&obj).unwrap_log(file!(), line!()),
+                    to_string(&obj).unwrap_log(),
                 )
-                .unwrap_log(file!(), line!());
+                .unwrap_log();
             }
         }
 
@@ -1132,7 +1115,7 @@ pub fn read_map(
 
         output_content.pop();
 
-        write(output_path, output_content).unwrap_log(file!(), line!());
+        write(output_path, output_content).unwrap_log();
     }
 }
 
@@ -1156,14 +1139,13 @@ pub fn read_other(
     engine_type: EngineType,
     generate_json: bool,
 ) {
-    let obj_arr_iter = read_dir(original_path)
-        .unwrap_log(file!(), line!())
-        .filter_map(|entry: Result<DirEntry, std::io::Error>| match entry {
+    let obj_arr_iter = read_dir(original_path).unwrap_log().filter_map(
+        |entry: Result<DirEntry, std::io::Error>| match entry {
             Ok(entry) => {
                 let filename_os_string: OsString = entry.file_name();
                 let filename: &str =
                     unsafe { from_utf8_unchecked(filename_os_string.as_encoded_bytes()) };
-                let (name, _) = filename.split_once('.').unwrap_log(file!(), line!());
+                let (name, _) = filename.split_once('.').unwrap_log();
 
                 if !name.starts_with("Map")
                     && !matches!(name, "Tilesets" | "Animations" | "System" | "Scripts")
@@ -1176,15 +1158,9 @@ pub fn read_other(
                     }
 
                     let json: Value = if engine_type == EngineType::New {
-                        from_str(&read_to_string(entry.path()).unwrap_log(file!(), line!()))
-                            .unwrap_log(file!(), line!())
+                        from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
                     } else {
-                        load(
-                            &read(entry.path()).unwrap_log(file!(), line!()),
-                            None,
-                            Some(""),
-                        )
-                        .unwrap_log(file!(), line!())
+                        load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                     };
 
                     Some((filename.to_owned(), json))
@@ -1193,7 +1169,8 @@ pub fn read_other(
                 }
             }
             Err(_) => None,
-        });
+        },
+    );
 
     let mut inner_processing_mode: ProcessingMode = processing_mode;
 
@@ -1250,9 +1227,8 @@ pub fn read_other(
     };
 
     for (filename, obj_arr) in obj_arr_iter {
-        let output_path: &Path = &output_path.join(
-            filename[0..filename.rfind('.').unwrap_log(file!(), line!())].to_lowercase() + ".txt",
-        );
+        let output_path: &Path = &output_path
+            .join(filename[0..filename.rfind('.').unwrap_log()].to_lowercase() + ".txt");
 
         if processing_mode == ProcessingMode::Default && output_path.exists() {
             println!(
@@ -1269,7 +1245,7 @@ pub fn read_other(
         let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
         let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log(file!(), line!())
+            read_to_string(output_path).unwrap_log()
         } else {
             String::new()
         };
@@ -1277,9 +1253,7 @@ pub fn read_other(
         if processing_mode == ProcessingMode::Append {
             if output_path.exists() {
                 for line in original_content.par_split('\n').collect::<Vec<_>>() {
-                    let (original, translated) = line
-                        .split_once(LINES_SEPARATOR)
-                        .unwrap_log(file!(), line!());
+                    let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                     lines_map.insert(original, translated);
                 }
             } else {
@@ -1306,7 +1280,7 @@ pub fn read_other(
                 }
             }
 
-            'obj: for obj in obj_arr.as_array().unwrap_log(file!(), line!()) {
+            'obj: for obj in obj_arr.as_array().unwrap_log() {
                 let mut prev_variable_type: Option<Variable> = None;
 
                 for (variable_text, variable_type) in [
@@ -1324,12 +1298,11 @@ pub fn read_other(
                     } else if let Some(obj) = variable_text.as_object() {
                         if obj
                             .get(&"__type")
-                            .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                            .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                         {
                             let str: String = unsafe {
                                 String::from_utf8_unchecked(
-                                    from_value::<Vec<u8>>(&obj["data"])
-                                        .unwrap_log(file!(), line!()),
+                                    from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                                 )
                             };
                             str
@@ -1364,9 +1337,8 @@ pub fn read_other(
 
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
                                     if inner_processing_mode == ProcessingMode::Append {
-                                        let (idx, _, value) = lines_map
-                                            .shift_remove_full(last.as_str())
-                                            .unwrap_log(file!(), line!());
+                                        let (idx, _, value) =
+                                            lines_map.shift_remove_full(last.as_str()).unwrap_log();
                                         lines_map.shift_insert(idx, string_ref, value);
                                     }
                                 }
@@ -1406,18 +1378,10 @@ pub fn read_other(
         // Other files have the structure somewhat similar to Maps files
         else {
             // Skipping first element in array as it is null
-            for obj in obj_arr
-                .as_array()
-                .unwrap_log(file!(), line!())
-                .iter()
-                .skip(1)
-            {
+            for obj in obj_arr.as_array().unwrap_log().iter().skip(1) {
                 // CommonEvents doesn't have pages, so we can just check if it's Troops
                 let pages_length: usize = if filename.starts_with("Tr") {
-                    obj[pages_label]
-                        .as_array()
-                        .unwrap_log(file!(), line!())
-                        .len()
+                    obj[pages_label].as_array().unwrap_log().len()
                 } else {
                     1
                 };
@@ -1434,7 +1398,7 @@ pub fn read_other(
                     }
 
                     parse_list(
-                        list.as_array().unwrap_log(file!(), line!()),
+                        list.as_array().unwrap_log(),
                         &ALLOWED_CODES,
                         romanize,
                         game_type,
@@ -1464,7 +1428,7 @@ pub fn read_other(
 
         output_content.pop();
 
-        write(output_path, output_content).unwrap_log(file!(), line!());
+        write(output_path, output_content).unwrap_log();
 
         if logging {
             println!("Parsed file {filename}");
@@ -1474,16 +1438,16 @@ pub fn read_other(
             write(
                 output_path
                     .parent()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .parent()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .join(format!(
                         "json/{}.json",
-                        &filename[..filename.rfind('.').unwrap_log(file!(), line!())]
+                        &filename[..filename.rfind('.').unwrap_log()]
                     )),
-                to_string(&obj_arr).unwrap_log(file!(), line!()),
+                to_string(&obj_arr).unwrap_log(),
             )
-            .unwrap_log(file!(), line!());
+            .unwrap_log();
         }
     }
 }
@@ -1514,15 +1478,9 @@ pub fn read_system(
     }
 
     let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(system_file_path).unwrap_log(file!(), line!()))
-            .unwrap_log(file!(), line!())
+        from_str(&read_to_string(system_file_path).unwrap_log()).unwrap_log()
     } else {
-        load(
-            &read(system_file_path).unwrap_log(file!(), line!()),
-            None,
-            Some(""),
-        )
-        .unwrap_log(file!(), line!())
+        load(&read(system_file_path).unwrap_log(), None, Some("")).unwrap_log()
     };
 
     let lines: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
@@ -1532,7 +1490,7 @@ pub fn read_system(
     let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
     let original_content: String = if processing_mode == ProcessingMode::Append {
-        read_to_string(output_path).unwrap_log(file!(), line!())
+        read_to_string(output_path).unwrap_log()
     } else {
         String::new()
     };
@@ -1540,9 +1498,7 @@ pub fn read_system(
     if processing_mode == ProcessingMode::Append {
         if output_path.exists() {
             for line in original_content.par_split('\n').collect::<Vec<_>>() {
-                let (original, translated) = line
-                    .split_once(LINES_SEPARATOR)
-                    .unwrap_log(file!(), line!());
+                let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                 lines_map.insert(original, translated);
             }
         } else {
@@ -1613,11 +1569,11 @@ pub fn read_system(
             } else if let Some(obj) = element.as_object() {
                 if obj
                     .get(&"__type")
-                    .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                    .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                 {
                     unsafe {
                         String::from_utf8_unchecked(
-                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
+                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                         )
                     }
                 } else {
@@ -1649,18 +1605,16 @@ pub fn read_system(
 
     // Element types names
     // Normally it's system strings, but might be needed for some purposes
-    for element in obj[elements_label].as_array().unwrap_log(file!(), line!()) {
+    for element in obj[elements_label].as_array().unwrap_log() {
         let str: String = if let Some(str) = element.as_str() {
             str.to_string()
         } else if let Some(obj) = element.as_object() {
             if obj
                 .get(&"__type")
-                .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
             {
                 unsafe {
-                    String::from_utf8_unchecked(
-                        from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
-                    )
+                    String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log())
                 }
             } else {
                 unreachable!()
@@ -1689,17 +1643,17 @@ pub fn read_system(
 
     // Names of equipment slots
     if engine_type == EngineType::New {
-        for element in obj["equipTypes"].as_array().unwrap_log(file!(), line!()) {
+        for element in obj["equipTypes"].as_array().unwrap_log() {
             let str: String = if let Some(str) = element.as_str() {
                 str.to_string()
             } else if let Some(obj) = element.as_object() {
                 if obj
                     .get(&"__type")
-                    .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                    .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                 {
                     unsafe {
                         String::from_utf8_unchecked(
-                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
+                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                         )
                     }
                 } else {
@@ -1737,11 +1691,11 @@ pub fn read_system(
             } else if let Some(obj) = element.as_object() {
                 if obj
                     .get(&"__type")
-                    .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                    .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                 {
                     unsafe {
                         String::from_utf8_unchecked(
-                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
+                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                         )
                     }
                 } else {
@@ -1772,7 +1726,7 @@ pub fn read_system(
     }
 
     // Game terms vocabulary
-    for (key, value) in obj[terms_label].as_object().unwrap_log(file!(), line!()) {
+    for (key, value) in obj[terms_label].as_object().unwrap_log() {
         if !key.starts_with("__symbol__") {
             continue;
         }
@@ -1781,11 +1735,11 @@ pub fn read_system(
             let str: String = if let Some(obj) = value.as_object() {
                 if obj
                     .get(&"__type")
-                    .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                    .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                 {
                     unsafe {
                         String::from_utf8_unchecked(
-                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
+                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                         )
                     }
                 } else {
@@ -1815,7 +1769,7 @@ pub fn read_system(
         } else if key != "messages" {
             if let Some(arr) = value.as_array() {
                 for element in arr {
-                    let str: &str = element.as_str().unwrap_log(file!(), line!()).trim();
+                    let str: &str = element.as_str().unwrap_log().trim();
 
                     if !str.is_empty() {
                         let mut string: String = str.to_owned();
@@ -1841,8 +1795,8 @@ pub fn read_system(
                 continue;
             }
 
-            for (_, message_string) in value.as_object().unwrap_log(file!(), line!()).iter() {
-                let str: &str = message_string.as_str().unwrap_log(file!(), line!()).trim();
+            for (_, message_string) in value.as_object().unwrap_log().iter() {
+                let str: &str = message_string.as_str().unwrap_log().trim();
 
                 if !str.is_empty() {
                     let mut string: String = str.to_owned();
@@ -1873,11 +1827,11 @@ pub fn read_system(
             } else if let Some(obj) = element.as_object() {
                 if obj
                     .get(&"__type")
-                    .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                    .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
                 {
                     unsafe {
                         String::from_utf8_unchecked(
-                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
+                            from_value::<Vec<u8>>(&obj["data"]).unwrap_log(),
                         )
                     }
                 } else {
@@ -1915,12 +1869,10 @@ pub fn read_system(
         } else if let Some(obj) = obj[game_title_label].as_object() {
             if obj
                 .get(&"__type")
-                .is_some_and(|t| t.as_str().unwrap_log(file!(), line!()) == "bytes")
+                .is_some_and(|t| t.as_str().unwrap_log() == "bytes")
             {
                 unsafe {
-                    String::from_utf8_unchecked(
-                        from_value::<Vec<u8>>(&obj["data"]).unwrap_log(file!(), line!()),
-                    )
+                    String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log())
                 }
             } else {
                 unreachable!()
@@ -1960,15 +1912,12 @@ pub fn read_system(
 
     output_content.pop();
 
-    write(output_path, output_content).unwrap_log(file!(), line!());
+    write(output_path, output_content).unwrap_log();
 
     if logging {
         println!(
             "Parsed file {}",
-            system_file_path
-                .file_name()
-                .unwrap_log(file!(), line!())
-                .to_string_lossy()
+            system_file_path.file_name().unwrap_log().to_string_lossy()
         );
     }
 
@@ -1976,13 +1925,13 @@ pub fn read_system(
         write(
             output_path
                 .parent()
-                .unwrap_log(file!(), line!())
+                .unwrap_log()
                 .parent()
-                .unwrap_log(file!(), line!())
+                .unwrap_log()
                 .join("json/System.json"),
-            to_string(&obj).unwrap_log(file!(), line!()),
+            to_string(&obj).unwrap_log(),
         )
-        .unwrap_log(file!(), line!());
+        .unwrap_log();
     }
 }
 
@@ -2003,11 +1952,11 @@ pub fn read_scripts(
     let mut strings: Vec<String> = Vec::new();
 
     let scripts_entries: Value = load(
-        &read(scripts_file_path).unwrap_log(file!(), line!()),
+        &read(scripts_file_path).unwrap_log(),
         Some(StringMode::Binary),
         None,
     )
-    .unwrap_log(file!(), line!());
+    .unwrap_log();
 
     let encodings: [&Encoding; 5] = [
         encoding_rs::UTF_8,
@@ -2017,16 +1966,16 @@ pub fn read_scripts(
         encoding_rs::GB18030,
     ];
 
-    let scripts_entries_array: &Array = scripts_entries.as_array().unwrap_log(file!(), line!());
+    let scripts_entries_array: &Array = scripts_entries.as_array().unwrap_log();
     let mut codes_content: Vec<String> = Vec::with_capacity(scripts_entries_array.len());
 
     for code in scripts_entries_array {
-        let bytes_stream: Vec<u8> = from_value(&code[2]["data"]).unwrap_log(file!(), line!());
+        let bytes_stream: Vec<u8> = from_value(&code[2]["data"]).unwrap_log();
 
         let mut inflated: Vec<u8> = Vec::new();
         ZlibDecoder::new(&*bytes_stream)
             .read_to_end(&mut inflated)
-            .unwrap_log(file!(), line!());
+            .unwrap_log();
 
         let mut code: String = String::new();
 
@@ -2086,15 +2035,12 @@ pub fn read_scripts(
 
     output_content.pop();
 
-    write(other_path.join("scripts.txt"), output_content).unwrap_log(file!(), line!());
+    write(other_path.join("scripts.txt"), output_content).unwrap_log();
 
     if logging {
         println!(
             "Parsed file {}",
-            scripts_file_path
-                .file_name()
-                .unwrap_log(file!(), line!())
-                .to_string_lossy()
+            scripts_file_path.file_name().unwrap_log().to_string_lossy()
         );
     }
 
@@ -2102,12 +2048,12 @@ pub fn read_scripts(
         write(
             scripts_file_path
                 .parent()
-                .unwrap_log(file!(), line!())
+                .unwrap_log()
                 .parent()
-                .unwrap_log(file!(), line!())
+                .unwrap_log()
                 .join("json/Scripts.json"),
-            to_string(&scripts_entries).unwrap_log(file!(), line!()),
+            to_string(&scripts_entries).unwrap_log(),
         )
-        .unwrap_log(file!(), line!());
+        .unwrap_log();
     }
 }

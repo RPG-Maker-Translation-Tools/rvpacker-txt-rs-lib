@@ -354,7 +354,7 @@ fn write_list(
     let mut credits_lines: Vec<String> = Vec::new();
 
     for it in 0..list_length {
-        let code: u16 = list[it][code_label].as_u64().unwrap_log(file!(), line!()) as u16;
+        let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
         let write_string_literally: bool = if engine_type != EngineType::New {
             !match code {
@@ -455,11 +455,7 @@ fn write_list(
                 in_sequence = true;
             }
             102 => {
-                for i in 0..list[it][parameters_label][0]
-                    .as_array()
-                    .unwrap_log(file!(), line!())
-                    .len()
-                {
+                for i in 0..list[it][parameters_label][0].as_array().unwrap_log().len() {
                     let mut subparameter_string: String = list[it][parameters_label][0][i]
                         .as_str()
                         .map(str::to_owned)
@@ -586,7 +582,7 @@ pub fn write_maps(
 ) {
     if maps_processing_mode != MapsProcessingMode::Preserve {
         let maps_obj_iter = read_dir(original_path)
-            .unwrap_log(file!(), line!())
+            .unwrap_log()
             .par_bridge()
             .filter_map(|entry: Result<DirEntry, std::io::Error>| {
                 if let Ok(entry) = entry {
@@ -601,15 +597,9 @@ pub fn write_maps(
                         && filename_str.ends_with(determine_extension(engine_type))
                     {
                         let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log(file!(), line!()))
-                                .unwrap_log(file!(), line!())
+                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
                         } else {
-                            load(
-                                &read(entry.path()).unwrap_log(file!(), line!()),
-                                None,
-                                Some(""),
-                            )
-                            .unwrap_log(file!(), line!())
+                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                         };
 
                         Some((filename_str.to_owned(), json))
@@ -621,8 +611,7 @@ pub fn write_maps(
                 }
             });
 
-        let original_content: String =
-            read_to_string(maps_path.join("maps.txt")).unwrap_log(file!(), line!());
+        let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
 
         let mut names_lines_map: StringHashMap = HashMap::default();
 
@@ -721,10 +710,10 @@ pub fn write_maps(
         let idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
         maps_obj_iter.for_each_with(idx, |idx: &mut Arc<Mutex<usize>>, (filename, mut obj)| {
             let hashmap: &StringHashMap = lines_maps_vec
-                .get(*idx.lock().unwrap_log(file!(), line!()))
+                .get(*idx.lock().unwrap_log())
                 .unwrap_or(unsafe { lines_maps_vec.get_unchecked(0) });
 
-            *idx.lock().unwrap_log(file!(), line!()) += 1;
+            *idx.lock().unwrap_log() += 1;
 
             if let Some(display_name) = obj[display_name_label].as_str() {
                 let mut display_name: String = display_name.to_owned();
@@ -746,14 +735,14 @@ pub fn write_maps(
             let mut events_arr: Vec<&mut Value> = if engine_type == EngineType::New {
                 obj[events_label]
                     .as_array_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .par_iter_mut()
                     .skip(1)
                     .collect()
             } else {
                 obj[events_label]
                     .as_object_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .par_bridge()
                     .map(|(_, value)| value)
@@ -769,11 +758,11 @@ pub fn write_maps(
 
                     event[pages_label]
                         .as_array_mut()
-                        .unwrap_log(file!(), line!())
+                        .unwrap_log()
                         .par_iter_mut()
                         .for_each(|page: &mut Value| {
                             write_list(
-                                page[list_label].as_array_mut().unwrap_log(file!(), line!()),
+                                page[list_label].as_array_mut().unwrap_log(),
                                 &ALLOWED_CODES,
                                 romanize,
                                 game_type,
@@ -785,21 +774,20 @@ pub fn write_maps(
                 });
 
             let output_data: Vec<u8> = if engine_type == EngineType::New {
-                to_vec(&obj).unwrap_log(file!(), line!())
+                to_vec(&obj).unwrap_log()
             } else {
                 dump(obj, Some(""))
             };
 
-            write(output_path.join(&filename), output_data).unwrap_log(file!(), line!());
+            write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
                 println!("Wrote file {filename}");
             }
         });
     } else {
-        let maps_obj_iter = read_dir(original_path)
-            .unwrap_log(file!(), line!())
-            .filter_map(|entry: Result<DirEntry, std::io::Error>| {
+        let maps_obj_iter = read_dir(original_path).unwrap_log().filter_map(
+            |entry: Result<DirEntry, std::io::Error>| {
                 if let Ok(entry) = entry {
                     let filename: OsString = entry.file_name();
                     let filename_str: &str =
@@ -812,15 +800,9 @@ pub fn write_maps(
                         && filename_str.ends_with(determine_extension(engine_type))
                     {
                         let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log(file!(), line!()))
-                                .unwrap_log(file!(), line!())
+                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
                         } else {
-                            load(
-                                &read(entry.path()).unwrap_log(file!(), line!()),
-                                None,
-                                Some(""),
-                            )
-                            .unwrap_log(file!(), line!())
+                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                         };
 
                         Some((filename_str.to_owned(), json))
@@ -830,10 +812,10 @@ pub fn write_maps(
                 } else {
                     None
                 }
-            });
+            },
+        );
 
-        let original_content: String =
-            read_to_string(maps_path.join("maps.txt")).unwrap_log(file!(), line!());
+        let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
 
         let mut names_lines_map: StringHashMap = HashMap::default();
 
@@ -842,9 +824,7 @@ pub fn write_maps(
 
             for line in original_content.split('\n') {
                 if line.starts_with("<!-- Map") {
-                    let (original, translated) = line
-                        .split_once(LINES_SEPARATOR)
-                        .unwrap_log(file!(), line!());
+                    let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
                     if original.len() > 20 {
                         let map_name: &str = &original[17..original.len() - 4];
@@ -856,9 +836,7 @@ pub fn write_maps(
                         continue;
                     }
 
-                    let (_, translated) = line
-                        .split_once(LINES_SEPARATOR)
-                        .unwrap_log(file!(), line!());
+                    let (_, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
                     let processed_translated: String = translated
                         .replace(NEW_LINE, "\n")
@@ -922,11 +900,11 @@ pub fn write_maps(
 
             // Skipping first element in array as it is null
             let mut events_arr: Vec<&mut Value> = if engine_type == EngineType::New {
-                obj[events_label].as_array_mut().unwrap_log(file!(), line!()).iter_mut().skip(1).collect()
+                obj[events_label].as_array_mut().unwrap_log().iter_mut().skip(1).collect()
             } else {
                 obj[events_label]
                     .as_object_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .map(|(_, value)| value)
                     .collect()
@@ -939,10 +917,10 @@ pub fn write_maps(
 
                 event[pages_label]
                     .as_array_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .for_each(|page: &mut Value| {
-                            let list: &mut Array = page[list_label].as_array_mut().unwrap_log(file!(), line!());
+                            let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
                             let list_length: usize = list.len();
 
                             let mut in_sequence: bool = false;
@@ -950,7 +928,7 @@ pub fn write_maps(
                             let mut item_indices: Vec<usize> = Vec::with_capacity(4);
 
                             for it in 0..list_length {
-                                let code: u16 = list[it][code_label].as_u64().unwrap_log(file!(), line!()) as u16;
+                                let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
                                 let write_string_literally: bool = if engine_type != EngineType::New {
                                     !match code {
@@ -1031,7 +1009,7 @@ pub fn write_maps(
                                         }
                                     }
                                     102 => {
-                                        for i in 0..list[it][parameters_label][0].as_array().unwrap_log(file!(), line!()).len() {
+                                        for i in 0..list[it][parameters_label][0].as_array().unwrap_log().len() {
                                             let mut subparameter_string: String = list[it][parameters_label][0][i]
                                                 .as_str()
                                                 .map(str::to_owned)
@@ -1120,14 +1098,14 @@ pub fn write_maps(
             });
 
             let output_data: Vec<u8> = if engine_type == EngineType::New {
-                to_vec(&obj).unwrap_log(file!(), line!())
+                to_vec(&obj).unwrap_log()
             } else {
                 dump(obj, Some(""))
             };
 
 
 
-            write(output_path.join(&filename), output_data).unwrap_log(file!(), line!());
+            write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
                 println!("Wrote file {filename}");
@@ -1155,14 +1133,14 @@ pub fn write_other(
     engine_type: EngineType,
 ) {
     let other_obj_arr_vec = read_dir(original_path)
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .par_bridge()
         .filter_map(|entry: Result<DirEntry, std::io::Error>| {
             if let Ok(entry) = entry {
                 let filename: OsString = entry.file_name();
                 let filename_str: &str =
                     unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
-                let (real_name, _) = filename_str.split_once('.').unwrap_log(file!(), line!());
+                let (real_name, _) = filename_str.split_once('.').unwrap_log();
 
                 if !real_name.starts_with("Map")
                     && !matches!(real_name, "Tilesets" | "Animations" | "System" | "Scripts")
@@ -1175,15 +1153,9 @@ pub fn write_other(
                     }
 
                     let json: Value = if engine_type == EngineType::New {
-                        from_str(&read_to_string(entry.path()).unwrap_log(file!(), line!()))
-                            .unwrap_log(file!(), line!())
+                        from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
                     } else {
-                        load(
-                            &read(entry.path()).unwrap_log(file!(), line!()),
-                            None,
-                            Some(""),
-                        )
-                        .unwrap_log(file!(), line!())
+                        load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                     };
 
                     Some((filename_str.to_owned(), json))
@@ -1245,7 +1217,7 @@ pub fn write_other(
             let content_path: &Path = &other_path
                 .join(filename[..filename.len() - determine_extension(engine_type).len() ].to_owned() + ".txt");
 
-            let original_content: String = read_to_string(content_path).unwrap_log(file!(), line!());
+            let original_content: String = read_to_string(content_path).unwrap_log();
 
             let lines_map: StringHashMap =
                 HashMap::from_iter(original_content.split('\n').enumerate().filter_map(
@@ -1276,7 +1248,7 @@ pub fn write_other(
             if !filename.starts_with("Co") && !filename.starts_with("Tr") {
                 obj_arr
                     .as_array_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .par_iter_mut()
                     .skip(1) // Skipping first element in array as it is null
                     .for_each(|obj: &mut Value| {
@@ -1339,13 +1311,13 @@ pub fn write_other(
                 // Other files have the structure somewhat similar to Maps files
                 obj_arr
                     .as_array_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .par_iter_mut()
                     .skip(1) // Skipping first element in array as it is null
                     .for_each(|obj: &mut Value| {
                         // CommonEvents doesn't have pages, so we can just check if it's Troops
                         let pages_length: usize = if filename.starts_with("Tr") {
-                            obj[pages_label].as_array().unwrap_log(file!(), line!()).len()
+                            obj[pages_label].as_array().unwrap_log().len()
                         } else {
                             1
                         };
@@ -1375,12 +1347,12 @@ pub fn write_other(
             }
 
             let output_data: Vec<u8> = if engine_type == EngineType::New {
-                to_vec(&obj_arr).unwrap_log(file!(), line!())
+                to_vec(&obj_arr).unwrap_log()
             } else {
                 dump(obj_arr, Some(""))
             };
 
-            write(output_path.join(&filename), output_data).unwrap_log(file!(), line!());
+            write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
                 println!("Wrote file {filename}");
@@ -1407,19 +1379,12 @@ pub fn write_system(
     engine_type: EngineType,
 ) {
     let mut obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(system_file_path).unwrap_log(file!(), line!()))
-            .unwrap_log(file!(), line!())
+        from_str(&read_to_string(system_file_path).unwrap_log()).unwrap_log()
     } else {
-        load(
-            &read(system_file_path).unwrap_log(file!(), line!()),
-            None,
-            Some(""),
-        )
-        .unwrap_log(file!(), line!())
+        load(&read(system_file_path).unwrap_log(), None, Some("")).unwrap_log()
     };
 
-    let original_content: String =
-        read_to_string(other_path.join("system.txt")).unwrap_log(file!(), line!());
+    let original_content: String = read_to_string(other_path.join("system.txt")).unwrap_log();
 
     let lines_map: StringHashMap = HashMap::from_iter(
         original_content
@@ -1443,7 +1408,7 @@ pub fn write_system(
     );
     let game_title: String = original_content
         .rsplit_once(LINES_SEPARATOR)
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .1
         .to_owned();
 
@@ -1481,7 +1446,7 @@ pub fn write_system(
     if engine_type != EngineType::New {
         let mut string: String = obj["__symbol__currency_unit"]
             .as_str()
-            .unwrap_log(file!(), line!())
+            .unwrap_log()
             .trim()
             .to_owned();
 
@@ -1498,14 +1463,10 @@ pub fn write_system(
 
     obj[armor_types_label]
         .as_array_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .iter_mut()
         .for_each(|value: &mut Value| {
-            let mut string: String = value
-                .as_str()
-                .unwrap_log(file!(), line!())
-                .trim()
-                .to_owned();
+            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
             if romanize {
                 string = romanize_string(string);
@@ -1522,14 +1483,10 @@ pub fn write_system(
 
     obj[elements_label]
         .as_array_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .iter_mut()
         .for_each(|value: &mut Value| {
-            let mut string: String = value
-                .as_str()
-                .unwrap_log(file!(), line!())
-                .trim()
-                .to_owned();
+            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
             if romanize {
                 string = romanize_string(string);
@@ -1547,14 +1504,10 @@ pub fn write_system(
     if engine_type == EngineType::New {
         obj["equipTypes"]
             .as_array_mut()
-            .unwrap_log(file!(), line!())
+            .unwrap_log()
             .iter_mut()
             .for_each(|value: &mut Value| {
-                let mut string: String = value
-                    .as_str()
-                    .unwrap_log(file!(), line!())
-                    .trim()
-                    .to_owned();
+                let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
                 if romanize {
                     string = romanize_string(string);
@@ -1572,14 +1525,10 @@ pub fn write_system(
 
     obj[skill_types_label]
         .as_array_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .par_iter_mut()
         .for_each(|value: &mut Value| {
-            let mut string: String = value
-                .as_str()
-                .unwrap_log(file!(), line!())
-                .trim()
-                .to_owned();
+            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
             if romanize {
                 string = romanize_string(string);
@@ -1596,7 +1545,7 @@ pub fn write_system(
 
     obj[terms_label]
         .as_object_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .iter_mut()
         .for_each(|(key, value): (&str, &mut Value)| {
             if engine_type != EngineType::New && !key.starts_with("__symbol__") {
@@ -1604,11 +1553,8 @@ pub fn write_system(
             }
 
             if key != "messages" {
-                value
-                    .as_array_mut()
-                    .unwrap_log(file!(), line!())
-                    .par_iter_mut()
-                    .for_each(|subvalue: &mut Value| {
+                value.as_array_mut().unwrap_log().par_iter_mut().for_each(
+                    |subvalue: &mut Value| {
                         if let Some(str) = subvalue.as_str() {
                             let mut string: String = str.trim().to_owned();
 
@@ -1624,7 +1570,8 @@ pub fn write_system(
                                 *subvalue = Value::from(translated);
                             }
                         }
-                    });
+                    },
+                );
             } else {
                 if !value.is_object() {
                     return;
@@ -1632,14 +1579,10 @@ pub fn write_system(
 
                 value
                     .as_object_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .for_each(|(_, value)| {
-                        let mut string: String = value
-                            .as_str()
-                            .unwrap_log(file!(), line!())
-                            .trim()
-                            .to_owned();
+                        let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
                         if romanize {
                             string = romanize_string(string)
@@ -1658,14 +1601,10 @@ pub fn write_system(
 
     obj[weapon_types_label]
         .as_array_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .iter_mut()
         .for_each(|value: &mut Value| {
-            let mut string: String = value
-                .as_str()
-                .unwrap_log(file!(), line!())
-                .trim()
-                .to_owned();
+            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
             if romanize {
                 string = romanize_string(string);
@@ -1683,16 +1622,16 @@ pub fn write_system(
     obj[game_title_label] = Value::from(&game_title);
 
     let output_data: Vec<u8> = if engine_type == EngineType::New {
-        to_vec(&obj).unwrap_log(file!(), line!())
+        to_vec(&obj).unwrap_log()
     } else {
         dump(obj, Some(""))
     };
 
     write(
-        output_path.join(system_file_path.file_name().unwrap_log(file!(), line!())),
+        output_path.join(system_file_path.file_name().unwrap_log()),
         output_data,
     )
-    .unwrap_log(file!(), line!());
+    .unwrap_log();
 
     if logging {
         println!("Wrote file {}", system_file_path.display());
@@ -1712,11 +1651,9 @@ pub fn write_plugins(
     logging: bool,
 ) {
     let mut obj_arr: Vec<Object> =
-        from_str(&read_to_string(pluigns_file_path).unwrap_log(file!(), line!()))
-            .unwrap_log(file!(), line!());
+        from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
 
-    let original_content: String =
-        read_to_string(plugins_path.join("plugins.txt")).unwrap_log(file!(), line!());
+    let original_content: String = read_to_string(plugins_path.join("plugins.txt")).unwrap_log();
 
     let lines_map: StringHashMap = HashMap::from_iter(
         original_content
@@ -1757,7 +1694,7 @@ pub fn write_plugins(
             "Olivia_OctoBattle",
         ]);
 
-        let name: &str = obj["name"].as_str().unwrap_log(file!(), line!());
+        let name: &str = obj["name"].as_str().unwrap_log();
 
         // It it's a plugin with the needed text, proceed
         if plugin_names.contains(name) {
@@ -1765,12 +1702,11 @@ pub fn write_plugins(
             if name == "YEP_OptionsCore" {
                 obj["parameters"]
                     .as_object_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .par_bridge()
                     .for_each(|(key, value): (&str, &mut Value)| {
-                        let mut string: String =
-                            value.as_str().unwrap_log(file!(), line!()).to_owned();
+                        let mut string: String = value.as_str().unwrap_log().to_owned();
 
                         if key == "OptionsCategories" {
                             for (text, translated) in lines_map.keys().zip(lines_map.values()) {
@@ -1787,7 +1723,7 @@ pub fn write_plugins(
             else {
                 obj["parameters"]
                     .as_object_mut()
-                    .unwrap_log(file!(), line!())
+                    .unwrap_log()
                     .iter_mut()
                     .par_bridge()
                     .for_each(|(_, value)| {
@@ -1803,9 +1739,9 @@ pub fn write_plugins(
 
     write(
         output_path.join("plugins.js"),
-        String::from("var $plugins =\n") + &to_string(&obj_arr).unwrap_log(file!(), line!()),
+        String::from("var $plugins =\n") + &to_string(&obj_arr).unwrap_log(),
     )
-    .unwrap_log(file!(), line!());
+    .unwrap_log();
 
     if logging {
         println!("Wrote file plugins.js");
@@ -1831,14 +1767,13 @@ pub fn write_scripts(
     engine_type: EngineType,
 ) {
     let mut script_entries: Value = load(
-        &read(scripts_file_path).unwrap_log(file!(), line!()),
+        &read(scripts_file_path).unwrap_log(),
         Some(StringMode::Binary),
         None,
     )
-    .unwrap_log(file!(), line!());
+    .unwrap_log();
 
-    let original_content: String =
-        read_to_string(other_path.join("scripts.txt")).unwrap_log(file!(), line!());
+    let original_content: String = read_to_string(other_path.join("scripts.txt")).unwrap_log();
 
     let lines_map: StringHashMap = {
         let mut hashmap: StringHashMap = HashMap::default();
@@ -1870,17 +1805,15 @@ pub fn write_scripts(
 
     script_entries
         .as_array_mut()
-        .unwrap_log(file!(), line!())
+        .unwrap_log()
         .par_iter_mut()
         .for_each(|script: &mut Value| {
-            let data: Vec<u8> =
-                from_value(&script.as_array().unwrap_log(file!(), line!())[2]["data"])
-                    .unwrap_log(file!(), line!());
+            let data: Vec<u8> = from_value(&script.as_array().unwrap_log()[2]["data"]).unwrap_log();
 
             let mut inflated: Vec<u8> = Vec::new();
             ZlibDecoder::new(&*data)
                 .read_to_end(&mut inflated)
-                .unwrap_log(file!(), line!());
+                .unwrap_log();
 
             let mut code: String = String::new();
 
@@ -1917,7 +1850,7 @@ pub fn write_scripts(
 
             ZlibEncoder::new(&mut buf, Compression::new(6))
                 .write_all(code.as_bytes())
-                .unwrap_log(file!(), line!());
+                .unwrap_log();
 
             if let Some(obj) = script[2].as_object_mut() {
                 obj["data"] = Array::from(buf).into()
@@ -1928,7 +1861,7 @@ pub fn write_scripts(
         output_path.join(String::from("Scripts") + determine_extension(engine_type)),
         dump(script_entries, None),
     )
-    .unwrap_log(file!(), line!());
+    .unwrap_log();
 
     if logging {
         println!("Wrote file {}", scripts_file_path.display());
