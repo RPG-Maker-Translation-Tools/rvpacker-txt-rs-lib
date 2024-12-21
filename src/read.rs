@@ -97,8 +97,6 @@ fn parse_parameter(
 
                 let actual_string = parameter.split_once('=').unwrap().1.trim();
 
-                println!("{}", actual_string);
-
                 if STRING_IS_ONLY_SYMBOLS_RE.is_match(&actual_string[1..actual_string.len() - 1]) {
                     return None;
                 }
