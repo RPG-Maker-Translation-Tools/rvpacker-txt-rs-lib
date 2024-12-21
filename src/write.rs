@@ -498,10 +498,12 @@ fn write_list(
                     );
 
                     if let Some(translated) = translated {
-                        if engine_type == EngineType::New {
-                            list[it][parameters_label][0][i] = Value::from(&translated);
-                        } else {
-                            list[it][parameters_label][0][i] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                        if !translated.is_empty() {
+                            if engine_type == EngineType::New {
+                                list[it][parameters_label][0][i] = Value::from(&translated);
+                            } else {
+                                list[it][parameters_label][0][i] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                            }
                         }
                     }
                 }
@@ -530,11 +532,12 @@ fn write_list(
                 );
 
                 if let Some(translated) = translated {
-                    if engine_type == EngineType::New {
-                        list[it][parameters_label][0] = Value::from(&translated);
-                    } else {
-                        list[it][parameters_label][0] =
-                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                    if !translated.is_empty() {
+                        if engine_type == EngineType::New {
+                            list[it][parameters_label][0] = Value::from(&translated);
+                        } else {
+                            list[it][parameters_label][0] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                        }
                     }
                 }
             }
@@ -562,11 +565,12 @@ fn write_list(
                 );
 
                 if let Some(translated) = translated {
-                    if engine_type == EngineType::New {
-                        list[it][parameters_label][1] = Value::from(&translated);
-                    } else {
-                        list[it][parameters_label][1] =
-                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                    if !translated.is_empty() {
+                        if engine_type == EngineType::New {
+                            list[it][parameters_label][1] = Value::from(&translated);
+                        } else {
+                            list[it][parameters_label][1] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                        }
                     }
                 }
             }
