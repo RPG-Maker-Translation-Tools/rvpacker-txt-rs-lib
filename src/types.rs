@@ -34,6 +34,7 @@ pub enum Code {
     Choice,
     System,
     Misc,
+    Shop,
 }
 
 #[derive(PartialEq, Clone, Copy)]

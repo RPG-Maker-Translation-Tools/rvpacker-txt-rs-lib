@@ -86,6 +86,25 @@ fn parse_parameter(
         if let Some(re_match) = ENDS_WITH_IF_RE.find(parameter) {
             parameter = &parameter[re_match.start()..]
         }
+
+        match code {
+            Code::Shop => {
+                if parameter.starts_with("$game_system.shopback")
+                    || !parameter.ends_with(['"', '\''])
+                {
+                    return None;
+                }
+
+                let actual_string = parameter.split_once('=').unwrap().1.trim();
+
+                println!("{}", actual_string);
+
+                if STRING_IS_ONLY_SYMBOLS_RE.is_match(&actual_string[1..actual_string.len() - 1]) {
+                    return None;
+                }
+            }
+            _ => {}
+        }
     }
 
     Some(parameter.to_owned())
@@ -474,6 +493,38 @@ fn parse_list<'a>(
                     }
                 }
             }
+            655 => {
+                let parameter_string: String = parameters[0]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or(match parameters[0].as_object() {
+                        Some(obj) => get_object_data(obj),
+                        None => String::new(),
+                    })
+                    .trim()
+                    .to_owned();
+
+                if !parameter_string.is_empty() {
+                    let parsed: Option<String> =
+                        parse_parameter(Code::Shop, &parameter_string, game_type, engine_type);
+
+                    if let Some(mut parsed) = parsed {
+                        if romanize {
+                            parsed = romanize_string(parsed);
+                        }
+
+                        set_mut_ref.insert(parsed);
+                        let string_ref: &str =
+                            unsafe { set_ref.last().unwrap_unchecked() }.as_str();
+
+                        if processing_mode == ProcessingMode::Append
+                            && !map.contains_key(string_ref)
+                        {
+                            map.shift_insert(set_ref.len() - 1, string_ref, "");
+                        }
+                    }
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -576,8 +627,9 @@ pub fn read_map(
         // 401 - dialogue lines
         // 102 - dialogue choices array
         // 356 - system lines (special texts)
+        // 655 - some lines displayed in shops, probably from an external script
         // 324, 320 - i don't know what is it but it's some used in-game lines
-        const ALLOWED_CODES: [u16; 5] = [102, 320, 324, 356, 401];
+        const ALLOWED_CODES: [u16; 6] = [102, 320, 324, 356, 401, 655];
 
         let (
             display_name_label,
