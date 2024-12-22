@@ -100,7 +100,16 @@ impl<T> OptionExt<T> for Option<T> {
             Some(value) => value,
             None => {
                 #[cfg(feature = "log")]
-                log::error!("called `Option::unwrap_log()` on a `None` value",);
+                {
+                    let location = std::panic::Location::caller();
+                    log::error!(
+                        "called `Option::unwrap_log()` on a `None` value in {} at {}:{}",
+                        location.file(),
+                        location.line(),
+                        location.column()
+                    );
+                }
+
                 panic!("called `Option::unwrap_log()` on a `None` value");
             }
         }
@@ -117,7 +126,16 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
             Ok(value) => value,
             Err(err) => {
                 #[cfg(feature = "log")]
-                log::error!("called `Result::unwrap_log()` on an `Err` value: {:?}", err);
+                {
+                    let location = std::panic::Location::caller();
+                    log::error!(
+                        "called `Result::unwrap_log()` on an `Err` value: {err:?} in {} at {}:{}",
+                        location.file(),
+                        location.line(),
+                        location.column()
+                    );
+                }
+
                 panic!("called `Result::unwrap_log()` on an `Err` value: {:?}", err);
             }
         }
