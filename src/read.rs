@@ -1953,9 +1953,40 @@ pub fn read_scripts(
     other_path: &Path,
     romanize: bool,
     logging: bool,
+    mut processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
-    let mut strings: Vec<String> = Vec::new();
+    let output_path: &Path = &other_path.join("scripts.txt");
+
+    if processing_mode == ProcessingMode::Default && output_path.exists() {
+        println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
+        return;
+    }
+
+    let lines: UnsafeCell<Vec<String>> = UnsafeCell::new(Vec::new());
+    let lines_ref: &Vec<String> = unsafe { &*lines.get() };
+    let lines_mut_ref: &mut Vec<String> = unsafe { &mut *lines.get() };
+
+    let mut lines_map: Vec<(&str, &str)> = Vec::new();
+
+    let original_content: String =
+        if processing_mode == ProcessingMode::Append && output_path.exists() {
+            read_to_string(output_path).unwrap_log()
+        } else {
+            String::new()
+        };
+
+    if processing_mode == ProcessingMode::Append {
+        if !original_content.is_empty() {
+            for line in original_content.par_split('\n').collect::<Vec<_>>() {
+                let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
+                lines_map.push((original, translated));
+            }
+        } else {
+            println!("{}", FILES_ARE_NOT_PARSED_MSG);
+            processing_mode = ProcessingMode::Default;
+        }
+    }
 
     let scripts_entries: Value = load(
         &read(scripts_file_path).unwrap_log(),
@@ -2015,6 +2046,7 @@ pub fn read_scripts(
         ]
     };
 
+    let mut i: usize = 0;
     'extracted: for mut extracted in extracted_strings {
         if extracted.is_empty() {
             continue;
@@ -2030,18 +2062,36 @@ pub fn read_scripts(
             extracted = romanize_string(extracted);
         }
 
-        strings.push(extracted);
+        lines_mut_ref.push(extracted);
+        let last: &String = unsafe { lines_ref.last().unwrap_unchecked() };
+
+        if processing_mode == ProcessingMode::Append
+            && lines_map.get(i).is_some_and(|x| last != x.0)
+        {
+            lines_map.insert(lines_ref.len() - 1, (last, ""));
+        }
+
+        i += 1;
     }
 
-    let mut output_content: String = String::from_iter(
-        strings
-            .into_iter()
-            .map(|line: String| line + LINES_SEPARATOR + "\n"),
-    );
+    let mut output_content: String = if processing_mode == ProcessingMode::Append {
+        String::from_iter(
+            lines_map
+                .into_iter()
+                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+        )
+    } else {
+        String::from_iter(
+            lines
+                .into_inner()
+                .into_iter()
+                .map(|line: String| line + LINES_SEPARATOR + "\n"),
+        )
+    };
 
     output_content.pop();
 
-    write(other_path.join("scripts.txt"), output_content).unwrap_log();
+    write(output_path, output_content).unwrap_log();
 
     if logging {
         println!(
