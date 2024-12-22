@@ -4,8 +4,12 @@ use crate::println;
 use crate::{
     functions::{determine_extension, extract_strings, get_object_data, romanize_string},
     statics::{
-        ENDS_WITH_IF_RE, INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, LINES_SEPARATOR,
-        LISA_PREFIX_RE, NEW_LINE, STRING_IS_ONLY_SYMBOLS_RE,
+        localization::{FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG, PARSED_FILE_MSG},
+        regexes::{
+            ENDS_WITH_IF_RE, INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, LISA_PREFIX_RE,
+            STRING_IS_ONLY_SYMBOLS_RE,
+        },
+        LINES_SEPARATOR, NEW_LINE,
     },
     types::{
         Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt,
