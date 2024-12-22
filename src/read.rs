@@ -94,14 +94,18 @@ fn parse_parameter(
         match code {
             Code::Shop => {
                 if parameter.starts_with("$game_system.shopback")
+                    || parameter.starts_with("$game_system.shop_windowskin")
                     || !parameter.ends_with(['"', '\''])
                 {
                     return None;
                 }
 
-                let actual_string = parameter.split_once('=').unwrap().1.trim();
+                let actual_string: &str = parameter.split_once('=').unwrap().1.trim();
 
-                if STRING_IS_ONLY_SYMBOLS_RE.is_match(&actual_string[1..actual_string.len() - 1]) {
+                // removing the quotes
+                parameter = &actual_string[1..actual_string.len() - 1];
+
+                if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
                     return None;
                 }
             }
