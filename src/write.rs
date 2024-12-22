@@ -695,11 +695,7 @@ pub fn write_maps(
                             vec.push(take(&mut hashmap));
                         }
                     } else {
-                        eprintln!(
-                            "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}",
-                            line,
-                            i
-                        )
+                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",)
                     }
                 } else {
                     if line.starts_with("<!--") {
@@ -720,11 +716,7 @@ pub fn write_maps(
 
                         hashmap.insert(processed_original, processed_translated);
                     } else {
-                        eprintln!(
-                            "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}",
-                            line,
-                            i
-                        )
+                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",)
                     }
                 }
             }
@@ -741,7 +733,7 @@ pub fn write_maps(
         // 402 - one of the dialogue choices from the array
         // 356 - system lines (special texts)
         // 324, 320 - i don't know what is it but it's some used in-game lines
-        const ALLOWED_CODES: [u16; 6] = [102, 320, 324, 356, 401, 402];
+        const ALLOWED_CODES: [u16; 7] = [102, 320, 324, 356, 401, 402, 655];
 
         let (
             display_name_label,
@@ -845,7 +837,7 @@ pub fn write_maps(
             write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
-                println!("Wrote file {filename}");
+                println!("{WROTE_FILE_MSG} {filename}");
             }
         });
     } else {
@@ -1171,7 +1163,7 @@ pub fn write_maps(
             write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
-                println!("Wrote file {filename}");
+                println!("{WROTE_FILE_MSG} {filename}");
             }
         });
     }
@@ -1277,8 +1269,10 @@ pub fn write_other(
     other_obj_arr_vec
         .into_par_iter()
         .for_each(|(filename, mut obj_arr)| {
-            let content_path: &Path = &other_path
-                .join(filename[..filename.len() - determine_extension(engine_type).len() ].to_owned() + ".txt");
+            let content_path: &Path = &other_path.join(
+                filename[..filename.len() - determine_extension(engine_type).len()].to_owned()
+                    + ".txt",
+            );
 
             let original_content: String = read_to_string(content_path).unwrap_log();
 
@@ -1295,11 +1289,7 @@ pub fn write_other(
                                 translated.replace(r"\#", "\n").trim().to_owned(),
                             ))
                         } else {
-                            eprintln!(
-                                "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}",
-                                line,
-                                i
-                            );
+                            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
 
                             None
                         }
@@ -1418,7 +1408,7 @@ pub fn write_other(
             write(output_path.join(&filename), output_data).unwrap_log();
 
             if logging {
-                println!("Wrote file {filename}");
+                println!("{WROTE_FILE_MSG} {filename}");
             }
         });
 }
@@ -1459,11 +1449,7 @@ pub fn write_system(
                 } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     Some((original.trim().to_owned(), translated.trim().to_owned()))
                 } else {
-                    eprintln!(
-                        "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}",
-                        line,
-                        i
-                    );
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
 
                     None
                 }
@@ -1697,7 +1683,7 @@ pub fn write_system(
     .unwrap_log();
 
     if logging {
-        println!("Wrote file {}", system_file_path.display());
+        println!("{WROTE_FILE_MSG} {}", system_file_path.display());
     }
 }
 
@@ -1728,11 +1714,7 @@ pub fn write_plugins(
                 } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     Some((original.trim().to_owned(), translated.trim().to_owned()))
                 } else {
-                    eprintln!(
-                        "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}",
-                        line,
-                        i
-                    );
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
 
                     None
                 }
@@ -1807,7 +1789,7 @@ pub fn write_plugins(
     .unwrap_log();
 
     if logging {
-        println!("Wrote file plugins.js");
+        println!("{WROTE_FILE_MSG} plugins.js");
     }
 }
 
@@ -1849,9 +1831,7 @@ pub fn write_scripts(
             if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                 hashmap.insert(original.trim().to_owned(), translated.trim().to_owned());
             } else {
-                eprintln!(
-                    "Couldn't split line to original and translated part.\nThe line won't be written to the output file. {}\nAt position: {}", line, i
-                );
+                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
             }
         }
 
@@ -1927,6 +1907,6 @@ pub fn write_scripts(
     .unwrap_log();
 
     if logging {
-        println!("Wrote file {}", scripts_file_path.display());
+        println!("{WROTE_FILE_MSG} {}", scripts_file_path.display());
     }
 }
