@@ -559,7 +559,7 @@ pub fn read_map(
     let output_path: &Path = &output_path.join("maps.txt");
 
     if processing_mode == ProcessingMode::Default && output_path.exists() {
-        println!("maps_trans.txt file already exists. If you want to forcefully re-read files or append new text, use --mode force or --mode append.");
+        println!("maps_trans.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
 
@@ -614,9 +614,7 @@ pub fn read_map(
                     lines_map.insert(original, translated);
                 }
             } else {
-                println!(
-                    "Files aren't already parsed. Continuing as if --append flag was omitted."
-                );
+                println!("{}", FILES_ARE_NOT_PARSED_MSG);
                 processing_mode = ProcessingMode::Default;
             }
         };
@@ -735,7 +733,7 @@ pub fn read_map(
             }
 
             if logging {
-                println!("Parsed file {filename}");
+                println!("{PARSED_FILE_MSG} {filename}");
             }
 
             if generate_json {
@@ -808,9 +806,7 @@ pub fn read_map(
                     lines_vec.push((original.to_owned(), translated.to_owned()));
                 }
             } else {
-                println!(
-                    "Files aren't already parsed. Continuing as if --append flag was omitted."
-                );
+                println!("{}", FILES_ARE_NOT_PARSED_MSG);
                 processing_mode = ProcessingMode::Default;
             }
         };
@@ -1095,7 +1091,7 @@ pub fn read_map(
             }
 
             if logging {
-                println!("Parsed file {filename}");
+                println!("{PARSED_FILE_MSG} {filename}");
             }
 
             if generate_json {
@@ -1239,10 +1235,7 @@ pub fn read_other(
             .join(filename[0..filename.rfind('.').unwrap_log()].to_lowercase() + ".txt");
 
         if processing_mode == ProcessingMode::Default && output_path.exists() {
-            println!(
-                "{} file already exists. If you want to forcefully re-read files or append new text, use --mode force or --mode append.",
-                output_path.display()
-            );
+            println!("{} {FILE_ALREADY_EXISTS_MSG}", output_path.display());
             continue;
         }
 
@@ -1266,9 +1259,7 @@ pub fn read_other(
                     lines_map.insert(original, translated);
                 }
             } else {
-                println!(
-                    "Files aren't already parsed. Continuing as if --append flag was omitted."
-                );
+                println!("{}", FILES_ARE_NOT_PARSED_MSG);
                 inner_processing_mode = ProcessingMode::Default;
             }
         }
@@ -1440,7 +1431,7 @@ pub fn read_other(
         write(output_path, output_content).unwrap_log();
 
         if logging {
-            println!("Parsed file {filename}");
+            println!("{PARSED_FILE_MSG} {filename}");
         }
 
         if generate_json {
@@ -1482,7 +1473,7 @@ pub fn read_system(
     let output_path: &Path = &output_path.join("system.txt");
 
     if processing_mode == ProcessingMode::Default && output_path.exists() {
-        println!("system.txt file already exists. If you want to forcefully re-read files or append new text, use --mode force or --mode append.");
+        println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
 
@@ -1512,7 +1503,7 @@ pub fn read_system(
                 lines_map.insert(original, translated);
             }
         } else {
-            println!("Files aren't already parsed. Continuing as if --append flag was omitted.");
+            println!("{}", FILES_ARE_NOT_PARSED_MSG);
             processing_mode = ProcessingMode::Default;
         }
     }
@@ -1926,7 +1917,7 @@ pub fn read_system(
 
     if logging {
         println!(
-            "Parsed file {}",
+            "{PARSED_FILE_MSG} {}",
             system_file_path.file_name().unwrap_log().to_string_lossy()
         );
     }
@@ -2099,7 +2090,7 @@ pub fn read_scripts(
 
     if logging {
         println!(
-            "Parsed file {}",
+            "{PARSED_FILE_MSG} {}",
             scripts_file_path.file_name().unwrap_log().to_string_lossy()
         );
     }
