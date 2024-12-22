@@ -565,6 +565,55 @@ fn write_list(
                     }
                 }
             }
+            655 => {
+                let parameter_string: String = list[it][parameters_label][0]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or(match list[it][parameters_label][0].as_object() {
+                        Some(obj) => get_object_data(obj),
+                        None => String::new(),
+                    })
+                    .trim()
+                    .to_owned();
+
+                if !parameter_string.is_empty() {
+                    if parameter_string.starts_with("$game_system.shopback")
+                        || parameter_string.starts_with("$game_system.shop_windowskin")
+                        || !parameter_string.ends_with(['"', '\''])
+                    {
+                        return;
+                    }
+
+                    let split: (&str, &str) = parameter_string.split_once('=').unwrap();
+                    let actual_string: &str = split.1.trim();
+                    let mut without_quotes: String =
+                        actual_string[1..actual_string.len() - 1].to_owned();
+
+                    if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
+                        return;
+                    }
+
+                    if romanize {
+                        without_quotes = romanize_string(without_quotes);
+                    }
+
+                    let translated: Option<String> = get_translated_parameter(
+                        Code::Shop,
+                        &without_quotes,
+                        map,
+                        game_type,
+                        engine_type,
+                    );
+
+                    if let Some(mut translated) = translated {
+                        translated = split.0.to_owned() + &translated;
+
+                        if !translated.is_empty() {
+                            if engine_type == EngineType::New {
+                                list[it][parameters_label][1] = Value::from(&translated);
+                            } else {
+                                list[it][parameters_label][1] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                            }
                         }
                     }
                 }
