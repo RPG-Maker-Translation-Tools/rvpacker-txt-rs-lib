@@ -600,14 +600,15 @@ pub fn read_map(
 
         let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
-        let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log()
-        } else {
-            String::new()
-        };
+        let original_content: String =
+            if processing_mode == ProcessingMode::Append && output_path.exists() {
+                read_to_string(output_path).unwrap_log()
+            } else {
+                String::new()
+            };
 
         if processing_mode == ProcessingMode::Append {
-            if output_path.exists() {
+            if !original_content.is_empty() {
                 for line in original_content.split('\n') {
                     let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                     lines_map.insert(original, translated);
@@ -784,14 +785,15 @@ pub fn read_map(
         let mut lines_vec: Vec<(String, String)> = Vec::new();
         let mut lines_pos: usize = 0;
 
-        let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log()
-        } else {
-            String::new()
-        };
+        let original_content: String =
+            if processing_mode == ProcessingMode::Append && output_path.exists() {
+                read_to_string(output_path).unwrap_log()
+            } else {
+                String::new()
+            };
 
         if processing_mode == ProcessingMode::Append {
-            if output_path.exists() {
+            if !original_content.is_empty() {
                 for line in original_content.split('\n') {
                     let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
@@ -1250,14 +1252,15 @@ pub fn read_other(
 
         let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
-        let original_content: String = if processing_mode == ProcessingMode::Append {
-            read_to_string(output_path).unwrap_log()
-        } else {
-            String::new()
-        };
+        let original_content: String =
+            if processing_mode == ProcessingMode::Append && output_path.exists() {
+                read_to_string(output_path).unwrap_log()
+            } else {
+                String::new()
+            };
 
         if processing_mode == ProcessingMode::Append {
-            if output_path.exists() {
+            if !original_content.is_empty() {
                 for line in original_content.par_split('\n').collect::<Vec<_>>() {
                     let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                     lines_map.insert(original, translated);
@@ -1495,14 +1498,15 @@ pub fn read_system(
 
     let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
-    let original_content: String = if processing_mode == ProcessingMode::Append {
-        read_to_string(output_path).unwrap_log()
-    } else {
-        String::new()
-    };
+    let original_content: String =
+        if processing_mode == ProcessingMode::Append && output_path.exists() {
+            read_to_string(output_path).unwrap_log()
+        } else {
+            String::new()
+        };
 
     if processing_mode == ProcessingMode::Append {
-        if output_path.exists() {
+        if !original_content.is_empty() {
             for line in original_content.par_split('\n').collect::<Vec<_>>() {
                 let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
                 lines_map.insert(original, translated);
