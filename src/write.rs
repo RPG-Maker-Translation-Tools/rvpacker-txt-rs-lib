@@ -6,7 +6,7 @@ use crate::{
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, WROTE_FILE_MSG},
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
-        LINES_SEPARATOR, NEW_LINE,
+        ALLOWED_CODES, LINES_SEPARATOR, NEW_LINE,
     },
     types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, Variable},
 };
@@ -21,7 +21,7 @@ use std::{
     fs::{read, read_dir, read_to_string, write, DirEntry},
     hash::BuildHasherDefault,
     io::{Read, Write},
-    mem::take,
+    mem::{take, transmute},
     path::Path,
     str::{from_utf8_unchecked, Chars},
     sync::{Arc, Mutex},
@@ -34,7 +34,8 @@ type StringHashMap = HashMap<String, String, BuildHasherDefault<Xxh3>>;
 fn get_translated_parameter<'a>(
     code: Code,
     mut parameter: &'a str,
-    hashmap: &'a StringHashMap,
+    hashmap: Option<&'a StringHashMap>,
+    deque: Option<&mut VecDeque<String>>,
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
@@ -80,82 +81,19 @@ fn get_translated_parameter<'a>(
         }
     }
 
-    let translated: Option<String> = hashmap.get(parameter).map(|translated: &String| {
-        let mut result: String = translated.to_owned();
-        result
-    });
-
-    if let Some(mut translated) = translated {
-        if translated.is_empty() {
-            return None;
+    let translated: Option<String> = if let Some(mut deque) = deque {
+        if code == Code::ChoiceArray {
+            deque.front().map(String::to_owned)
+        } else {
+            deque.pop_front()
         }
-
-        for (string, position) in remaining_strings.into_iter().zip(insert_positions) {
-            match position {
-                false => translated = string + &translated,
-                true => translated += &string,
-            }
-        }
-
-        Some(translated)
     } else {
-        translated
-    }
-}
-
-#[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-fn get_translated_parameter_deque(
-    code: Code,
-    mut parameter: &str,
-    deque: &mut VecDeque<String>,
-    game_type: Option<GameType>,
-    engine_type: EngineType,
-) -> Option<String> {
-    let mut remaining_strings: Vec<String> = Vec::with_capacity(4);
-
-    // bool indicates insert whether at start or at end
-    // true inserts at end
-    // false inserts at start
-    let mut insert_positions: Vec<bool> = Vec::with_capacity(4);
-
-    #[allow(unreachable_patterns)]
-    if let Some(game_type) = game_type {
-        match game_type {
-            GameType::Termina => match code {
-                Code::System => {
-                    if !parameter.starts_with("Gab")
-                        && (!parameter.starts_with("choice_text") || parameter.ends_with("????"))
-                    {
-                        return None;
-                    }
-                }
-                _ => {}
-            },
-            GameType::LisaRPG => match code {
-                Code::Dialogue => {
-                    if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
-                        parameter = &parameter[re_match.end()..];
-                        remaining_strings.push(re_match.as_str().to_owned());
-                        insert_positions.push(false);
-                    }
-                }
-                _ => {}
-            },
-            _ => {} // custom processing for other games
-        }
-    }
-
-    if engine_type != EngineType::New {
-        if let Some(re_match) = ENDS_WITH_IF_RE.find(parameter) {
-            remaining_strings.push(re_match.as_str().to_owned());
-            insert_positions.push(true);
-        }
-    }
-
-    let translated: Option<String> = if code == Code::Choice {
-        deque.front().map(String::to_owned)
-    } else {
-        deque.pop_front()
+        unsafe { hashmap.unwrap_unchecked() }
+            .get(parameter)
+            .map(|translated: &String| {
+                let mut result: String = translated.to_owned();
+                result
+            })
     };
 
     if let Some(mut translated) = translated {
@@ -241,10 +179,7 @@ fn get_translated_variable(
                     }
                     None => {}
                 },
-                Variable::Message1
-                | Variable::Message2
-                | Variable::Message3
-                | Variable::Message4 => {
+                Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4 => {
                     return None;
                 }
                 Variable::Note => {
@@ -278,15 +213,15 @@ fn get_translated_variable(
                             }
                         }
 
-                        if is_continuation_of_description {
+                        return if is_continuation_of_description {
                             if let Some((_, right)) = variable_text.trim_start().split_once('\n') {
-                                return Some(right.to_owned());
+                                Some(right.to_owned())
                             } else {
-                                return Some(String::new());
+                                Some(String::new())
                             }
                         } else {
-                            return Some(variable_text);
-                        }
+                            Some(variable_text)
+                        };
                     }
                 }
                 _ => {}
@@ -343,7 +278,6 @@ fn get_translated_variable(
 
 fn write_list(
     list: &mut Array,
-    allowed_codes: &[u16],
     romanize: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
@@ -360,19 +294,24 @@ fn write_list(
     for it in 0..list_length {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
+        let code: Code = if !ALLOWED_CODES.contains(&code) {
+            Code::Bad
+        } else {
+            unsafe { transmute::<u16, Code>(code) }
+        };
+
         let write_string_literally: bool = if engine_type != EngineType::New {
             !match code {
-                320 | 324 | 356 | 401 | 405 => list[it][parameters_label][0].is_object(),
-                102 => list[it][parameters_label][0][0].is_object(),
-                402 => list[it][parameters_label][1].is_object(),
-                _ => false,
+                Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
+                Code::Misc | Code::Choice => list[it][parameters_label][1].is_object(),
+                _ => list[it][parameters_label][0].is_object(),
             }
         } else {
             true
         };
 
-        if in_sequence && ![401, 405].contains(&code) {
-            let line: &mut Vec<String> = if code != 401 {
+        if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
+            let line: &mut Vec<String> = if code != Code::Dialogue {
                 &mut line
             } else {
                 &mut credits_lines
@@ -386,7 +325,7 @@ fn write_list(
                 }
 
                 let translated: Option<String> =
-                    get_translated_parameter(Code::Dialogue, &joined, map, game_type, engine_type);
+                    get_translated_parameter(Code::Dialogue, &joined, Some(map), None, game_type, engine_type);
 
                 if let Some(translated) = translated {
                     let split_vec: Vec<&str> = translated.split('\n').collect();
@@ -410,8 +349,8 @@ fn write_list(
 
                     if split_length > line_length {
                         let remaining: String = split_vec[line_length - 1..].join("\n");
-                        list[*unsafe { item_indices.last().unwrap_unchecked() }]
-                            [parameters_label][0] = Value::from(&remaining);
+                        list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
+                            Value::from(&remaining);
                     }
                 }
 
@@ -422,48 +361,23 @@ fn write_list(
             in_sequence = false
         }
 
-        if !allowed_codes.contains(&code) {
+        if code == Code::Bad {
             continue;
         }
 
+        let value_i: usize = match code {
+            Code::Misc => 1,
+            _ => 0,
+        };
+        let value: &mut Value = &mut list[it][parameters_label][value_i];
+
         match code {
-            401 => {
-                let parameter_string: String = list[it][parameters_label][0]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match list[it][parameters_label][0].as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
-                    })
-                    .trim()
-                    .to_owned();
-
-                if !parameter_string.is_empty() {
-                    line.push(parameter_string);
-                    item_indices.push(it);
-                    in_sequence = true;
-                }
-            }
-            405 => {
-                let parameter_string: String = list[it][parameters_label][0]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match list[it][parameters_label][0].as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
-                    })
-                    .trim()
-                    .to_owned();
-
-                credits_lines.push(parameter_string);
-                in_sequence = true;
-            }
-            102 => {
-                for i in 0..list[it][parameters_label][0].as_array().unwrap_log().len() {
-                    let mut subparameter_string: String = list[it][parameters_label][0][i]
+            Code::ChoiceArray => {
+                for i in 0..value.as_array().unwrap_log().len() {
+                    let mut subparameter_string: String = value[i]
                         .as_str()
                         .map(str::to_owned)
-                        .unwrap_or(match list[it][parameters_label][0][i].as_object() {
+                        .unwrap_or(match value[i].as_object() {
                             Some(obj) => get_object_data(obj),
                             None => String::new(),
                         })
@@ -476,149 +390,117 @@ fn write_list(
                         }
 
                         let translated: Option<String> = get_translated_parameter(
-                            Code::Choice,
+                            code,
                             &subparameter_string,
-                            map,
+                            Some(map),
+                            None,
                             game_type,
                             engine_type,
                         );
 
                         if let Some(translated) = translated {
                             if !translated.is_empty() {
-                                if engine_type == EngineType::New {
-                                    list[it][parameters_label][0][i] = Value::from(&translated);
+                                value[i] = if engine_type == EngineType::New {
+                                    Value::from(&translated)
                                 } else {
-                                    list[it][parameters_label][0][i] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ => {
+                let mut parameter_string: String = value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or(match value.as_object() {
+                        Some(obj) => get_object_data(obj),
+                        None => String::new(),
+                    })
+                    .trim()
+                    .to_owned();
+
+                // We push even the empty lines for credits case.
+                if code != Code::Credit && parameter_string.is_empty() {
+                    continue;
+                }
+
+                match code {
+                    Code::Dialogue => {
+                        line.push(parameter_string);
+                        item_indices.push(it);
+                        in_sequence = true;
+                    }
+                    Code::Credit => {
+                        credits_lines.push(parameter_string);
+                        in_sequence = true;
+                    }
+                    _ => {
+                        if code == Code::Shop {
+                            if parameter_string.starts_with("$game_system.shopback")
+                                || parameter_string.starts_with("$game_system.shop_windowskin")
+                                || !parameter_string.ends_with(['"', '\''])
+                            {
+                                return;
+                            }
+
+                            let split: (&str, &str) = parameter_string.split_once('=').unwrap();
+                            let actual_string: &str = split.1.trim();
+                            let mut without_quotes: String = actual_string[1..actual_string.len() - 1].to_owned();
+
+                            if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
+                                return;
+                            }
+
+                            if romanize {
+                                without_quotes = romanize_string(without_quotes);
+                            }
+
+                            let translated: Option<String> = get_translated_parameter(
+                                code,
+                                &without_quotes,
+                                Some(map),
+                                None,
+                                game_type,
+                                engine_type,
+                            );
+
+                            if let Some(mut translated) = translated {
+                                translated = split.0.to_owned() + &translated;
+
+                                if !translated.is_empty() {
+                                    *value = if engine_type == EngineType::New {
+                                        Value::from(&translated)
+                                    } else {
+                                        json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                    };
                                 }
                             }
+
+                            continue;
                         }
-                    }
-                }
-            }
-            356 => {
-                let mut parameter_string: String = list[it][parameters_label][0]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match list[it][parameters_label][0].as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
-                    })
-                    .trim()
-                    .to_owned();
 
-                if !parameter_string.is_empty() {
-                    if romanize {
-                        parameter_string = romanize_string(parameter_string);
-                    }
+                        if romanize {
+                            parameter_string = romanize_string(parameter_string);
+                        }
 
-                    let translated: Option<String> = get_translated_parameter(
-                        Code::System,
-                        &parameter_string,
-                        map,
-                        game_type,
-                        engine_type,
-                    );
+                        let translated: Option<String> =
+                            get_translated_parameter(code, &parameter_string, Some(map), None, game_type, engine_type);
 
-                    if let Some(translated) = translated {
-                        if !translated.is_empty() {
-                            if engine_type == EngineType::New {
-                                list[it][parameters_label][0] = Value::from(&translated);
-                            } else {
-                                list[it][parameters_label][0] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                        if let Some(translated) = translated {
+                            if !translated.is_empty() {
+                                *value = if engine_type == EngineType::New {
+                                    Value::from(&translated)
+                                } else {
+                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                };
                             }
                         }
                     }
                 }
             }
-            320 | 324 | 402 => {
-                let mut parameter_string: String = list[it][parameters_label][1]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match list[it][parameters_label][1].as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
-                    })
-                    .trim()
-                    .to_owned();
-
-                if !parameter_string.is_empty() {
-                    if romanize {
-                        parameter_string = romanize_string(parameter_string);
-                    }
-
-                    let translated: Option<String> = get_translated_parameter(
-                        Code::Misc,
-                        &parameter_string,
-                        map,
-                        game_type,
-                        engine_type,
-                    );
-
-                    if let Some(translated) = translated {
-                        if !translated.is_empty() {
-                            if engine_type == EngineType::New {
-                                list[it][parameters_label][1] = Value::from(&translated);
-                            } else {
-                                list[it][parameters_label][1] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
-                            }
-                        }
-                    }
-                }
-            }
-            655 => {
-                let parameter_string: String = list[it][parameters_label][0]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match list[it][parameters_label][0].as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
-                    })
-                    .trim()
-                    .to_owned();
-
-                if !parameter_string.is_empty() {
-                    if parameter_string.starts_with("$game_system.shopback")
-                        || parameter_string.starts_with("$game_system.shop_windowskin")
-                        || !parameter_string.ends_with(['"', '\''])
-                    {
-                        return;
-                    }
-
-                    let split: (&str, &str) = parameter_string.split_once('=').unwrap();
-                    let actual_string: &str = split.1.trim();
-                    let mut without_quotes: String =
-                        actual_string[1..actual_string.len() - 1].to_owned();
-
-                    if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
-                        return;
-                    }
-
-                    if romanize {
-                        without_quotes = romanize_string(without_quotes);
-                    }
-
-                    let translated: Option<String> = get_translated_parameter(
-                        Code::Shop,
-                        &without_quotes,
-                        map,
-                        game_type,
-                        engine_type,
-                    );
-
-                    if let Some(mut translated) = translated {
-                        translated = split.0.to_owned() + &translated;
-
-                        if !translated.is_empty() {
-                            if engine_type == EngineType::New {
-                                list[it][parameters_label][1] = Value::from(&translated);
-                            } else {
-                                list[it][parameters_label][1] = json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
-                            }
-                        }
-                    }
-                }
-            }
-            _ => unreachable!(),
         }
     }
 }
@@ -644,35 +526,33 @@ pub fn write_maps(
     engine_type: EngineType,
 ) {
     if maps_processing_mode != MapsProcessingMode::Preserve {
-        let maps_obj_iter = read_dir(original_path)
-            .unwrap_log()
-            .par_bridge()
-            .filter_map(|entry: Result<DirEntry, std::io::Error>| {
-                if let Ok(entry) = entry {
-                    let filename: OsString = entry.file_name();
-                    let filename_str: &str =
-                        unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
+        let maps_obj_iter =
+            read_dir(original_path)
+                .unwrap_log()
+                .par_bridge()
+                .filter_map(|entry: Result<DirEntry, std::io::Error>| {
+                    if let Ok(entry) = entry {
+                        let filename: OsString = entry.file_name();
+                        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
-                    if filename_str.starts_with("Map")
-                        && unsafe {
-                            (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit()
-                        }
-                        && filename_str.ends_with(determine_extension(engine_type))
-                    {
-                        let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                        if filename_str.starts_with("Map")
+                            && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
+                            && filename_str.ends_with(determine_extension(engine_type))
+                        {
+                            let json: Value = if engine_type == EngineType::New {
+                                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                            } else {
+                                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                            };
+
+                            Some((filename_str.to_owned(), json))
                         } else {
-                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                        };
-
-                        Some((filename_str.to_owned(), json))
+                            None
+                        }
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            });
+                });
 
         let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
 
@@ -687,8 +567,7 @@ pub fn write_maps(
                     if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                         if original.len() > 20 {
                             let map_name: &str = &original[17..original.len() - 4];
-                            names_lines_map
-                                .insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                            names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
                         }
 
                         if maps_processing_mode == MapsProcessingMode::Separate {
@@ -703,16 +582,9 @@ pub fn write_maps(
                     }
 
                     if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                        let processed_original: String = original
-                            .replace(NEW_LINE, "\n")
-                            .trim()
-                            .to_owned()
-                            .to_owned();
-                        let processed_translated: String = translated
-                            .replace(NEW_LINE, "\n")
-                            .trim()
-                            .to_owned()
-                            .to_owned();
+                        let processed_original: String = original.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
+                        let processed_translated: String =
+                            translated.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
 
                         hashmap.insert(processed_original, processed_translated);
                     } else {
@@ -728,39 +600,19 @@ pub fn write_maps(
             vec
         };
 
-        // 401 - dialogue lines
-        // 102 - dialogue choices array
-        // 402 - one of the dialogue choices from the array
-        // 356 - system lines (special texts)
-        // 324, 320 - i don't know what is it but it's some used in-game lines
-        const ALLOWED_CODES: [u16; 7] = [102, 320, 324, 356, 401, 402, 655];
-
-        let (
-            display_name_label,
-            events_label,
-            pages_label,
-            list_label,
-            code_label,
-            parameters_label,
-        ) = if engine_type == EngineType::New {
-            (
-                "displayName",
-                "events",
-                "pages",
-                "list",
-                "code",
-                "parameters",
-            )
-        } else {
-            (
-                "__symbol__display_name",
-                "__symbol__events",
-                "__symbol__pages",
-                "__symbol__list",
-                "__symbol__code",
-                "__symbol__parameters",
-            )
-        };
+        let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
+            if engine_type == EngineType::New {
+                ("displayName", "events", "pages", "list", "code", "parameters")
+            } else {
+                (
+                    "__symbol__display_name",
+                    "__symbol__events",
+                    "__symbol__pages",
+                    "__symbol__list",
+                    "__symbol__code",
+                    "__symbol__parameters",
+                )
+            };
 
         let idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
         maps_obj_iter.for_each_with(idx, |idx: &mut Arc<Mutex<usize>>, (filename, mut obj)| {
@@ -804,29 +656,26 @@ pub fn write_maps(
                     .collect()
             };
 
-            events_arr
-                .par_iter_mut()
-                .for_each(|event: &mut &mut Value| {
-                    if event.is_null() {
-                        return;
-                    }
+            events_arr.par_iter_mut().for_each(|event: &mut &mut Value| {
+                if event.is_null() {
+                    return;
+                }
 
-                    event[pages_label]
-                        .as_array_mut()
-                        .unwrap_log()
-                        .par_iter_mut()
-                        .for_each(|page: &mut Value| {
-                            write_list(
-                                page[list_label].as_array_mut().unwrap_log(),
-                                &ALLOWED_CODES,
-                                romanize,
-                                game_type,
-                                engine_type,
-                                hashmap,
-                                (code_label, parameters_label),
-                            );
-                        });
-                });
+                event[pages_label]
+                    .as_array_mut()
+                    .unwrap_log()
+                    .par_iter_mut()
+                    .for_each(|page: &mut Value| {
+                        write_list(
+                            page[list_label].as_array_mut().unwrap_log(),
+                            romanize,
+                            game_type,
+                            engine_type,
+                            hashmap,
+                            (code_label, parameters_label),
+                        );
+                    });
+            });
 
             let output_data: Vec<u8> = if engine_type == EngineType::New {
                 to_vec(&obj).unwrap_log()
@@ -841,34 +690,32 @@ pub fn write_maps(
             }
         });
     } else {
-        let maps_obj_iter = read_dir(original_path).unwrap_log().filter_map(
-            |entry: Result<DirEntry, std::io::Error>| {
-                if let Ok(entry) = entry {
-                    let filename: OsString = entry.file_name();
-                    let filename_str: &str =
-                        unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
+        let maps_obj_iter =
+            read_dir(original_path)
+                .unwrap_log()
+                .filter_map(|entry: Result<DirEntry, std::io::Error>| {
+                    if let Ok(entry) = entry {
+                        let filename: OsString = entry.file_name();
+                        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
-                    if filename_str.starts_with("Map")
-                        && unsafe {
-                            (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit()
-                        }
-                        && filename_str.ends_with(determine_extension(engine_type))
-                    {
-                        let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                        if filename_str.starts_with("Map")
+                            && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
+                            && filename_str.ends_with(determine_extension(engine_type))
+                        {
+                            let json: Value = if engine_type == EngineType::New {
+                                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                            } else {
+                                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                            };
+
+                            Some((filename_str.to_owned(), json))
                         } else {
-                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                        };
-
-                        Some((filename_str.to_owned(), json))
+                            None
+                        }
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            },
-        );
+                });
 
         let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
 
@@ -883,8 +730,7 @@ pub fn write_maps(
 
                     if original.len() > 20 {
                         let map_name: &str = &original[17..original.len() - 4];
-                        names_lines_map
-                            .insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                        names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
                     }
                 } else {
                     if line.starts_with("<!--") {
@@ -893,11 +739,7 @@ pub fn write_maps(
 
                     let (_, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
-                    let processed_translated: String = translated
-                        .replace(NEW_LINE, "\n")
-                        .trim()
-                        .to_owned()
-                        .to_owned();
+                    let processed_translated: String = translated.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
 
                     deque.push_back(processed_translated);
                 }
@@ -906,39 +748,19 @@ pub fn write_maps(
             deque
         };
 
-        // 401 - dialogue lines
-        // 102 - dialogue choices array
-        // 402 - one of the dialogue choices from the array
-        // 356 - system lines (special texts)
-        // 324, 320 - i don't know what is it but it's some used in-game lines
-        const ALLOWED_CODES: [u16; 6] = [102, 320, 324, 356, 401, 402];
-
-        let (
-            display_name_label,
-            events_label,
-            pages_label,
-            list_label,
-            code_label,
-            parameters_label,
-        ) = if engine_type == EngineType::New {
-            (
-                "displayName",
-                "events",
-                "pages",
-                "list",
-                "code",
-                "parameters",
-            )
-        } else {
-            (
-                "__symbol__display_name",
-                "__symbol__events",
-                "__symbol__pages",
-                "__symbol__list",
-                "__symbol__code",
-                "__symbol__parameters",
-            )
-        };
+        let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
+            if engine_type == EngineType::New {
+                ("displayName", "events", "pages", "list", "code", "parameters")
+            } else {
+                (
+                    "__symbol__display_name",
+                    "__symbol__events",
+                    "__symbol__pages",
+                    "__symbol__list",
+                    "__symbol__code",
+                    "__symbol__parameters",
+                )
+            };
 
         maps_obj_iter.for_each(|(filename, mut obj)| {
             if let Some(display_name) = obj[display_name_label].as_str() {
@@ -975,180 +797,176 @@ pub fn write_maps(
                     .unwrap_log()
                     .iter_mut()
                     .for_each(|page: &mut Value| {
-                            let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
-                            let list_length: usize = list.len();
+                        let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
+                        let list_length: usize = list.len();
 
-                            let mut in_sequence: bool = false;
-                            let mut line: Vec<String> = Vec::with_capacity(4);
-                            let mut item_indices: Vec<usize> = Vec::with_capacity(4);
+                        let mut in_sequence: bool = false;
+                        let mut line: Vec<String> = Vec::with_capacity(4);
+                        let mut item_indices: Vec<usize> = Vec::with_capacity(4);
 
-                            for it in 0..list_length {
-                                let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
+                        for it in 0..list_length {
+                            let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-                                let write_string_literally: bool = if engine_type != EngineType::New {
-                                    !match code {
-                                        320 | 324 | 356 | 401 => list[it][parameters_label][0].is_object(),
-                                        102 => list[it][parameters_label][0][0].is_object(),
-                                        402 => list[it][parameters_label][1].is_object(),
-                                        _ => false,
+                            let code: Code = if !ALLOWED_CODES.contains(&code) {
+                                Code::Bad
+                            } else {
+                                unsafe { transmute::<u16, Code>(code) }
+                            };
+
+                            let write_string_literally: bool = if engine_type != EngineType::New {
+                                !match code {
+                                    Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
+                                    Code::Misc | Code::Choice => list[it][parameters_label][1].is_object(),
+                                    _ => list[it][parameters_label][0].is_object(),
+                                }
+                            } else {
+                                true
+                            };
+
+                            if in_sequence && code != Code::Dialogue {
+                                if !line.is_empty() {
+                                    let mut joined: String = line.join("\n").trim().to_owned();
+
+                                    if romanize {
+                                        joined = romanize_string(joined)
                                     }
-                                } else {
-                                    true
-                                };
 
-                                if in_sequence && code != 401 {
-                                    if !line.is_empty() {
-                                        let mut joined: String = line.join("\n").trim().to_owned();
+                                    let translated: Option<String> = get_translated_parameter(
+                                        Code::Dialogue,
+                                        &joined,
+                                        None,
+                                        Some(&mut lines_deque),
+                                        game_type,
+                                        engine_type,
+                                    );
 
-                                        if romanize {
-                                            joined = romanize_string(joined)
-                                        }
+                                    if let Some(translated) = translated {
+                                        let split_vec: Vec<&str> = translated.split('\n').collect();
+                                        let split_length: usize = split_vec.len();
+                                        let line_length: usize = line.len();
 
-                                        let translated: Option<String> =
-                                            get_translated_parameter_deque(Code::Dialogue, &joined, &mut lines_deque, game_type, engine_type);
-
-                                        if let Some(translated) = translated {
-                                            let split_vec: Vec<&str> = translated.split('\n').collect();
-                                            let split_length: usize = split_vec.len();
-                                            let line_length: usize = line.len();
-
-                                            for (i, &index) in item_indices.iter().enumerate() {
-                                                if i < split_length {
-                                                    list[index][parameters_label][0] = if !write_string_literally {
-                                                        json!({
-                                                            "__type": "bytes",
-                                                            "data": Array::from(split_vec[i].as_bytes())
-                                                        })
-                                                    } else {
-                                                        Value::from(split_vec[i])
-                                                    };
+                                        for (i, &index) in item_indices.iter().enumerate() {
+                                            if i < split_length {
+                                                list[index][parameters_label][0] = if !write_string_literally {
+                                                    json!({
+                                                        "__type": "bytes",
+                                                        "data": Array::from(split_vec[i].as_bytes())
+                                                    })
                                                 } else {
-                                                    list[index][parameters_label][0] = Value::from_static_str(" ");
-                                                }
-                                            }
-
-                                            if split_length > line_length {
-                                                let remaining: String = split_vec[line_length - 1..].join("\n");
-                                                list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
-                                                    Value::from(&remaining);
+                                                    Value::from(split_vec[i])
+                                                };
+                                            } else {
+                                                list[index][parameters_label][0] = Value::from_static_str(" ");
                                             }
                                         }
 
-                                        line.clear();
-                                        item_indices.clear();
+                                        if split_length > line_length {
+                                            let remaining: String = split_vec[line_length - 1..].join("\n");
+                                            list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
+                                                Value::from(&remaining);
+                                        }
                                     }
 
-                                    in_sequence = false
+                                    line.clear();
+                                    item_indices.clear();
                                 }
 
-                                if !ALLOWED_CODES.contains(&code) {
-                                    continue;
-                                }
+                                in_sequence = false
+                            }
 
-                                match code {
-                                    401 => {
-                                        let parameter_string: String = list[it][parameters_label][0]
+                            if code == Code::Bad {
+                                continue;
+                            }
+
+                            let value_i: usize = match code {
+                                Code::Misc => 1,
+                                _ => 0,
+                            };
+
+                            let value: &mut Value = &mut list[it][parameters_label][value_i];
+
+                            match code {
+                                Code::ChoiceArray => {
+                                    for i in 0..value.as_array().unwrap_log().len() {
+                                        let mut subparameter_string: String = value[i]
                                             .as_str()
                                             .map(str::to_owned)
-                                            .unwrap_or(match list[it][parameters_label][0].as_object() {
+                                            .unwrap_or(match value[i].as_object() {
                                                 Some(obj) => get_object_data(obj),
                                                 None => String::new(),
                                             })
                                             .trim()
                                             .to_owned();
 
-                                        if !parameter_string.is_empty() {
+                                        if romanize {
+                                            subparameter_string = romanize_string(subparameter_string);
+                                        }
+
+                                        let translated: Option<String> = get_translated_parameter(
+                                            code,
+                                            &subparameter_string,
+                                            None,
+                                            Some(&mut lines_deque),
+                                            game_type,
+                                            engine_type,
+                                        );
+
+                                        if let Some(translated) = translated {
+                                            value[i] = if engine_type == EngineType::New {
+                                                Value::from(&translated)
+                                            } else {
+                                                json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                            };
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    let mut parameter_string: String = value
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .unwrap_or(match value.as_object() {
+                                            Some(obj) => get_object_data(obj),
+                                            None => String::new(),
+                                        })
+                                        .trim()
+                                        .to_owned();
+
+                                    if parameter_string.is_empty() {
+                                        continue;
+                                    }
+
+                                    match code {
+                                        Code::Dialogue => {
                                             line.push(parameter_string);
                                             item_indices.push(it);
                                             in_sequence = true;
                                         }
-                                    }
-                                    102 => {
-                                        for i in 0..list[it][parameters_label][0].as_array().unwrap_log().len() {
-                                            let mut subparameter_string: String = list[it][parameters_label][0][i]
-                                                .as_str()
-                                                .map(str::to_owned)
-                                                .unwrap_or(match list[it][parameters_label][0][i].as_object() {
-                                                    Some(obj) => get_object_data(obj),
-                                                    None => String::new(),
-                                                })
-                                                .trim()
-                                                .to_owned();
-
+                                        _ => {
                                             if romanize {
-                                                subparameter_string = romanize_string(subparameter_string);
+                                                parameter_string = romanize_string(parameter_string);
                                             }
 
-                                            let translated: Option<String> =
-                                                get_translated_parameter_deque(Code::Choice, &subparameter_string, &mut lines_deque, game_type, engine_type);
+                                            let translated: Option<String> = get_translated_parameter(
+                                                code,
+                                                &parameter_string,
+                                                None,
+                                                Some(&mut lines_deque),
+                                                game_type,
+                                                engine_type,
+                                            );
 
                                             if let Some(translated) = translated {
-                                                if engine_type == EngineType::New {
-                                                    list[it][parameters_label][0][i] = Value::from(&translated);
+                                                *value = if engine_type == EngineType::New {
+                                                    Value::from(&translated)
                                                 } else {
-                                                    list[it][parameters_label][0][i] =
-                                                        json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
+                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
                                                 }
                                             }
                                         }
                                     }
-                                    356 => {
-                                        let mut parameter_string: String = list[it][parameters_label][0]
-                                            .as_str()
-                                            .map(str::to_owned)
-                                            .unwrap_or(match list[it][parameters_label][0].as_object() {
-                                                Some(obj) => get_object_data(obj),
-                                                None => String::new(),
-                                            })
-                                            .trim()
-                                            .to_owned();
-
-                                        if romanize {
-                                            parameter_string = romanize_string(parameter_string);
-                                        }
-
-                                        let translated: Option<String> =
-                                            get_translated_parameter_deque(Code::System, &parameter_string, &mut lines_deque, game_type, engine_type);
-
-                                        if let Some(translated) = translated {
-                                            if engine_type == EngineType::New {
-                                                list[it][parameters_label][0] = Value::from(&translated);
-                                            } else {
-                                                list[it][parameters_label][0] =
-                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
-                                            }
-                                        }
-                                    }
-                                    320 | 324 | 402 => {
-                                        let mut parameter_string: String = list[it][parameters_label][1]
-                                            .as_str()
-                                            .map(str::to_owned)
-                                            .unwrap_or(match list[it][parameters_label][1].as_object() {
-                                                Some(obj) => get_object_data(obj),
-                                                None => String::new(),
-                                            })
-                                            .trim()
-                                            .to_owned();
-
-                                        if romanize {
-                                            parameter_string = romanize_string(parameter_string);
-                                        }
-
-                                        let translated: Option<String> =
-                                            get_translated_parameter_deque(Code::Misc, &parameter_string, &mut lines_deque, game_type, engine_type);
-
-                                        if let Some(translated) = translated {
-                                            if engine_type == EngineType::New {
-                                                list[it][parameters_label][1] = Value::from(&translated);
-                                            } else {
-                                                list[it][parameters_label][1] =
-                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())});
-                                            }
-                                        }
-                                    }
-                                    _ => unreachable!(),
                                 }
                             }
+                        }
                     });
             });
 
@@ -1157,8 +975,6 @@ pub fn write_maps(
             } else {
                 dump(obj, Some(""))
             };
-
-
 
             write(output_path.join(&filename), output_data).unwrap_log();
 
@@ -1187,48 +1003,40 @@ pub fn write_other(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) {
-    let other_obj_arr_vec = read_dir(original_path)
-        .unwrap_log()
-        .par_bridge()
-        .filter_map(|entry: Result<DirEntry, std::io::Error>| {
-            if let Ok(entry) = entry {
-                let filename: OsString = entry.file_name();
-                let filename_str: &str =
-                    unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
-                let (real_name, _) = filename_str.split_once('.').unwrap_log();
+    let other_obj_arr_vec =
+        read_dir(original_path)
+            .unwrap_log()
+            .par_bridge()
+            .filter_map(|entry: Result<DirEntry, std::io::Error>| {
+                if let Ok(entry) = entry {
+                    let filename: OsString = entry.file_name();
+                    let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
+                    let (real_name, _) = filename_str.split_once('.').unwrap_log();
 
-                if !real_name.starts_with("Map")
-                    && !matches!(real_name, "Tilesets" | "Animations" | "System" | "Scripts")
-                    && filename_str.ends_with(determine_extension(engine_type))
-                {
-                    if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina)
-                        && real_name == "States"
+                    if !real_name.starts_with("Map")
+                        && !matches!(real_name, "Tilesets" | "Animations" | "System" | "Scripts")
+                        && filename_str.ends_with(determine_extension(engine_type))
                     {
-                        return None;
-                    }
+                        if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina)
+                            && real_name == "States"
+                        {
+                            return None;
+                        }
 
-                    let json: Value = if engine_type == EngineType::New {
-                        from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                        let json: Value = if engine_type == EngineType::New {
+                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                        } else {
+                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                        };
+
+                        Some((filename_str.to_owned(), json))
                     } else {
-                        load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                    };
-
-                    Some((filename_str.to_owned(), json))
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        });
-
-    // 401 - dialogue lines
-    // 405 - credits lines
-    // 102 - dialogue choices array
-    // 402 - one of the dialogue choices from the array
-    // 356 - system lines (special texts)
-    // 324, 320 - i don't know what is it but it's some used in-game lines
-    const ALLOWED_CODES: [u16; 7] = [102, 320, 324, 356, 401, 402, 405];
+            });
 
     let variable_tuples: Arc<[(&str, Variable); 8]> = Arc::new(if engine_type == EngineType::New {
         [
@@ -1254,8 +1062,7 @@ pub fn write_other(
         ]
     });
 
-    let (pages_label, list_label, code_label, parameters_label) = if engine_type == EngineType::New
-    {
+    let (pages_label, list_label, code_label, parameters_label) = if engine_type == EngineType::New {
         ("pages", "list", "code", "parameters")
     } else {
         (
@@ -1266,151 +1073,141 @@ pub fn write_other(
         )
     };
 
-    other_obj_arr_vec
-        .into_par_iter()
-        .for_each(|(filename, mut obj_arr)| {
-            let content_path: &Path = &other_path.join(
-                filename[..filename.len() - determine_extension(engine_type).len()].to_owned()
-                    + ".txt",
-            );
+    other_obj_arr_vec.into_par_iter().for_each(|(filename, mut obj_arr)| {
+        let content_path: &Path =
+            &other_path.join(filename[..filename.len() - determine_extension(engine_type).len()].to_owned() + ".txt");
 
-            let original_content: String = read_to_string(content_path).unwrap_log();
+        let original_content: String = read_to_string(content_path).unwrap_log();
 
-            let lines_map: StringHashMap =
-                HashMap::from_iter(original_content.split('\n').enumerate().filter_map(
-                    |(i, line)| {
-                        if line.starts_with("<!--") {
-                            None
-                        } else if let Some((original, translated)) =
-                            line.split_once(LINES_SEPARATOR)
-                        {
-                            Some((
-                                original.replace(r"\#", "\n").trim().to_owned(),
-                                translated.replace(r"\#", "\n").trim().to_owned(),
-                            ))
-                        } else {
-                            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
+        let lines_map: StringHashMap =
+            HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
+                if line.starts_with("<!--") {
+                    None
+                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    Some((
+                        original.replace(r"\#", "\n").trim().to_owned(),
+                        translated.replace(r"\#", "\n").trim().to_owned(),
+                    ))
+                } else {
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
 
-                            None
-                        }
-                    },
-                ));
+                    None
+                }
+            }));
 
-            // Other files except CommonEvents and Troops have the structure that consists
-            // of name, nickname, description and note
-            if !filename.starts_with("Co") && !filename.starts_with("Tr") {
-                obj_arr
-                    .as_array_mut()
-                    .unwrap_log()
-                    .par_iter_mut()
-                    .skip(1) // Skipping first element in array as it is null
-                    .for_each(|obj: &mut Value| {
-                        for (variable_label, variable_type) in variable_tuples.into_iter() {
-                            if let Some(variable_str) = obj[variable_label].as_str() {
-                                let mut variable_string: String = if variable_type != Variable::Note
+        // Other files except CommonEvents and Troops have the structure that consists
+        // of name, nickname, description and note
+        if !filename.starts_with("Co") && !filename.starts_with("Tr") {
+            obj_arr
+                .as_array_mut()
+                .unwrap_log()
+                .par_iter_mut()
+                .skip(1) // Skipping first element in array as it is null
+                .for_each(|obj: &mut Value| {
+                    for (variable_label, variable_type) in variable_tuples.into_iter() {
+                        if let Some(mut variable_str) = obj[variable_label].as_str() {
+                            let mut variable_string: String = if variable_type != Variable::Note {
+                                variable_str.trim().to_owned()
+                            } else {
+                                if let Some(game_type) = game_type {
+                                    if game_type == GameType::LisaRPG {
+                                        variable_str = variable_str.trim()
+                                    }
+                                }
+
+                                variable_str.to_owned()
+                            };
+
+                            if !variable_string.is_empty() {
+                                if romanize {
+                                    variable_string = romanize_string(variable_string)
+                                }
+
+                                variable_string = variable_string
+                                    .split('\n')
+                                    .map(str::trim)
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+
+                                let note_text: Option<&str> = if game_type
+                                    .is_some_and(|game_type: GameType| game_type != GameType::Termina)
+                                    && variable_type != Variable::Description
                                 {
-                                    variable_str.trim().to_owned()
+                                    None
                                 } else {
-                                    variable_str.to_owned()
+                                    match obj.get(unsafe { variable_tuples.last().unwrap_unchecked() }.0) {
+                                        Some(value) => value.as_str(),
+                                        None => None,
+                                    }
                                 };
 
-                                if !variable_string.is_empty() {
-                                    if romanize {
-                                        variable_string = romanize_string(variable_string)
-                                    }
+                                let translated: Option<String> = get_translated_variable(
+                                    variable_string,
+                                    note_text,
+                                    variable_type,
+                                    &filename,
+                                    &lines_map,
+                                    game_type,
+                                    engine_type,
+                                );
 
-                                    variable_string = variable_string
-                                        .split('\n')
-                                        .map(str::trim)
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-
-                                    let note_text: Option<&str> =
-                                        if game_type.is_some_and(|game_type: GameType| {
-                                            game_type != GameType::Termina
-                                        }) && variable_type != Variable::Description
-                                        {
-                                            None
-                                        } else {
-                                            match obj.get(
-                                                unsafe {
-                                                    variable_tuples.last().unwrap_unchecked()
-                                                }
-                                                .0,
-                                            ) {
-                                                Some(value) => value.as_str(),
-                                                None => None,
-                                            }
-                                        };
-
-                                    let translated: Option<String> = get_translated_variable(
-                                        variable_string,
-                                        note_text,
-                                        variable_type,
-                                        &filename,
-                                        &lines_map,
-                                        game_type,
-                                        engine_type,
-                                    );
-
-                                    if let Some(translated) = translated {
-                                        obj[variable_label] = Value::from(&translated);
-                                    }
+                                if let Some(translated) = translated {
+                                    obj[variable_label] = Value::from(&translated);
                                 }
                             }
                         }
-                    });
-            } else {
-                // Other files have the structure somewhat similar to Maps files
-                obj_arr
-                    .as_array_mut()
-                    .unwrap_log()
-                    .par_iter_mut()
-                    .skip(1) // Skipping first element in array as it is null
-                    .for_each(|obj: &mut Value| {
-                        // CommonEvents doesn't have pages, so we can just check if it's Troops
-                        let pages_length: usize = if filename.starts_with("Tr") {
-                            obj[pages_label].as_array().unwrap_log().len()
+                    }
+                });
+        } else {
+            // Other files have the structure somewhat similar to Maps files
+            obj_arr
+                .as_array_mut()
+                .unwrap_log()
+                .par_iter_mut()
+                .skip(1) // Skipping first element in array as it is null
+                .for_each(|obj: &mut Value| {
+                    // CommonEvents doesn't have pages, so we can just check if it's Troops
+                    let pages_length: usize = if filename.starts_with("Tr") {
+                        obj[pages_label].as_array().unwrap_log().len()
+                    } else {
+                        1
+                    };
+
+                    for i in 0..pages_length {
+                        // If element has pages, then we'll iterate over them
+                        // Otherwise we'll just iterate over the list
+                        let list_value: &mut Value = if pages_length != 1 {
+                            &mut obj[pages_label][i][list_label]
                         } else {
-                            1
+                            &mut obj[list_label]
                         };
 
-                        for i in 0..pages_length {
-                            // If element has pages, then we'll iterate over them
-                            // Otherwise we'll just iterate over the list
-                            let list_value: &mut Value = if pages_length != 1 {
-                                &mut obj[pages_label][i][list_label]
-                            } else {
-                                &mut obj[list_label]
-                            };
-
-                            if let Some(list) = list_value.as_array_mut() {
-                                write_list(
-                                    list,
-                                    &ALLOWED_CODES,
-                                    romanize,
-                                    game_type,
-                                    engine_type,
-                                    &lines_map,
-                                    (code_label, parameters_label),
-                                );
-                            }
+                        if let Some(list) = list_value.as_array_mut() {
+                            write_list(
+                                list,
+                                romanize,
+                                game_type,
+                                engine_type,
+                                &lines_map,
+                                (code_label, parameters_label),
+                            );
                         }
-                    });
-            }
+                    }
+                });
+        }
 
-            let output_data: Vec<u8> = if engine_type == EngineType::New {
-                to_vec(&obj_arr).unwrap_log()
-            } else {
-                dump(obj_arr, Some(""))
-            };
+        let output_data: Vec<u8> = if engine_type == EngineType::New {
+            to_vec(&obj_arr).unwrap_log()
+        } else {
+            dump(obj_arr, Some(""))
+        };
 
-            write(output_path.join(&filename), output_data).unwrap_log();
+        write(output_path.join(&filename), output_data).unwrap_log();
 
-            if logging {
-                println!("{WROTE_FILE_MSG} {filename}");
-            }
-        });
+        if logging {
+            println!("{WROTE_FILE_MSG} {filename}");
+        }
+    });
 }
 
 /// Writes system.txt file back to its initial form.
@@ -1439,65 +1236,47 @@ pub fn write_system(
 
     let original_content: String = read_to_string(other_path.join("system.txt")).unwrap_log();
 
-    let lines_map: StringHashMap = HashMap::from_iter(
-        original_content
-            .split('\n')
-            .enumerate()
-            .filter_map(|(i, line)| {
-                if line.starts_with("<!--") {
-                    None
-                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    Some((original.trim().to_owned(), translated.trim().to_owned()))
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-
-                    None
-                }
-            }),
-    );
-    let game_title: String = original_content
-        .rsplit_once(LINES_SEPARATOR)
-        .unwrap_log()
-        .1
-        .to_owned();
-
-    let (
-        armor_types_label,
-        elements_label,
-        skill_types_label,
-        terms_label,
-        weapon_types_label,
-        game_title_label,
-    ) = if engine_type == EngineType::New {
-        (
-            "armorTypes",
-            "elements",
-            "skillTypes",
-            "terms",
-            "weaponTypes",
-            "gameTitle",
-        )
-    } else {
-        (
-            "__symbol__armor_types",
-            "__symbol__elements",
-            "__symbol__skill_types",
-            if engine_type == EngineType::XP {
-                "__symbol__words"
+    let lines_map: StringHashMap =
+        HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
+            if line.starts_with("<!--") {
+                None
+            } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                Some((original.trim().to_owned(), translated.trim().to_owned()))
             } else {
-                "__symbol__terms"
-            },
-            "__symbol__weapon_types",
-            "__symbol__game_title",
-        )
-    };
+                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
+
+                None
+            }
+        }));
+    let game_title: String = original_content.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
+
+    let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
+        if engine_type == EngineType::New {
+            (
+                "armorTypes",
+                "elements",
+                "skillTypes",
+                "terms",
+                "weaponTypes",
+                "gameTitle",
+            )
+        } else {
+            (
+                "__symbol__armor_types",
+                "__symbol__elements",
+                "__symbol__skill_types",
+                if engine_type == EngineType::XP {
+                    "__symbol__words"
+                } else {
+                    "__symbol__terms"
+                },
+                "__symbol__weapon_types",
+                "__symbol__game_title",
+            )
+        };
 
     if engine_type != EngineType::New {
-        let mut string: String = obj["__symbol__currency_unit"]
-            .as_str()
-            .unwrap_log()
-            .trim()
-            .to_owned();
+        let mut string: String = obj["__symbol__currency_unit"].as_str().unwrap_log().trim().to_owned();
 
         if romanize {
             string = romanize_string(string);
@@ -1602,8 +1381,11 @@ pub fn write_system(
             }
 
             if key != "messages" {
-                value.as_array_mut().unwrap_log().par_iter_mut().for_each(
-                    |subvalue: &mut Value| {
+                value
+                    .as_array_mut()
+                    .unwrap_log()
+                    .par_iter_mut()
+                    .for_each(|subvalue: &mut Value| {
                         if let Some(str) = subvalue.as_str() {
                             let mut string: String = str.trim().to_owned();
 
@@ -1619,32 +1401,27 @@ pub fn write_system(
                                 *subvalue = Value::from(translated);
                             }
                         }
-                    },
-                );
+                    });
             } else {
                 if !value.is_object() {
                     return;
                 }
 
-                value
-                    .as_object_mut()
-                    .unwrap_log()
-                    .iter_mut()
-                    .for_each(|(_, value)| {
-                        let mut string: String = value.as_str().unwrap_log().trim().to_owned();
+                value.as_object_mut().unwrap_log().iter_mut().for_each(|(_, value)| {
+                    let mut string: String = value.as_str().unwrap_log().trim().to_owned();
 
-                        if romanize {
-                            string = romanize_string(string)
+                    if romanize {
+                        string = romanize_string(string)
+                    }
+
+                    if let Some(translated) = lines_map.get(&string) {
+                        if translated.is_empty() {
+                            return;
                         }
 
-                        if let Some(translated) = lines_map.get(&string) {
-                            if translated.is_empty() {
-                                return;
-                            }
-
-                            *value = Value::from(translated);
-                        }
-                    });
+                        *value = Value::from(translated);
+                    }
+                });
             }
         });
 
@@ -1676,11 +1453,7 @@ pub fn write_system(
         dump(obj, Some(""))
     };
 
-    write(
-        output_path.join(system_file_path.file_name().unwrap_log()),
-        output_data,
-    )
-    .unwrap_log();
+    write(output_path.join(system_file_path.file_name().unwrap_log()), output_data).unwrap_log();
 
     if logging {
         println!("{WROTE_FILE_MSG} {}", system_file_path.display());
@@ -1693,33 +1466,23 @@ pub fn write_system(
 /// * `plugins_path` - path to the plugins directory
 /// * `output_path` - path to the output directory
 /// * `logging` - whether to log or not
-pub fn write_plugins(
-    pluigns_file_path: &Path,
-    plugins_path: &Path,
-    output_path: &Path,
-    logging: bool,
-) {
-    let mut obj_arr: Vec<Object> =
-        from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
+pub fn write_plugins(pluigns_file_path: &Path, plugins_path: &Path, output_path: &Path, logging: bool) {
+    let mut obj_arr: Vec<Object> = from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
 
     let original_content: String = read_to_string(plugins_path.join("plugins.txt")).unwrap_log();
 
-    let lines_map: StringHashMap = HashMap::from_iter(
-        original_content
-            .split('\n')
-            .enumerate()
-            .filter_map(|(i, line)| {
-                if line.starts_with("<!--") {
-                    None
-                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    Some((original.trim().to_owned(), translated.trim().to_owned()))
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
+    let lines_map: StringHashMap =
+        HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
+            if line.starts_with("<!--") {
+                None
+            } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                Some((original.trim().to_owned(), translated.trim().to_owned()))
+            } else {
+                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
 
-                    None
-                }
-            }),
-    );
+                None
+            }
+        }));
 
     obj_arr.par_iter_mut().for_each(|obj: &mut Object| {
         // For now, plugins writing only implemented for Fear & Hunger: Termina, so you should manually translate the plugins.js file if it's not Termina
@@ -1811,12 +1574,8 @@ pub fn write_scripts(
     logging: bool,
     engine_type: EngineType,
 ) {
-    let mut script_entries: Value = load(
-        &read(scripts_file_path).unwrap_log(),
-        Some(StringMode::Binary),
-        None,
-    )
-    .unwrap_log();
+    let mut script_entries: Value =
+        load(&read(scripts_file_path).unwrap_log(), Some(StringMode::Binary), None).unwrap_log();
 
     let original_content: String = read_to_string(other_path.join("scripts.txt")).unwrap_log();
 
@@ -1854,9 +1613,7 @@ pub fn write_scripts(
             let data: Vec<u8> = from_value(&script.as_array().unwrap_log()[2]["data"]).unwrap_log();
 
             let mut inflated: Vec<u8> = Vec::new();
-            ZlibDecoder::new(&*data)
-                .read_to_end(&mut inflated)
-                .unwrap_log();
+            ZlibDecoder::new(&*data).read_to_end(&mut inflated).unwrap_log();
 
             let mut code: String = String::new();
 

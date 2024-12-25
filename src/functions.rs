@@ -80,15 +80,8 @@ pub fn romanize_string(string: String) -> String {
 pub fn get_object_data(object: &Object) -> String {
     match object.get(&"__type") {
         Some(object_type) => {
-            if object_type
-                .as_str()
-                .is_some_and(|_type: &str| _type == "bytes")
-            {
-                unsafe {
-                    String::from_utf8_unchecked(
-                        sonic_rs::from_value(&object["data"]).unwrap_unchecked(),
-                    )
-                }
+            if object_type.as_str().is_some_and(|_type: &str| _type == "bytes") {
+                unsafe { String::from_utf8_unchecked(sonic_rs::from_value(&object["data"]).unwrap_unchecked()) }
             } else {
                 String::new()
             }
@@ -100,10 +93,7 @@ pub fn get_object_data(object: &Object) -> String {
 pub fn extract_strings(
     ruby_code: &str,
     mode: bool,
-) -> (
-    IndexSet<String, BuildHasherDefault<Xxh3>>,
-    Vec<std::ops::Range<usize>>,
-) {
+) -> (IndexSet<String, BuildHasherDefault<Xxh3>>, Vec<std::ops::Range<usize>>) {
     fn is_escaped(index: usize, string: &str) -> bool {
         let mut backslash_count: u8 = 0;
 
