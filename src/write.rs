@@ -31,10 +31,10 @@ use xxhash_rust::xxh3::Xxh3;
 type StringHashMap = HashMap<String, String, BuildHasherDefault<Xxh3>>;
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-fn get_translated_parameter<'a>(
+fn get_translated_parameter(
     code: Code,
-    mut parameter: &'a str,
-    hashmap: Option<&'a StringHashMap>,
+    mut parameter: &str,
+    hashmap: Option<&StringHashMap>,
     deque: Option<&mut VecDeque<String>>,
     game_type: Option<GameType>,
     engine_type: EngineType,
