@@ -363,7 +363,7 @@ fn parse_list<'a>(
         let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
         let value_i: usize = match code {
-            Code::Misc => 1,
+            Code::Misc1 | Code::Misc2 => 1,
             _ => 0,
         };
         let value: &Value = &parameters[value_i];
@@ -697,7 +697,7 @@ pub fn read_map(
                             let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
                             let value_i: usize = match code {
-                                Code::Misc => 1,
+                                Code::Misc1 | Code::Misc2 => 1,
                                 _ => 0,
                             };
 

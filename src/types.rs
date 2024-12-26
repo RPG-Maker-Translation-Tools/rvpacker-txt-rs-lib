@@ -36,7 +36,8 @@ pub enum Code {
     ChoiceArray = 102,
     Choice = 402,
     System = 356,
-    Misc = 320 | 324,
+    Misc1 = 320,
+    Misc2 = 324,
     Shop = 655,
     Bad = 0,
 }

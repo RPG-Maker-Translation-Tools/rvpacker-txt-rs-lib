@@ -303,7 +303,7 @@ fn write_list(
         let write_string_literally: bool = if engine_type != EngineType::New {
             !match code {
                 Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
-                Code::Misc | Code::Choice => list[it][parameters_label][1].is_object(),
+                Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
                 _ => list[it][parameters_label][0].is_object(),
             }
         } else {
@@ -366,7 +366,7 @@ fn write_list(
         }
 
         let value_i: usize = match code {
-            Code::Misc => 1,
+            Code::Misc1 | Code::Misc2 => 1,
             _ => 0,
         };
         let value: &mut Value = &mut list[it][parameters_label][value_i];
@@ -816,7 +816,7 @@ pub fn write_maps(
                             let write_string_literally: bool = if engine_type != EngineType::New {
                                 !match code {
                                     Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
-                                    Code::Misc | Code::Choice => list[it][parameters_label][1].is_object(),
+                                    Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
                                     _ => list[it][parameters_label][0].is_object(),
                                 }
                             } else {
@@ -879,7 +879,7 @@ pub fn write_maps(
                             }
 
                             let value_i: usize = match code {
-                                Code::Misc => 1,
+                                Code::Misc1 | Code::Misc2 => 1,
                                 _ => 0,
                             };
 
