@@ -1241,137 +1241,47 @@ pub fn read_system(
             )
         };
 
-    // Armor types names
-    // Normally it's system strings, but might be needed for some purposes
-    if let Some(armor_types) = obj[armor_types_label].as_array() {
-        for element in armor_types {
-            let str: String = if let Some(str) = element.as_str() {
-                str.to_string()
-            } else if let Some(obj) = element.as_object() {
-                if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
-                    unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
+    // Armor types and elements - mostly system strings, but may be required for some purposes
+    for label in [
+        armor_types_label,
+        elements_label,
+        skill_types_label,
+        weapon_types_label,
+        "equipTypes",
+    ] {
+        if label == "equipTypes" && engine_type != EngineType::New {
+            return;
+        }
+
+        if let Some(arr) = obj[label].as_array() {
+            for element in arr {
+                let str: String = if let Some(str) = element.as_str() {
+                    str.to_string()
+                } else if let Some(obj) = element.as_object() {
+                    if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
+                        unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
+                    } else {
+                        unreachable!()
+                    }
                 } else {
-                    unreachable!()
+                    continue;
                 }
-            } else {
-                continue;
-            }
-            .trim()
-            .to_string();
+                .trim()
+                .to_string();
 
-            if !str.is_empty() {
-                let mut string: String = str.to_owned();
+                if !str.is_empty() {
+                    let mut string: String = str.to_owned();
 
-                if romanize {
-                    string = romanize_string(string)
-                }
+                    if romanize {
+                        string = romanize_string(string)
+                    }
 
-                lines_mut_ref.insert(string);
-                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+                    lines_mut_ref.insert(string);
+                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-                if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                    lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                }
-            }
-        }
-    }
-
-    // Element types names
-    // Normally it's system strings, but might be needed for some purposes
-    for element in obj[elements_label].as_array().unwrap_log() {
-        let str: String = if let Some(str) = element.as_str() {
-            str.to_string()
-        } else if let Some(obj) = element.as_object() {
-            if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
-                unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
-            } else {
-                unreachable!()
-            }
-        } else {
-            continue;
-        }
-        .trim()
-        .to_string();
-
-        if !str.is_empty() {
-            let mut string: String = str.to_owned();
-
-            if romanize {
-                string = romanize_string(string)
-            }
-
-            lines_mut_ref.insert(string);
-            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-            }
-        }
-    }
-
-    // Names of equipment slots
-    if engine_type == EngineType::New {
-        for element in obj["equipTypes"].as_array().unwrap_log() {
-            let str: String = if let Some(str) = element.as_str() {
-                str.to_string()
-            } else if let Some(obj) = element.as_object() {
-                if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
-                    unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
-                } else {
-                    unreachable!()
-                }
-            } else {
-                continue;
-            }
-            .trim()
-            .to_string();
-
-            if !str.is_empty() {
-                let mut string: String = str.to_owned();
-
-                if romanize {
-                    string = romanize_string(string)
-                }
-
-                lines_mut_ref.insert(string);
-                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                    lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                }
-            }
-        }
-    }
-
-    // Names of battle options
-    if let Some(skill_types) = obj[skill_types_label].as_array() {
-        for element in skill_types {
-            let str: String = if let Some(str) = element.as_str() {
-                str.to_string()
-            } else if let Some(obj) = element.as_object() {
-                if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
-                    unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
-                } else {
-                    unreachable!()
-                }
-            } else {
-                continue;
-            }
-            .trim()
-            .to_string();
-
-            if !str.is_empty() {
-                let mut string: String = str.to_owned();
-
-                if romanize {
-                    string = romanize_string(string)
-                }
-
-                lines_mut_ref.insert(string);
-                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                    lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+                    if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+                        lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+                    }
                 }
             }
         }
@@ -1457,43 +1367,7 @@ pub fn read_system(
         }
     }
 
-    // Weapon types names
-    // Normally it's system strings, but might be needed for some purposes
-    if let Some(weapon_types) = obj[weapon_types_label].as_array() {
-        for element in weapon_types {
-            let str: String = if let Some(str) = element.as_str() {
-                str.to_string()
-            } else if let Some(obj) = element.as_object() {
-                if obj.get(&"__type").is_some_and(|t| t.as_str().unwrap_log() == "bytes") {
-                    unsafe { String::from_utf8_unchecked(from_value::<Vec<u8>>(&obj["data"]).unwrap_log()) }
-                } else {
-                    unreachable!()
-                }
-            } else {
-                continue;
-            }
-            .trim()
-            .to_string();
-
-            if !str.is_empty() {
-                let mut string: String = str.to_owned();
-
-                if romanize {
-                    string = romanize_string(string)
-                }
-
-                lines_mut_ref.insert(string);
-                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                    lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                }
-            }
-        }
-    }
-
-    // Game title, parsed just for fun
-    // Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
+    // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
     {
         let mut game_title_string: String = if let Some(str) = obj[game_title_label].as_str() {
             str.to_string()
