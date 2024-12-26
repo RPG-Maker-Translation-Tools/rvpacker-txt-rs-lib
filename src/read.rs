@@ -521,268 +521,266 @@ pub fn read_map(
         String::new()
     };
 
-    let mut output_content: String = {
-        let mut lines_vec: Vec<String> = Vec::new();
+    let mut lines_vec: Vec<String> = Vec::new();
 
-        let lines_set: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
-        let lines_set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines_set.get() };
-        let lines_set_ref: &Xxh3IndexSet = unsafe { &*lines_set.get() };
+    let lines_set: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
+    let lines_set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines_set.get() };
+    let lines_set_ref: &Xxh3IndexSet = unsafe { &*lines_set.get() };
 
-        let mut lines_map: Xxh3IndexMap = IndexMap::default();
+    let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
-        let mut names_lines_vec: VecDeque<String> = VecDeque::new();
-        let mut lines_tuple_vec: Vec<(String, String)> = Vec::new();
-        let mut lines_pos: usize = 0;
+    let mut names_lines_vec: VecDeque<String> = VecDeque::new();
+    let mut lines_tuple_vec: Vec<(String, String)> = Vec::new();
+    let mut lines_pos: usize = 0;
 
-        if processing_mode == ProcessingMode::Append {
-            if !original_content.is_empty() {
-                for line in original_content.split('\n') {
-                    let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
+    if processing_mode == ProcessingMode::Append {
+        if !original_content.is_empty() {
+            for line in original_content.split('\n') {
+                let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
-                    if maps_processing_mode != MapsProcessingMode::Preserve {
-                        lines_map.insert(original, translated);
-                    } else {
-                        if original.starts_with("<!-- Map") {
-                            if original.len() > 20 {
-                                names_lines_vec.push_back(translated.to_owned());
+                if maps_processing_mode != MapsProcessingMode::Preserve {
+                    lines_map.insert(original, translated);
+                } else {
+                    if original.starts_with("<!-- Map") {
+                        if original.len() > 20 {
+                            names_lines_vec.push_back(translated.to_owned());
+                        }
+
+                        continue;
+                    }
+
+                    lines_tuple_vec.push((original.to_owned(), translated.to_owned()));
+                }
+            }
+        } else {
+            println!("{}", FILES_ARE_NOT_PARSED_MSG);
+            processing_mode = ProcessingMode::Default;
+        }
+    };
+
+    for (filename, obj) in obj_vec_iter {
+        let mut filename_comment: String = format!("<!-- {filename} -->");
+
+        if let Some(display_name) = obj[display_name_label].as_str() {
+            if !display_name.is_empty() {
+                let mut display_name_string: String = display_name.to_owned();
+
+                if romanize {
+                    display_name_string = romanize_string(display_name_string);
+                }
+
+                filename_comment.insert(filename_comment.len() - 3, ' ');
+                filename_comment.insert_str(filename_comment.len() - 4, &display_name_string);
+            }
+        }
+
+        match maps_processing_mode {
+            MapsProcessingMode::Default => {
+                lines_set_mut_ref.insert(filename_comment);
+
+                if processing_mode == ProcessingMode::Append {
+                    lines_map.shift_insert(
+                        lines_set_ref.len() - 1,
+                        unsafe { lines_set_ref.last().unwrap_unchecked() },
+                        "",
+                    );
+                }
+            }
+            MapsProcessingMode::Separate => {
+                lines_vec.extend(lines_set_mut_ref.drain(..));
+                lines_vec.push(filename_comment);
+
+                if processing_mode == ProcessingMode::Append {
+                    lines_map.shift_insert(
+                        lines_set_ref.len() - 1,
+                        unsafe { lines_set_ref.last().unwrap_unchecked() },
+                        "",
+                    );
+                }
+            }
+            MapsProcessingMode::Preserve => {
+                let filename_comment_len: usize = filename_comment.len();
+                lines_tuple_vec.insert(
+                    lines_pos,
+                    (
+                        filename_comment,
+                        if filename_comment_len > 20 && names_lines_vec.front().is_some() {
+                            names_lines_vec.pop_front().unwrap_log()
+                        } else {
+                            String::new()
+                        },
+                    ),
+                );
+
+                lines_pos += 1;
+            }
+        }
+
+        let events_arr: Vec<&Value> = if engine_type == EngineType::New {
+            obj[events_label].as_array().unwrap_log().iter().skip(1).collect()
+        } else {
+            obj[events_label]
+                .as_object()
+                .unwrap_log()
+                .iter()
+                .map(|(_, value)| value)
+                .collect()
+        };
+
+        for event in events_arr {
+            if !event[pages_label].is_array() {
+                continue;
+            }
+
+            for page in event[pages_label].as_array().unwrap_log() {
+                if maps_processing_mode != MapsProcessingMode::Preserve {
+                    parse_list(
+                        page[list_label].as_array().unwrap_log(),
+                        romanize,
+                        game_type,
+                        engine_type,
+                        processing_mode,
+                        (code_label, parameters_label),
+                        &lines_set,
+                        &mut lines_map,
+                    );
+                } else {
+                    let list: &Array = page[list_label].as_array().unwrap_log();
+                    let mut in_sequence: bool = false;
+                    let mut line: Vec<String> = Vec::with_capacity(4);
+
+                    for item in list {
+                        let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
+
+                        let code: Code = if !ALLOWED_CODES.contains(&code) {
+                            Code::Bad
+                        } else {
+                            unsafe { transmute::<u16, Code>(code) }
+                        };
+
+                        if in_sequence && code != Code::Dialogue {
+                            if !line.is_empty() {
+                                let mut joined: String = line.join("\n").trim().replace('\n', NEW_LINE);
+
+                                if romanize {
+                                    joined = romanize_string(joined);
+                                }
+
+                                let parsed: Option<String> =
+                                    parse_parameter(Code::Dialogue, &joined, game_type, engine_type);
+
+                                if let Some(parsed) = parsed {
+                                    if processing_mode == ProcessingMode::Append {
+                                        if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                            if *o != parsed {
+                                                lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                            }
+                                        }
+                                    } else {
+                                        lines_tuple_vec.push((parsed, String::new()));
+                                    }
+
+                                    lines_pos += 1;
+                                }
+
+                                line.clear();
                             }
 
+                            in_sequence = false;
+                        }
+
+                        if code == Code::Bad {
                             continue;
                         }
 
-                        lines_tuple_vec.push((original.to_owned(), translated.to_owned()));
-                    }
-                }
-            } else {
-                println!("{}", FILES_ARE_NOT_PARSED_MSG);
-                processing_mode = ProcessingMode::Default;
-            }
-        };
+                        let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
-        for (filename, obj) in obj_vec_iter {
-            let mut filename_comment: String = format!("<!-- {filename} -->");
+                        let value_i: usize = match code {
+                            Code::Misc1 | Code::Misc2 => 1,
+                            _ => 0,
+                        };
 
-            if let Some(display_name) = obj[display_name_label].as_str() {
-                if !display_name.is_empty() {
-                    let mut display_name_string: String = display_name.to_owned();
+                        let value: &Value = &parameters[value_i];
 
-                    if romanize {
-                        display_name_string = romanize_string(display_name_string);
-                    }
-
-                    filename_comment.insert(filename_comment.len() - 3, ' ');
-                    filename_comment.insert_str(filename_comment.len() - 4, &display_name_string);
-                }
-            }
-
-            match maps_processing_mode {
-                MapsProcessingMode::Default => {
-                    lines_set_mut_ref.insert(filename_comment);
-
-                    if processing_mode == ProcessingMode::Append {
-                        lines_map.shift_insert(
-                            lines_set_ref.len() - 1,
-                            unsafe { lines_set_ref.last().unwrap_unchecked() },
-                            "",
-                        );
-                    }
-                }
-                MapsProcessingMode::Separate => {
-                    lines_vec.extend(lines_set_mut_ref.drain(..));
-                    lines_vec.push(filename_comment);
-
-                    if processing_mode == ProcessingMode::Append {
-                        lines_map.shift_insert(
-                            lines_set_ref.len() - 1,
-                            unsafe { lines_set_ref.last().unwrap_unchecked() },
-                            "",
-                        );
-                    }
-                }
-                MapsProcessingMode::Preserve => {
-                    let filename_comment_len: usize = filename_comment.len();
-                    lines_tuple_vec.insert(
-                        lines_pos,
-                        (
-                            filename_comment,
-                            if filename_comment_len > 20 && names_lines_vec.front().is_some() {
-                                names_lines_vec.pop_front().unwrap_log()
-                            } else {
-                                String::new()
-                            },
-                        ),
-                    );
-
-                    lines_pos += 1;
-                }
-            }
-
-            let events_arr: Vec<&Value> = if engine_type == EngineType::New {
-                obj[events_label].as_array().unwrap_log().iter().skip(1).collect()
-            } else {
-                obj[events_label]
-                    .as_object()
-                    .unwrap_log()
-                    .iter()
-                    .map(|(_, value)| value)
-                    .collect()
-            };
-
-            for event in events_arr {
-                if !event[pages_label].is_array() {
-                    continue;
-                }
-
-                for page in event[pages_label].as_array().unwrap_log() {
-                    if maps_processing_mode != MapsProcessingMode::Preserve {
-                        parse_list(
-                            page[list_label].as_array().unwrap_log(),
-                            romanize,
-                            game_type,
-                            engine_type,
-                            processing_mode,
-                            (code_label, parameters_label),
-                            &lines_set,
-                            &mut lines_map,
-                        );
-                    } else {
-                        let list: &Array = page[list_label].as_array().unwrap_log();
-                        let mut in_sequence: bool = false;
-                        let mut line: Vec<String> = Vec::with_capacity(4);
-
-                        for item in list {
-                            let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
-
-                            let code: Code = if !ALLOWED_CODES.contains(&code) {
-                                Code::Bad
-                            } else {
-                                unsafe { transmute::<u16, Code>(code) }
-                            };
-
-                            if in_sequence && code != Code::Dialogue {
-                                if !line.is_empty() {
-                                    let mut joined: String = line.join("\n").trim().replace('\n', NEW_LINE);
-
-                                    if romanize {
-                                        joined = romanize_string(joined);
-                                    }
-
-                                    let parsed: Option<String> =
-                                        parse_parameter(Code::Dialogue, &joined, game_type, engine_type);
-
-                                    if let Some(parsed) = parsed {
-                                        if processing_mode == ProcessingMode::Append {
-                                            if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
-                                                if *o != parsed {
-                                                    lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
-                                                }
-                                            }
-                                        } else {
-                                            lines_tuple_vec.push((parsed, String::new()));
-                                        }
-
-                                        lines_pos += 1;
-                                    }
-
-                                    line.clear();
-                                }
-
-                                in_sequence = false;
-                            }
-
-                            if code == Code::Bad {
-                                continue;
-                            }
-
-                            let parameters: &Array = item[parameters_label].as_array().unwrap_log();
-
-                            let value_i: usize = match code {
-                                Code::Misc1 | Code::Misc2 => 1,
-                                _ => 0,
-                            };
-
-                            let value: &Value = &parameters[value_i];
-
-                            match code {
-                                Code::ChoiceArray => {
-                                    for i in 0..value.as_array().unwrap_log().len() {
-                                        let subparameter_string: String = value[i]
-                                            .as_str()
-                                            .map(str::to_owned)
-                                            .unwrap_or(match value[i].as_object() {
-                                                Some(obj) => get_object_data(obj),
-                                                None => String::new(),
-                                            })
-                                            .trim()
-                                            .to_owned();
-
-                                        if !subparameter_string.is_empty() {
-                                            let parsed: Option<String> =
-                                                parse_parameter(code, &subparameter_string, game_type, engine_type);
-
-                                            if let Some(mut parsed) = parsed {
-                                                if romanize {
-                                                    parsed = romanize_string(parsed);
-                                                }
-
-                                                if processing_mode == ProcessingMode::Append {
-                                                    if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
-                                                        if *o != parsed {
-                                                            lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
-                                                        }
-                                                    }
-                                                } else {
-                                                    lines_tuple_vec.push((parsed, String::new()));
-                                                }
-
-                                                lines_pos += 1;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                _ => {
-                                    let parameter_string = value
+                        match code {
+                            Code::ChoiceArray => {
+                                for i in 0..value.as_array().unwrap_log().len() {
+                                    let subparameter_string: String = value[i]
                                         .as_str()
                                         .map(str::to_owned)
-                                        .unwrap_or(match value.as_object() {
+                                        .unwrap_or(match value[i].as_object() {
                                             Some(obj) => get_object_data(obj),
                                             None => String::new(),
                                         })
                                         .trim()
                                         .to_owned();
 
-                                    if parameter_string.is_empty() {
-                                        continue;
+                                    if !subparameter_string.is_empty() {
+                                        let parsed: Option<String> =
+                                            parse_parameter(code, &subparameter_string, game_type, engine_type);
+
+                                        if let Some(mut parsed) = parsed {
+                                            if romanize {
+                                                parsed = romanize_string(parsed);
+                                            }
+
+                                            if processing_mode == ProcessingMode::Append {
+                                                if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                                    if *o != parsed {
+                                                        lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                                    }
+                                                }
+                                            } else {
+                                                lines_tuple_vec.push((parsed, String::new()));
+                                            }
+
+                                            lines_pos += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            _ => {
+                                let parameter_string = value
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or(match value.as_object() {
+                                        Some(obj) => get_object_data(obj),
+                                        None => String::new(),
+                                    })
+                                    .trim()
+                                    .to_owned();
+
+                                if parameter_string.is_empty() {
+                                    continue;
+                                }
+
+                                match code {
+                                    Code::Dialogue => {
+                                        in_sequence = true;
+                                        line.push(parameter_string);
                                     }
 
-                                    match code {
-                                        Code::Dialogue => {
-                                            in_sequence = true;
-                                            line.push(parameter_string);
-                                        }
+                                    _ => {
+                                        let parsed: Option<String> =
+                                            parse_parameter(code, &parameter_string, game_type, engine_type);
 
-                                        _ => {
-                                            let parsed: Option<String> =
-                                                parse_parameter(code, &parameter_string, game_type, engine_type);
-
-                                            if let Some(mut parsed) = parsed {
-                                                if romanize {
-                                                    parsed = romanize_string(parsed);
-                                                }
-
-                                                if processing_mode == ProcessingMode::Append {
-                                                    if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
-                                                        if *o != parsed {
-                                                            lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
-                                                        }
-                                                    }
-                                                } else {
-                                                    lines_tuple_vec.push((parsed, String::new()));
-                                                }
-
-                                                lines_pos += 1;
+                                        if let Some(mut parsed) = parsed {
+                                            if romanize {
+                                                parsed = romanize_string(parsed);
                                             }
+
+                                            if processing_mode == ProcessingMode::Append {
+                                                if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                                    if *o != parsed {
+                                                        lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                                    }
+                                                }
+                                            } else {
+                                                lines_tuple_vec.push((parsed, String::new()));
+                                            }
+
+                                            lines_pos += 1;
                                         }
                                     }
                                 }
@@ -791,47 +789,45 @@ pub fn read_map(
                     }
                 }
             }
-
-            if logging {
-                println!("{PARSED_FILE_MSG} {filename}");
-            }
-
-            if generate_json {
-                write(
-                    output_path
-                        .parent()
-                        .unwrap_log()
-                        .parent()
-                        .unwrap_log()
-                        .join(format!("json/{}.json", &filename[..filename.rfind('.').unwrap_log()])),
-                    to_string(&obj).unwrap_log(),
-                )
-                .unwrap_log();
-            }
         }
 
-        let output_content: String = if processing_mode == ProcessingMode::Append {
-            String::from_iter(lines_map.into_iter().map(|(o, t)| format!("{o}{LINES_SEPARATOR}{t}\n")))
-        } else {
-            match maps_processing_mode {
-                MapsProcessingMode::Default => String::from_iter(
-                    lines_set
-                        .into_inner()
-                        .into_iter()
-                        .map(|l: String| l + LINES_SEPARATOR + "\n"),
-                ),
-                MapsProcessingMode::Separate => {
-                    String::from_iter(lines_vec.into_iter().map(|l: String| l + LINES_SEPARATOR + "\n"))
-                }
-                MapsProcessingMode::Preserve => String::from_iter(
-                    lines_tuple_vec
-                        .into_iter()
-                        .map(|(o, t)| o + LINES_SEPARATOR + &t + "\n"),
-                ),
-            }
-        };
+        if logging {
+            println!("{PARSED_FILE_MSG} {filename}");
+        }
 
-        output_content
+        if generate_json {
+            write(
+                output_path
+                    .parent()
+                    .unwrap_log()
+                    .parent()
+                    .unwrap_log()
+                    .join(format!("json/{}.json", &filename[..filename.rfind('.').unwrap_log()])),
+                to_string(&obj).unwrap_log(),
+            )
+            .unwrap_log();
+        }
+    }
+
+    let mut output_content: String = if processing_mode == ProcessingMode::Append {
+        String::from_iter(lines_map.into_iter().map(|(o, t)| format!("{o}{LINES_SEPARATOR}{t}\n")))
+    } else {
+        match maps_processing_mode {
+            MapsProcessingMode::Default => String::from_iter(
+                lines_set
+                    .into_inner()
+                    .into_iter()
+                    .map(|l: String| l + LINES_SEPARATOR + "\n"),
+            ),
+            MapsProcessingMode::Separate => {
+                String::from_iter(lines_vec.into_iter().map(|l: String| l + LINES_SEPARATOR + "\n"))
+            }
+            MapsProcessingMode::Preserve => String::from_iter(
+                lines_tuple_vec
+                    .into_iter()
+                    .map(|(o, t)| o + LINES_SEPARATOR + &t + "\n"),
+            ),
+        }
     };
 
     output_content.pop();
