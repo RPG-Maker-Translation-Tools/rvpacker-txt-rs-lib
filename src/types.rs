@@ -28,13 +28,18 @@ pub enum EngineType {
     XP,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
+#[repr(u16)]
 pub enum Code {
-    Dialogue, // also goes for credit
-    Choice,
-    System,
-    Misc,
-    Shop,
+    Dialogue = 401,
+    Credit = 405,
+    ChoiceArray = 102,
+    Choice = 402,
+    System = 356,
+    Misc1 = 320,
+    Misc2 = 324,
+    Shop = 655,
+    Bad = 0,
 }
 
 #[derive(PartialEq, Clone, Copy)]
