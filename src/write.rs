@@ -1289,48 +1289,18 @@ pub fn write_system(
         }
     }
 
-    obj[armor_types_label]
-        .as_array_mut()
-        .unwrap_log()
-        .iter_mut()
-        .for_each(|value: &mut Value| {
-            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
+    for label in [
+        armor_types_label,
+        elements_label,
+        skill_types_label,
+        weapon_types_label,
+        "equipTypes",
+    ] {
+        if label == "equipTypes" && engine_type != EngineType::New {
+            return;
+        }
 
-            if romanize {
-                string = romanize_string(string);
-            }
-
-            if let Some(translated) = lines_map.get(&string) {
-                if translated.is_empty() {
-                    return;
-                }
-
-                *value = Value::from(translated);
-            }
-        });
-
-    obj[elements_label]
-        .as_array_mut()
-        .unwrap_log()
-        .iter_mut()
-        .for_each(|value: &mut Value| {
-            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
-
-            if romanize {
-                string = romanize_string(string);
-            }
-
-            if let Some(translated) = lines_map.get(&string) {
-                if translated.is_empty() {
-                    return;
-                }
-
-                *value = Value::from(translated);
-            }
-        });
-
-    if engine_type == EngineType::New {
-        obj["equipTypes"]
+        obj[label]
             .as_array_mut()
             .unwrap_log()
             .iter_mut()
@@ -1350,26 +1320,6 @@ pub fn write_system(
                 }
             });
     }
-
-    obj[skill_types_label]
-        .as_array_mut()
-        .unwrap_log()
-        .par_iter_mut()
-        .for_each(|value: &mut Value| {
-            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
-
-            if romanize {
-                string = romanize_string(string);
-            }
-
-            if let Some(translated) = lines_map.get(&string) {
-                if translated.is_empty() {
-                    return;
-                }
-
-                *value = Value::from(translated);
-            }
-        });
 
     obj[terms_label]
         .as_object_mut()
@@ -1422,26 +1372,6 @@ pub fn write_system(
                         *value = Value::from(translated);
                     }
                 });
-            }
-        });
-
-    obj[weapon_types_label]
-        .as_array_mut()
-        .unwrap_log()
-        .iter_mut()
-        .for_each(|value: &mut Value| {
-            let mut string: String = value.as_str().unwrap_log().trim().to_owned();
-
-            if romanize {
-                string = romanize_string(string);
-            }
-
-            if let Some(translated) = lines_map.get(&string) {
-                if translated.is_empty() {
-                    return;
-                }
-
-                *value = Value::from(translated);
             }
         });
 
