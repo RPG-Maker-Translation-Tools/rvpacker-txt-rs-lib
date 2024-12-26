@@ -35,7 +35,7 @@ fn get_translated_parameter(
     code: Code,
     mut parameter: &str,
     hashmap: Option<&StringHashMap>,
-    deque: Option<&mut VecDeque<String>>,
+    deque: Option<Arc<Mutex<VecDeque<String>>>>,
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
@@ -82,6 +82,8 @@ fn get_translated_parameter(
     }
 
     let translated: Option<String> = if let Some(mut deque) = deque {
+        let deque: &mut VecDeque<String> = &mut deque.lock().unwrap();
+
         if code == Code::ChoiceArray {
             deque.front().map(String::to_owned)
         } else {
@@ -571,84 +573,71 @@ pub fn write_maps(
 
     let mut names_lines_map: StringHashMap = HashMap::default();
 
-    let lines_deque: VecDeque<String> = if maps_processing_mode == MapsProcessingMode::Preserve {
-        let mut deque: VecDeque<String> = VecDeque::new();
+    let (lines_deque, lines_maps_vec) = match maps_processing_mode {
+        MapsProcessingMode::Preserve => {
+            let mut deque: VecDeque<String> = VecDeque::new();
 
-        for line in original_content.split('\n') {
-            if line.starts_with("<!-- Map") {
-                let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
-
-                if original.len() > 20 {
-                    let map_name: &str = &original[17..original.len() - 4];
-                    names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
-                }
-            } else {
-                if line.starts_with("<!--") {
-                    continue;
-                }
-
-                let (_, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
-
-                let processed_translated: String = translated.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
-
-                deque.push_back(processed_translated);
-            }
-        }
-
-        deque
-    } else {
-        VecDeque::new()
-    };
-
-    let lines_deque_mutex = Arc::new(Mutex::new(lines_deque));
-
-    let lines_maps_vec: Vec<StringHashMap> = if maps_processing_mode != MapsProcessingMode::Preserve {
-        let mut vec: Vec<StringHashMap> = Vec::with_capacity(512);
-        let mut hashmap: StringHashMap = HashMap::default();
-
-        for (i, line) in original_content.split('\n').enumerate() {
-            if line.starts_with("<!-- Map") {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if original.len() > 20 {
-                        let map_name: &str = &original[17..original.len() - 4];
-                        names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
+            for line in original_content.split('\n') {
+                if line.starts_with("<!-- Map") {
+                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                        if original.len() > 20 {
+                            let map_name: &str = &original[17..original.len() - 4];
+                            names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                        }
                     }
-
-                    if maps_processing_mode == MapsProcessingMode::Separate {
-                        vec.push(take(&mut hashmap));
+                } else if !line.starts_with("<!--") {
+                    if let Some((_, translated)) = line.split_once(LINES_SEPARATOR) {
+                        deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
                     }
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",)
-                }
-            } else {
-                if line.starts_with("<!--") {
-                    continue;
-                }
-
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    let processed_original: String = original.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
-                    let processed_translated: String = translated.replace(NEW_LINE, "\n").trim().to_owned().to_owned();
-
-                    hashmap.insert(processed_original, processed_translated);
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",)
                 }
             }
-        }
 
-        if vec.is_empty() {
-            vec.push(hashmap);
+            (deque, Vec::new())
         }
+        _ => {
+            let mut vec: Vec<StringHashMap> = Vec::with_capacity(512);
+            let mut hashmap: StringHashMap = HashMap::default();
 
-        vec
-    } else {
-        Vec::new()
+            for (i, line) in original_content.split('\n').enumerate() {
+                if line.starts_with("<!-- Map") {
+                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                        if original.len() > 20 {
+                            let map_name: &str = &original[17..original.len() - 4];
+                            names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                        }
+
+                        if maps_processing_mode == MapsProcessingMode::Separate {
+                            vec.push(take(&mut hashmap));
+                        }
+                    } else {
+                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                    }
+                } else if !line.starts_with("<!--") {
+                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                        hashmap.insert(
+                            original.replace(NEW_LINE, "\n").trim().to_owned(),
+                            translated.replace(NEW_LINE, "\n").trim().to_owned(),
+                        );
+                    } else {
+                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                    }
+                }
+            }
+
+            if vec.is_empty() {
+                vec.push(hashmap);
+            }
+
+            (VecDeque::new(), vec)
+        }
     };
+
+    let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(lines_deque));
 
     let i: usize = 0;
-    let i_mutex = Arc::new(Mutex::new(i));
+    let i_mutex: Arc<Mutex<usize>> = Arc::new(Mutex::new(i));
 
-    maps_obj_iter.for_each_with((i_mutex, lines_deque_mutex), |(i, lines_deque), (filename, mut obj)| {
+    maps_obj_iter.for_each(|(filename, mut obj)| {
         if let Some(display_name) = obj[display_name_label].as_str() {
             let mut display_name: String = display_name.to_owned();
 
@@ -662,7 +651,7 @@ pub fn write_maps(
         }
 
         let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
-            let i = &mut *i.lock().unwrap();
+            let i: &mut usize = &mut i_mutex.lock().unwrap();
             let hashmap: &StringHashMap = lines_maps_vec.get(*i).unwrap_or(unsafe { lines_maps_vec.get_unchecked(0) });
 
             if hashmap.is_empty() {
@@ -689,16 +678,18 @@ pub fn write_maps(
                 .collect()
         };
 
+        let lines_deque_mutex = lines_deque_mutex.clone();
         events_arr.par_iter_mut().for_each(|event: &mut &mut Value| {
             if event.is_null() {
                 return;
             }
 
+            let lines_deque_mutex = lines_deque_mutex.clone();
             event[pages_label]
                 .as_array_mut()
                 .unwrap_log()
                 .par_iter_mut()
-                .for_each(|page: &mut Value| {
+                .for_each(move |page: &mut Value| {
                     if maps_processing_mode != MapsProcessingMode::Preserve {
                         write_list(
                             page[list_label].as_array_mut().unwrap_log(),
@@ -709,171 +700,171 @@ pub fn write_maps(
                             (code_label, parameters_label),
                         );
                     } else {
-                        {
-                            let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
-                            let list_length: usize = list.len();
+                        let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = lines_deque_mutex.clone();
 
-                            let mut in_sequence: bool = false;
-                            let mut line: Vec<String> = Vec::with_capacity(4);
-                            let mut item_indices: Vec<usize> = Vec::with_capacity(4);
+                        let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
+                        let list_length: usize = list.len();
 
-                            for it in 0..list_length {
-                                let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
+                        let mut in_sequence: bool = false;
+                        let mut line: Vec<String> = Vec::with_capacity(4);
+                        let mut item_indices: Vec<usize> = Vec::with_capacity(4);
 
-                                let code: Code = if !ALLOWED_CODES.contains(&code) {
-                                    Code::Bad
-                                } else {
-                                    unsafe { transmute::<u16, Code>(code) }
-                                };
+                        for it in 0..list_length {
+                            let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-                                let write_string_literally: bool = if engine_type != EngineType::New {
-                                    !match code {
-                                        Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
-                                        Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
-                                        _ => list[it][parameters_label][0].is_object(),
+                            let code: Code = if !ALLOWED_CODES.contains(&code) {
+                                Code::Bad
+                            } else {
+                                unsafe { transmute::<u16, Code>(code) }
+                            };
+
+                            let write_string_literally: bool = if engine_type != EngineType::New {
+                                !match code {
+                                    Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
+                                    Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
+                                    _ => list[it][parameters_label][0].is_object(),
+                                }
+                            } else {
+                                true
+                            };
+
+                            if in_sequence && code != Code::Dialogue {
+                                if !line.is_empty() {
+                                    let mut joined: String = line.join("\n").trim().to_owned();
+
+                                    if romanize {
+                                        joined = romanize_string(joined)
                                     }
-                                } else {
-                                    true
-                                };
 
-                                if in_sequence && code != Code::Dialogue {
-                                    if !line.is_empty() {
-                                        let mut joined: String = line.join("\n").trim().to_owned();
+                                    let translated: Option<String> = get_translated_parameter(
+                                        Code::Dialogue,
+                                        &joined,
+                                        None,
+                                        Some(lines_deque_mutex.clone()),
+                                        game_type,
+                                        engine_type,
+                                    );
 
-                                        if romanize {
-                                            joined = romanize_string(joined)
-                                        }
+                                    if let Some(translated) = translated {
+                                        let split_vec: Vec<&str> = translated.split('\n').collect();
+                                        let split_length: usize = split_vec.len();
+                                        let line_length: usize = line.len();
 
-                                        let translated: Option<String> = get_translated_parameter(
-                                            Code::Dialogue,
-                                            &joined,
-                                            None,
-                                            Some(&mut lines_deque.lock().unwrap()),
-                                            game_type,
-                                            engine_type,
-                                        );
-
-                                        if let Some(translated) = translated {
-                                            let split_vec: Vec<&str> = translated.split('\n').collect();
-                                            let split_length: usize = split_vec.len();
-                                            let line_length: usize = line.len();
-
-                                            for (i, &index) in item_indices.iter().enumerate() {
-                                                if i < split_length {
-                                                    list[index][parameters_label][0] = if !write_string_literally {
-                                                        json!({
-                                                            "__type": "bytes",
-                                                            "data": Array::from(split_vec[i].as_bytes())
-                                                        })
-                                                    } else {
-                                                        Value::from(split_vec[i])
-                                                    };
+                                        for (i, &index) in item_indices.iter().enumerate() {
+                                            list[index][parameters_label][0] = if i < split_length {
+                                                if !write_string_literally {
+                                                    json!({
+                                                        "__type": "bytes",
+                                                        "data": Array::from(split_vec[i].as_bytes())
+                                                    })
                                                 } else {
-                                                    list[index][parameters_label][0] = Value::from_static_str(" ");
+                                                    Value::from(split_vec[i])
                                                 }
-                                            }
-
-                                            if split_length > line_length {
-                                                let remaining: String = split_vec[line_length - 1..].join("\n");
-                                                list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
-                                                    Value::from(&remaining);
+                                            } else {
+                                                Value::from_static_str(" ")
                                             }
                                         }
 
-                                        line.clear();
-                                        item_indices.clear();
-                                    }
-
-                                    in_sequence = false
-                                }
-
-                                if code == Code::Bad {
-                                    continue;
-                                }
-
-                                let value_i: usize = match code {
-                                    Code::Misc1 | Code::Misc2 => 1,
-                                    _ => 0,
-                                };
-
-                                let value: &mut Value = &mut list[it][parameters_label][value_i];
-
-                                match code {
-                                    Code::ChoiceArray => {
-                                        for i in 0..value.as_array().unwrap_log().len() {
-                                            let mut subparameter_string: String = value[i]
-                                                .as_str()
-                                                .map(str::to_owned)
-                                                .unwrap_or(match value[i].as_object() {
-                                                    Some(obj) => get_object_data(obj),
-                                                    None => String::new(),
-                                                })
-                                                .trim()
-                                                .to_owned();
-
-                                            if romanize {
-                                                subparameter_string = romanize_string(subparameter_string);
-                                            }
-
-                                            let translated: Option<String> = get_translated_parameter(
-                                                code,
-                                                &subparameter_string,
-                                                None,
-                                                Some(&mut lines_deque.lock().unwrap()),
-                                                game_type,
-                                                engine_type,
-                                            );
-
-                                            if let Some(translated) = translated {
-                                                value[i] = if engine_type == EngineType::New {
-                                                    Value::from(&translated)
-                                                } else {
-                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                                };
-                                            }
+                                        if split_length > line_length {
+                                            let remaining: String = split_vec[line_length - 1..].join("\n");
+                                            list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
+                                                Value::from(&remaining);
                                         }
                                     }
-                                    _ => {
-                                        let mut parameter_string: String = value
+
+                                    line.clear();
+                                    item_indices.clear();
+                                }
+
+                                in_sequence = false
+                            }
+
+                            if code == Code::Bad {
+                                continue;
+                            }
+
+                            let value_i: usize = match code {
+                                Code::Misc1 | Code::Misc2 => 1,
+                                _ => 0,
+                            };
+
+                            let value: &mut Value = &mut list[it][parameters_label][value_i];
+
+                            match code {
+                                Code::ChoiceArray => {
+                                    for i in 0..value.as_array().unwrap_log().len() {
+                                        let mut subparameter_string: String = value[i]
                                             .as_str()
                                             .map(str::to_owned)
-                                            .unwrap_or(match value.as_object() {
+                                            .unwrap_or(match value[i].as_object() {
                                                 Some(obj) => get_object_data(obj),
                                                 None => String::new(),
                                             })
                                             .trim()
                                             .to_owned();
 
-                                        if parameter_string.is_empty() {
-                                            continue;
+                                        if romanize {
+                                            subparameter_string = romanize_string(subparameter_string);
                                         }
 
-                                        match code {
-                                            Code::Dialogue => {
-                                                line.push(parameter_string);
-                                                item_indices.push(it);
-                                                in_sequence = true;
+                                        let translated: Option<String> = get_translated_parameter(
+                                            code,
+                                            &subparameter_string,
+                                            None,
+                                            Some(lines_deque_mutex.clone()),
+                                            game_type,
+                                            engine_type,
+                                        );
+
+                                        if let Some(translated) = translated {
+                                            value[i] = if engine_type == EngineType::New {
+                                                Value::from(&translated)
+                                            } else {
+                                                json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                            };
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    let mut parameter_string: String = value
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .unwrap_or(match value.as_object() {
+                                            Some(obj) => get_object_data(obj),
+                                            None => String::new(),
+                                        })
+                                        .trim()
+                                        .to_owned();
+
+                                    if parameter_string.is_empty() {
+                                        continue;
+                                    }
+
+                                    match code {
+                                        Code::Dialogue => {
+                                            line.push(parameter_string);
+                                            item_indices.push(it);
+                                            in_sequence = true;
+                                        }
+                                        _ => {
+                                            if romanize {
+                                                parameter_string = romanize_string(parameter_string);
                                             }
-                                            _ => {
-                                                if romanize {
-                                                    parameter_string = romanize_string(parameter_string);
-                                                }
 
-                                                let translated: Option<String> = get_translated_parameter(
-                                                    code,
-                                                    &parameter_string,
-                                                    None,
-                                                    Some(&mut lines_deque.lock().unwrap()),
-                                                    game_type,
-                                                    engine_type,
-                                                );
+                                            let translated: Option<String> = get_translated_parameter(
+                                                code,
+                                                &parameter_string,
+                                                None,
+                                                Some(lines_deque_mutex.clone()),
+                                                game_type,
+                                                engine_type,
+                                            );
 
-                                                if let Some(translated) = translated {
-                                                    *value = if engine_type == EngineType::New {
-                                                        Value::from(&translated)
-                                                    } else {
-                                                        json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                                    }
+                                            if let Some(translated) = translated {
+                                                *value = if engine_type == EngineType::New {
+                                                    Value::from(&translated)
+                                                } else {
+                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
                                                 }
                                             }
                                         }
