@@ -651,18 +651,21 @@ pub fn write_maps(
         }
 
         let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
+            &StringHashMap::default()
+        } else {
             let i: &mut usize = &mut i_mutex.lock().unwrap();
-            let hashmap: &StringHashMap = lines_maps_vec.get(*i).unwrap_or(unsafe { lines_maps_vec.get_unchecked(0) });
-
-            if hashmap.is_empty() {
-                return;
-            }
-
+            let hashmap: Option<&StringHashMap> = lines_maps_vec.get(*i);
             *i += 1;
 
-            hashmap
-        } else {
-            &StringHashMap::default()
+            if let Some(hashmap) = hashmap {
+                if hashmap.is_empty() {
+                    return;
+                }
+
+                hashmap
+            } else {
+                return;
+            }
         };
 
         let mut events_arr: Vec<&mut Value> = if engine_type == EngineType::New {
