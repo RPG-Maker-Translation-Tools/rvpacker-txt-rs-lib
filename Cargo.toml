@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "3.2.0"
+version = "3.2.1"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.76.0"
@@ -25,4 +25,4 @@ rayon = "1.10.0"
 regex = "1.11.1"
 sonic-rs = "0.3.17"
 log = { version = "0.4.22", optional = true }
-serde = { version = "1.0.216", optional = true }
+serde = { version = "1.0.217", optional = true }
