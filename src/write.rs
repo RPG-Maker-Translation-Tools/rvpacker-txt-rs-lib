@@ -289,7 +289,7 @@ fn write_list(
     let list_length: usize = list.len();
 
     let mut in_sequence: bool = false;
-    let mut line: Vec<String> = Vec::with_capacity(4);
+    let mut lines: Vec<String> = Vec::with_capacity(4);
     let mut item_indices: Vec<usize> = Vec::with_capacity(4);
     let mut credits_lines: Vec<String> = Vec::new();
 
@@ -302,21 +302,21 @@ fn write_list(
             unsafe { transmute::<u16, Code>(code) }
         };
 
-        let write_string_literally: bool = if engine_type != EngineType::New {
+        let write_string_literally: bool = if engine_type == EngineType::New {
+            true
+        } else {
             !match code {
                 Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
                 Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
                 _ => list[it][parameters_label][0].is_object(),
             }
-        } else {
-            true
         };
 
         if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
-            let line: &mut Vec<String> = if code != Code::Dialogue {
-                &mut line
-            } else {
+            let line: &mut Vec<String> = if !credits_lines.is_empty() {
                 &mut credits_lines
+            } else {
+                &mut lines
             };
 
             if !line.is_empty() {
@@ -431,7 +431,7 @@ fn write_list(
 
                 match code {
                     Code::Dialogue => {
-                        line.push(parameter_string);
+                        lines.push(parameter_string);
                         item_indices.push(it);
                         in_sequence = true;
                     }
@@ -527,22 +527,6 @@ pub fn write_maps(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) {
-    let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
-
-    let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
-        if engine_type == EngineType::New {
-            ("displayName", "events", "pages", "list", "code", "parameters")
-        } else {
-            (
-                "__symbol__display_name",
-                "__symbol__events",
-                "__symbol__pages",
-                "__symbol__list",
-                "__symbol__code",
-                "__symbol__parameters",
-            )
-        };
-
     let maps_obj_iter =
         read_dir(original_path)
             .unwrap_log()
@@ -571,65 +555,78 @@ pub fn write_maps(
                 }
             });
 
+    let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
+
+    let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
+        if engine_type == EngineType::New {
+            ("displayName", "events", "pages", "list", "code", "parameters")
+        } else {
+            (
+                "__symbol__display_name",
+                "__symbol__events",
+                "__symbol__pages",
+                "__symbol__list",
+                "__symbol__code",
+                "__symbol__parameters",
+            )
+        };
+
     let mut names_lines_map: StringHashMap = HashMap::default();
 
-    let (lines_deque, lines_maps_vec) = match maps_processing_mode {
-        MapsProcessingMode::Preserve => {
-            let mut deque: VecDeque<String> = VecDeque::new();
+    let (lines_deque, lines_maps_vec) = if maps_processing_mode == MapsProcessingMode::Preserve {
+        let mut deque: VecDeque<String> = VecDeque::new();
 
-            for line in original_content.split('\n') {
-                if line.starts_with("<!-- Map") {
-                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                        if original.len() > 20 {
-                            let map_name: &str = &original[17..original.len() - 4];
-                            names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
-                        }
-                    }
-                } else if !line.starts_with("<!--") {
-                    if let Some((_, translated)) = line.split_once(LINES_SEPARATOR) {
-                        deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
+        for line in original_content.split('\n') {
+            if line.starts_with("<!-- Map") {
+                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    if original.len() > 20 {
+                        let map_name: &str = &original[17..original.len() - 4];
+                        names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
                     }
                 }
-            }
-
-            (deque, Vec::new())
-        }
-        _ => {
-            let mut vec: Vec<StringHashMap> = Vec::with_capacity(512);
-            let mut hashmap: StringHashMap = HashMap::default();
-
-            for (i, line) in original_content.split('\n').enumerate() {
-                if line.starts_with("<!-- Map") {
-                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                        if original.len() > 20 {
-                            let map_name: &str = &original[17..original.len() - 4];
-                            names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
-                        }
-
-                        if maps_processing_mode == MapsProcessingMode::Separate {
-                            vec.push(take(&mut hashmap));
-                        }
-                    } else {
-                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-                    }
-                } else if !line.starts_with("<!--") {
-                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                        hashmap.insert(
-                            original.replace(NEW_LINE, "\n").trim().to_owned(),
-                            translated.replace(NEW_LINE, "\n").trim().to_owned(),
-                        );
-                    } else {
-                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-                    }
+            } else if !line.starts_with("<!--") {
+                if let Some((_, translated)) = line.split_once(LINES_SEPARATOR) {
+                    deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
                 }
             }
-
-            if vec.is_empty() {
-                vec.push(hashmap);
-            }
-
-            (VecDeque::new(), vec)
         }
+
+        (deque, Vec::new())
+    } else {
+        let mut vec: Vec<StringHashMap> = Vec::with_capacity(512);
+        let mut hashmap: StringHashMap = HashMap::default();
+
+        for (i, line) in original_content.split('\n').enumerate() {
+            if line.starts_with("<!-- Map") {
+                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    if original.len() > 20 {
+                        let map_name: &str = &original[17..original.len() - 4];
+                        names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                    }
+
+                    if maps_processing_mode == MapsProcessingMode::Separate {
+                        vec.push(take(&mut hashmap));
+                    }
+                } else {
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                }
+            } else if !line.starts_with("<!--") {
+                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    hashmap.insert(
+                        original.replace(NEW_LINE, "\n").trim().to_owned(),
+                        translated.replace(NEW_LINE, "\n").trim().to_owned(),
+                    );
+                } else {
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                }
+            }
+        }
+
+        if vec.is_empty() {
+            vec.push(hashmap);
+        }
+
+        (VecDeque::new(), vec)
     };
 
     let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(lines_deque));
@@ -693,16 +690,7 @@ pub fn write_maps(
                 .unwrap_log()
                 .par_iter_mut()
                 .for_each(move |page: &mut Value| {
-                    if maps_processing_mode != MapsProcessingMode::Preserve {
-                        write_list(
-                            page[list_label].as_array_mut().unwrap_log(),
-                            romanize,
-                            game_type,
-                            engine_type,
-                            hashmap,
-                            (code_label, parameters_label),
-                        );
-                    } else {
+                    if maps_processing_mode == MapsProcessingMode::Preserve {
                         let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = lines_deque_mutex.clone();
 
                         let list: &mut Array = page[list_label].as_array_mut().unwrap_log();
@@ -721,14 +709,14 @@ pub fn write_maps(
                                 unsafe { transmute::<u16, Code>(code) }
                             };
 
-                            let write_string_literally: bool = if engine_type != EngineType::New {
+                            let write_string_literally: bool = if engine_type == EngineType::New {
+                                true
+                            } else {
                                 !match code {
                                     Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
                                     Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
                                     _ => list[it][parameters_label][0].is_object(),
                                 }
-                            } else {
-                                true
                             };
 
                             if in_sequence && code != Code::Dialogue {
@@ -875,6 +863,15 @@ pub fn write_maps(
                                 }
                             }
                         }
+                    } else {
+                        write_list(
+                            page[list_label].as_array_mut().unwrap_log(),
+                            romanize,
+                            game_type,
+                            engine_type,
+                            hashmap,
+                            (code_label, parameters_label),
+                        );
                     }
                 });
         });
@@ -998,7 +995,6 @@ pub fn write_other(
                     ))
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-
                     None
                 }
             }));
@@ -1014,9 +1010,7 @@ pub fn write_other(
                 .for_each(|obj: &mut Value| {
                     for (variable_label, variable_type) in variable_tuples.into_iter() {
                         if let Some(mut variable_str) = obj[variable_label].as_str() {
-                            let mut variable_string: String = if variable_type != Variable::Note {
-                                variable_str.trim().to_owned()
-                            } else {
+                            let mut variable_string: String = if variable_type == Variable::Note {
                                 if let Some(game_type) = game_type {
                                     if game_type == GameType::LisaRPG {
                                         variable_str = variable_str.trim()
@@ -1024,6 +1018,8 @@ pub fn write_other(
                                 }
 
                                 variable_str.to_owned()
+                            } else {
+                                variable_str.trim().to_owned()
                             };
 
                             if !variable_string.is_empty() {
@@ -1152,7 +1148,6 @@ pub fn write_system(
                 Some((original.trim().to_owned(), translated.trim().to_owned()))
             } else {
                 eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-
                 None
             }
         }));
@@ -1317,7 +1312,6 @@ pub fn write_plugins(pluigns_file_path: &Path, plugins_path: &Path, output_path:
                 Some((original.trim().to_owned(), translated.trim().to_owned()))
             } else {
                 eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-
                 None
             }
         }));

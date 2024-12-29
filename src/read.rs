@@ -310,7 +310,7 @@ fn parse_list<'a>(
     map: &'a mut Xxh3IndexMap,
 ) {
     let mut in_sequence: bool = false;
-    let mut line: Vec<String> = Vec::with_capacity(4);
+    let mut lines: Vec<String> = Vec::with_capacity(4);
     let mut credits_lines: Vec<String> = Vec::new();
 
     let set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *set.get() };
@@ -326,10 +326,10 @@ fn parse_list<'a>(
         };
 
         if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
-            let line: &mut Vec<String> = if code != Code::Dialogue {
-                &mut line
-            } else {
+            let line: &mut Vec<String> = if !credits_lines.is_empty() {
                 &mut credits_lines
+            } else {
+                &mut lines
             };
 
             if !line.is_empty() {
@@ -418,7 +418,7 @@ fn parse_list<'a>(
 
                 match code {
                     Code::Dialogue => {
-                        line.push(parameter_string);
+                        lines.push(parameter_string);
                         in_sequence = true;
                     }
                     Code::Credit => {
@@ -538,9 +538,7 @@ pub fn read_map(
             for line in original_content.split('\n') {
                 let (original, translated) = line.split_once(LINES_SEPARATOR).unwrap_log();
 
-                if maps_processing_mode != MapsProcessingMode::Preserve {
-                    lines_map.insert(original, translated);
-                } else {
+                if maps_processing_mode == MapsProcessingMode::Preserve {
                     if original.starts_with("<!-- Map") {
                         if original.len() > 20 {
                             names_lines_vec.push_back(translated.to_owned());
@@ -550,6 +548,8 @@ pub fn read_map(
                     }
 
                     lines_tuple_vec.push((original.to_owned(), translated.to_owned()));
+                } else {
+                    lines_map.insert(original, translated);
                 }
             }
         } else {
@@ -633,18 +633,7 @@ pub fn read_map(
             }
 
             for page in event[pages_label].as_array().unwrap_log() {
-                if maps_processing_mode != MapsProcessingMode::Preserve {
-                    parse_list(
-                        page[list_label].as_array().unwrap_log(),
-                        romanize,
-                        game_type,
-                        engine_type,
-                        processing_mode,
-                        (code_label, parameters_label),
-                        &lines_set,
-                        &mut lines_map,
-                    );
-                } else {
+                if maps_processing_mode == MapsProcessingMode::Preserve {
                     let list: &Array = page[list_label].as_array().unwrap_log();
                     let mut in_sequence: bool = false;
                     let mut line: Vec<String> = Vec::with_capacity(4);
@@ -787,6 +776,17 @@ pub fn read_map(
                             }
                         }
                     }
+                } else {
+                    parse_list(
+                        page[list_label].as_array().unwrap_log(),
+                        romanize,
+                        game_type,
+                        engine_type,
+                        processing_mode,
+                        (code_label, parameters_label),
+                        &lines_set,
+                        &mut lines_map,
+                    );
                 }
             }
         }
