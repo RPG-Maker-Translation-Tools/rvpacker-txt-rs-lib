@@ -605,7 +605,7 @@ pub fn write_maps(
                         names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
                     }
 
-                    if maps_processing_mode == MapsProcessingMode::Separate {
+                    if maps_processing_mode == MapsProcessingMode::Separate && i > 0 {
                         vec.push(take(&mut hashmap));
                     }
                 } else {
@@ -632,9 +632,6 @@ pub fn write_maps(
 
     let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(lines_deque));
 
-    let i: usize = 0;
-    let i_mutex: Arc<Mutex<usize>> = Arc::new(Mutex::new(i));
-
     maps_obj_iter.for_each(|(filename, mut obj)| {
         if let Some(display_name) = obj[display_name_label].as_str() {
             let mut display_name: String = display_name.to_owned();
@@ -651,19 +648,21 @@ pub fn write_maps(
         let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
             &StringHashMap::default()
         } else {
-            let i: &mut usize = &mut i_mutex.lock().unwrap();
-            let hashmap: Option<&StringHashMap> = lines_maps_vec.get(*i);
-            *i += 1;
-
-            if let Some(hashmap) = hashmap {
-                if hashmap.is_empty() {
-                    return;
+            let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
+                unsafe {
+                    let filename: &str = filename.split_once('.').unwrap_unchecked().0;
+                    let map_number: &str = &filename[filename.len() - 3..];
+                    lines_maps_vec.get_unchecked(map_number.parse::<usize>().unwrap_unchecked())
                 }
-
-                hashmap
             } else {
+                unsafe { lines_maps_vec.get_unchecked(0) }
+            };
+
+            if hashmap.is_empty() {
                 return;
             }
+
+            hashmap
         };
 
         let mut events_arr: Vec<&mut Value> = if engine_type == EngineType::New {
