@@ -1287,10 +1287,18 @@ pub fn write_system(
         dump(obj, Some(""))
     };
 
-    write(output_path.join(system_file_path.file_name().unwrap_log()), output_data).unwrap_log();
+    let filename: &str = unsafe {
+        system_file_path
+            .file_name()
+            .unwrap_unchecked()
+            .to_str()
+            .unwrap_unchecked()
+    };
+
+    write(output_path.join(filename), output_data).unwrap_log();
 
     if logging {
-        println!("{WROTE_FILE_MSG} {}", system_file_path.display());
+        println!("{WROTE_FILE_MSG} {filename}");
     }
 }
 
