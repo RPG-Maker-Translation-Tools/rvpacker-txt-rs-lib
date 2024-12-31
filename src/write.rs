@@ -437,6 +437,7 @@ fn write_list(
                     }
                     Code::Credit => {
                         credits_lines.push(parameter_string);
+                        item_indices.push(it);
                         in_sequence = true;
                     }
                     _ => {
