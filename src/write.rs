@@ -2,33 +2,50 @@
 #[cfg(feature = "log")]
 use crate::{eprintln, println};
 use crate::{
-    functions::{determine_extension, extract_strings, get_object_data, romanize_string},
+    functions::{
+        determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
+        get_other_labels, get_system_labels, romanize_string,
+    },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, WROTE_FILE_MSG},
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
-        ALLOWED_CODES, LINES_SEPARATOR, NEW_LINE,
+        ALLOWED_CODES, ENCODINGS, LINES_SEPARATOR, NEW_LINE,
     },
     types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, Variable},
 };
-use encoding_rs::Encoding;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Object, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    ffi::OsString,
-    fs::{read, read_dir, read_to_string, write, DirEntry},
+    fs::{read, read_dir, read_to_string, write},
     hash::BuildHasherDefault,
     io::{Read, Write},
     mem::{take, transmute},
     path::Path,
-    str::{from_utf8_unchecked, Chars},
+    str::Chars,
     sync::{Arc, Mutex},
 };
 use xxhash_rust::xxh3::Xxh3;
 
 type StringHashMap = HashMap<String, String, BuildHasherDefault<Xxh3>>;
+
+fn parse_translation(translation: String) -> StringHashMap {
+    HashMap::from_iter(translation.split('\n').enumerate().filter_map(|(i, line)| {
+        if line.starts_with("<!--") {
+            None
+        } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+            Some((
+                original.replace(r"\#", "\n").trim().to_owned(),
+                translated.replace(r"\#", "\n").trim().to_owned(),
+            ))
+        } else {
+            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
+            None
+        }
+    }))
+}
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
 fn get_translated_parameter(
@@ -320,7 +337,7 @@ fn write_list(
             };
 
             if !line.is_empty() {
-                let mut joined: String = line.join("\n").trim().to_owned();
+                let mut joined: String = line.join("\n");
 
                 if romanize {
                     joined = romanize_string(joined)
@@ -335,17 +352,17 @@ fn write_list(
                     let line_length: usize = line.len();
 
                     for (i, &index) in item_indices.iter().enumerate() {
-                        if i < split_length {
-                            list[index][parameters_label][0] = if !write_string_literally {
+                        list[index][parameters_label][0] = if i < split_length {
+                            if write_string_literally {
+                                Value::from(split_vec[i])
+                            } else {
                                 json!({
                                     "__type": "bytes",
                                     "data": Array::from(split_vec[i].as_bytes())
                                 })
-                            } else {
-                                Value::from(split_vec[i])
-                            };
+                            }
                         } else {
-                            list[index][parameters_label][0] = Value::from_static_str(" ");
+                            Value::from_static_str(" ")
                         }
                     }
 
@@ -376,15 +393,21 @@ fn write_list(
         match code {
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
+                    let mut buf = Vec::new();
+
                     let mut subparameter_string: String = value[i]
                         .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or(match value[i].as_object() {
-                            Some(obj) => get_object_data(obj),
-                            None => String::new(),
+                        .unwrap_or_else(|| match value[i].as_object() {
+                            Some(obj) => {
+                                buf = get_object_data(obj);
+                                unsafe { std::str::from_utf8_unchecked(&buf) }
+                            }
+                            None => unreachable!(),
                         })
                         .trim()
                         .to_owned();
+
+                    drop(buf);
 
                     if !subparameter_string.is_empty() {
                         if romanize {
@@ -414,15 +437,21 @@ fn write_list(
             }
 
             _ => {
+                let mut buf = Vec::new();
+
                 let mut parameter_string: String = value
                     .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or(match value.as_object() {
-                        Some(obj) => get_object_data(obj),
-                        None => String::new(),
+                    .unwrap_or_else(|| match value.as_object() {
+                        Some(obj) => {
+                            buf = get_object_data(obj);
+                            unsafe { std::str::from_utf8_unchecked(&buf) }
+                        }
+                        None => "",
                     })
                     .trim()
                     .to_owned();
+
+                drop(buf);
 
                 // We push even the empty lines for credits case.
                 if code != Code::Credit && parameter_string.is_empty() {
@@ -518,86 +547,34 @@ fn write_list(
 /// * `logging` - whether to log or not
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - engine type for right files processing
-pub fn write_maps(
-    maps_path: &Path,
-    original_path: &Path,
-    output_path: &Path,
+pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
+    maps_path: P,
+    original_path: P,
+    output_path: P,
     maps_processing_mode: MapsProcessingMode,
     romanize: bool,
     logging: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) {
-    let maps_obj_iter =
-        read_dir(original_path)
-            .unwrap_log()
-            .par_bridge()
-            .filter_map(|entry: Result<DirEntry, std::io::Error>| {
-                if let Ok(entry) = entry {
-                    let filename: OsString = entry.file_name();
-                    let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
+    let maps_obj_iter = read_dir(original_path)
+        .unwrap_log()
+        .par_bridge()
+        .filter_map(|entry| filter_maps(entry, engine_type));
 
-                    if filename_str.starts_with("Map")
-                        && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
-                        && filename_str.ends_with(determine_extension(engine_type))
-                    {
-                        let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
-                        } else {
-                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                        };
-
-                        Some((filename_str.to_owned(), json))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            });
-
-    let original_content: String = read_to_string(maps_path.join("maps.txt")).unwrap_log();
+    let translation: String = read_to_string(maps_path.as_ref().join("maps.txt")).unwrap_log();
 
     let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
-        if engine_type == EngineType::New {
-            ("displayName", "events", "pages", "list", "code", "parameters")
-        } else {
-            (
-                "__symbol__display_name",
-                "__symbol__events",
-                "__symbol__pages",
-                "__symbol__list",
-                "__symbol__code",
-                "__symbol__parameters",
-            )
-        };
+        get_maps_labels(engine_type);
 
     let mut names_lines_map: StringHashMap = HashMap::default();
 
-    let (lines_deque, lines_maps_vec) = if maps_processing_mode == MapsProcessingMode::Preserve {
+    let (lines_deque, lines_maps_vec) = {
         let mut deque: VecDeque<String> = VecDeque::new();
-
-        for line in original_content.split('\n') {
-            if line.starts_with("<!-- Map") {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if original.len() > 20 {
-                        let map_name: &str = &original[17..original.len() - 4];
-                        names_lines_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
-                    }
-                }
-            } else if !line.starts_with("<!--") {
-                if let Some((_, translated)) = line.split_once(LINES_SEPARATOR) {
-                    deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
-                }
-            }
-        }
-
-        (deque, Vec::new())
-    } else {
-        let mut vec: Vec<StringHashMap> = Vec::with_capacity(512);
+        let mut vec: Vec<StringHashMap> = Vec::new();
         let mut hashmap: StringHashMap = HashMap::default();
 
-        for (i, line) in original_content.split('\n').enumerate() {
+        for (i, line) in translation.split('\n').enumerate() {
             if line.starts_with("<!-- Map") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     if original.len() > 20 {
@@ -613,10 +590,14 @@ pub fn write_maps(
                 }
             } else if !line.starts_with("<!--") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    hashmap.insert(
-                        original.replace(NEW_LINE, "\n").trim().to_owned(),
-                        translated.replace(NEW_LINE, "\n").trim().to_owned(),
-                    );
+                    if maps_processing_mode == MapsProcessingMode::Preserve {
+                        deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
+                    } else {
+                        hashmap.insert(
+                            original.replace(NEW_LINE, "\n").trim().to_owned(),
+                            translated.replace(NEW_LINE, "\n").trim().to_owned(),
+                        );
+                    }
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
                 }
@@ -627,7 +608,7 @@ pub fn write_maps(
             vec.push(hashmap);
         }
 
-        (VecDeque::new(), vec)
+        (deque, vec)
     };
 
     let lines_deque_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(lines_deque));
@@ -721,7 +702,7 @@ pub fn write_maps(
 
                             if in_sequence && code != Code::Dialogue {
                                 if !line.is_empty() {
-                                    let mut joined: String = line.join("\n").trim().to_owned();
+                                    let mut joined: String = line.join("\n");
 
                                     if romanize {
                                         joined = romanize_string(joined)
@@ -743,13 +724,13 @@ pub fn write_maps(
 
                                         for (i, &index) in item_indices.iter().enumerate() {
                                             list[index][parameters_label][0] = if i < split_length {
-                                                if !write_string_literally {
+                                                if write_string_literally {
+                                                    Value::from(split_vec[i])
+                                                } else {
                                                     json!({
                                                         "__type": "bytes",
                                                         "data": Array::from(split_vec[i].as_bytes())
                                                     })
-                                                } else {
-                                                    Value::from(split_vec[i])
                                                 }
                                             } else {
                                                 Value::from_static_str(" ")
@@ -784,15 +765,21 @@ pub fn write_maps(
                             match code {
                                 Code::ChoiceArray => {
                                     for i in 0..value.as_array().unwrap_log().len() {
+                                        let mut buf = Vec::new();
+
                                         let mut subparameter_string: String = value[i]
                                             .as_str()
-                                            .map(str::to_owned)
-                                            .unwrap_or(match value[i].as_object() {
-                                                Some(obj) => get_object_data(obj),
-                                                None => String::new(),
+                                            .unwrap_or_else(|| match value[i].as_object() {
+                                                Some(obj) => {
+                                                    buf = get_object_data(obj);
+                                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                                }
+                                                None => unreachable!(),
                                             })
                                             .trim()
                                             .to_owned();
+
+                                        drop(buf);
 
                                         if romanize {
                                             subparameter_string = romanize_string(subparameter_string);
@@ -817,15 +804,21 @@ pub fn write_maps(
                                     }
                                 }
                                 _ => {
+                                    let mut buf = Vec::new();
+
                                     let mut parameter_string: String = value
                                         .as_str()
-                                        .map(str::to_owned)
-                                        .unwrap_or(match value.as_object() {
-                                            Some(obj) => get_object_data(obj),
-                                            None => String::new(),
+                                        .unwrap_or_else(|| match value.as_object() {
+                                            Some(obj) => {
+                                                buf = get_object_data(obj);
+                                                unsafe { std::str::from_utf8_unchecked(&buf) }
+                                            }
+                                            None => "",
                                         })
                                         .trim()
                                         .to_owned();
+
+                                    drop(buf);
 
                                     if parameter_string.is_empty() {
                                         continue;
@@ -877,12 +870,12 @@ pub fn write_maps(
         });
 
         let output_data: Vec<u8> = if engine_type == EngineType::New {
-            to_vec(&obj).unwrap_log()
+            unsafe { to_vec(&obj).unwrap_unchecked() }
         } else {
             dump(obj, Some(""))
         };
 
-        write(output_path.join(&filename), output_data).unwrap_log();
+        write(output_path.as_ref().join(&filename), output_data).unwrap_log();
 
         if logging {
             println!("{WROTE_FILE_MSG} {filename}");
@@ -899,105 +892,54 @@ pub fn write_maps(
 /// * `logging` - whether to log or not
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - engine type for right files processing
-pub fn write_other(
-    other_path: &Path,
-    original_path: &Path,
-    output_path: &Path,
+pub fn write_other<P: AsRef<Path> + std::marker::Sync>(
+    other_path: P,
+    original_path: P,
+    output_path: P,
     romanize: bool,
     logging: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) {
-    let other_obj_arr_vec =
-        read_dir(original_path)
-            .unwrap_log()
-            .par_bridge()
-            .filter_map(|entry: Result<DirEntry, std::io::Error>| {
-                if let Ok(entry) = entry {
-                    let filename: OsString = entry.file_name();
-                    let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
-                    let (real_name, _) = filename_str.split_once('.').unwrap_log();
+    let other_obj_arr_vec = read_dir(original_path)
+        .unwrap_log()
+        .par_bridge()
+        .filter_map(|entry| filter_other(entry, engine_type, game_type));
 
-                    if !real_name.starts_with("Map")
-                        && !matches!(real_name, "Tilesets" | "Animations" | "System" | "Scripts")
-                        && filename_str.ends_with(determine_extension(engine_type))
-                    {
-                        if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina)
-                            && real_name == "States"
-                        {
-                            return None;
-                        }
+    let (
+        name_label,
+        nickname_label,
+        description_label,
+        message1_label,
+        message2_label,
+        message3_label,
+        message4_label,
+        note_label,
+        pages_label,
+        list_label,
+        code_label,
+        parameters_label,
+    ) = get_other_labels(engine_type);
 
-                        let json: Value = if engine_type == EngineType::New {
-                            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
-                        } else {
-                            load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                        };
-
-                        Some((filename_str.to_owned(), json))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            });
-
-    let variable_tuples: Arc<[(&str, Variable); 8]> = Arc::new(if engine_type == EngineType::New {
-        [
-            ("name", Variable::Name),
-            ("nickname", Variable::Nickname),
-            ("description", Variable::Description),
-            ("message1", Variable::Message1),
-            ("message2", Variable::Message2),
-            ("message3", Variable::Message3),
-            ("message4", Variable::Message4),
-            ("note", Variable::Note),
-        ]
-    } else {
-        [
-            ("__symbol__name", Variable::Name),
-            ("__symbol__nickname", Variable::Nickname),
-            ("__symbol__description", Variable::Description),
-            ("__symbol__message1", Variable::Message1),
-            ("__symbol__message2", Variable::Message2),
-            ("__symbol__message3", Variable::Message3),
-            ("__symbol__message4", Variable::Message4),
-            ("__symbol__note", Variable::Note),
-        ]
-    });
-
-    let (pages_label, list_label, code_label, parameters_label) = if engine_type == EngineType::New {
-        ("pages", "list", "code", "parameters")
-    } else {
-        (
-            "__symbol__pages",
-            "__symbol__list",
-            "__symbol__code",
-            "__symbol__parameters",
-        )
-    };
+    let variable_tuples: Arc<[(&str, Variable); 8]> = Arc::new([
+        (name_label, Variable::Name),
+        (nickname_label, Variable::Nickname),
+        (description_label, Variable::Description),
+        (message1_label, Variable::Message1),
+        (message2_label, Variable::Message2),
+        (message3_label, Variable::Message3),
+        (message4_label, Variable::Message4),
+        (note_label, Variable::Note),
+    ]);
 
     other_obj_arr_vec.into_par_iter().for_each(|(filename, mut obj_arr)| {
-        let content_path: &Path =
-            &other_path.join(filename[..filename.len() - determine_extension(engine_type).len()].to_owned() + ".txt");
+        let translation_path: &Path = &other_path
+            .as_ref()
+            .join(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt");
 
-        let original_content: String = read_to_string(content_path).unwrap_log();
+        let translation: String = read_to_string(translation_path).unwrap_log();
 
-        let lines_map: StringHashMap =
-            HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
-                if line.starts_with("<!--") {
-                    None
-                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    Some((
-                        original.replace(r"\#", "\n").trim().to_owned(),
-                        translated.replace(r"\#", "\n").trim().to_owned(),
-                    ))
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-                    None
-                }
-            }));
+        let lines_map: StringHashMap = parse_translation(translation);
 
         // Other files except CommonEvents and Troops have the structure that consists
         // of name, nickname, description and note
@@ -1080,13 +1022,13 @@ pub fn write_other(
                     for i in 0..pages_length {
                         // If element has pages, then we'll iterate over them
                         // Otherwise we'll just iterate over the list
-                        let list_value: &mut Value = if pages_length != 1 {
+                        let list: &mut Value = if pages_length != 1 {
                             &mut obj[pages_label][i][list_label]
                         } else {
                             &mut obj[list_label]
                         };
 
-                        if let Some(list) = list_value.as_array_mut() {
+                        if let Some(list) = list.as_array_mut() {
                             write_list(
                                 list,
                                 romanize,
@@ -1101,12 +1043,12 @@ pub fn write_other(
         }
 
         let output_data: Vec<u8> = if engine_type == EngineType::New {
-            to_vec(&obj_arr).unwrap_log()
+            unsafe { to_vec(&obj_arr).unwrap_unchecked() }
         } else {
             dump(obj_arr, Some(""))
         };
 
-        write(output_path.join(&filename), output_data).unwrap_log();
+        write(output_path.as_ref().join(&filename), output_data).unwrap_log();
 
         if logging {
             println!("{WROTE_FILE_MSG} {filename}");
@@ -1124,73 +1066,45 @@ pub fn write_other(
 /// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
 /// * `logging` - whether to log or not
 /// * `engine_type` - engine type for right files processing
-pub fn write_system(
-    system_file_path: &Path,
-    other_path: &Path,
-    output_path: &Path,
+pub fn write_system<P: AsRef<Path>>(
+    system_file_path: P,
+    other_path: P,
+    output_path: P,
     romanize: bool,
     logging: bool,
     engine_type: EngineType,
 ) {
     let mut obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(system_file_path).unwrap_log()).unwrap_log()
+        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
     } else {
-        load(&read(system_file_path).unwrap_log(), None, Some("")).unwrap_log()
+        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
     };
 
-    let original_content: String = read_to_string(other_path.join("system.txt")).unwrap_log();
+    let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
 
-    let lines_map: StringHashMap =
-        HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
-            if line.starts_with("<!--") {
-                None
-            } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                Some((original.trim().to_owned(), translated.trim().to_owned()))
-            } else {
-                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-                None
-            }
-        }));
-    let game_title: String = original_content.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
+    let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
+    let lines_map: StringHashMap = parse_translation(translation);
 
     let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
-        if engine_type == EngineType::New {
-            (
-                "armorTypes",
-                "elements",
-                "skillTypes",
-                "terms",
-                "weaponTypes",
-                "gameTitle",
-            )
-        } else {
-            (
-                "__symbol__armor_types",
-                "__symbol__elements",
-                "__symbol__skill_types",
-                if engine_type == EngineType::XP {
-                    "__symbol__words"
-                } else {
-                    "__symbol__terms"
-                },
-                "__symbol__weapon_types",
-                "__symbol__game_title",
-            )
-        };
+        get_system_labels(engine_type);
 
-    if engine_type != EngineType::New {
-        let mut string: String = obj["__symbol__currency_unit"].as_str().unwrap_log().trim().to_owned();
+    let replace_value = |value: &mut Value| {
+        if let Some(str) = value.as_str() {
+            let mut string = str.trim().to_owned();
 
-        if romanize {
-            string = romanize_string(string);
-        }
+            if !string.is_empty() {
+                if romanize {
+                    string = romanize_string(string);
+                }
 
-        if let Some(translated) = lines_map.get(&string) {
-            if !translated.is_empty() {
-                obj["__symbol__currency_unit"] = Value::from(translated);
+                if let Some(translated) = lines_map.get(&string) {
+                    if !translated.is_empty() {
+                        *value = Value::from(translated);
+                    }
+                }
             }
         }
-    }
+    };
 
     for label in [
         armor_types_label,
@@ -1207,21 +1121,7 @@ pub fn write_system(
             .as_array_mut()
             .unwrap_log()
             .iter_mut()
-            .for_each(|value: &mut Value| {
-                let mut string: String = value.as_str().unwrap_log().trim().to_owned();
-
-                if romanize {
-                    string = romanize_string(string);
-                }
-
-                if let Some(translated) = lines_map.get(&string) {
-                    if translated.is_empty() {
-                        return;
-                    }
-
-                    *value = Value::from(translated);
-                }
-            });
+            .for_each(replace_value);
     }
 
     obj[terms_label]
@@ -1234,67 +1134,44 @@ pub fn write_system(
             }
 
             if key != "messages" {
-                value
-                    .as_array_mut()
-                    .unwrap_log()
-                    .par_iter_mut()
-                    .for_each(|subvalue: &mut Value| {
-                        if let Some(str) = subvalue.as_str() {
-                            let mut string: String = str.trim().to_owned();
-
-                            if romanize {
-                                string = romanize_string(string);
-                            }
-
-                            if let Some(translated) = lines_map.get(&string) {
-                                if translated.is_empty() {
-                                    return;
-                                }
-
-                                *subvalue = Value::from(translated);
-                            }
-                        }
-                    });
+                value.as_array_mut().unwrap_log().par_iter_mut().for_each(replace_value);
             } else {
                 if !value.is_object() {
                     return;
                 }
 
-                value.as_object_mut().unwrap_log().iter_mut().for_each(|(_, value)| {
-                    let mut string: String = value.as_str().unwrap_log().trim().to_owned();
-
-                    if romanize {
-                        string = romanize_string(string)
-                    }
-
-                    if let Some(translated) = lines_map.get(&string) {
-                        if translated.is_empty() {
-                            return;
-                        }
-
-                        *value = Value::from(translated);
-                    }
-                });
+                value
+                    .as_object_mut()
+                    .unwrap_log()
+                    .iter_mut()
+                    .for_each(|(_, value)| replace_value(value));
             }
         });
 
-    obj[game_title_label] = Value::from(&game_title);
+    if engine_type != EngineType::New {
+        replace_value(&mut obj["__symbol__currency_unit"]);
+    }
+
+    if !game_title.is_empty() {
+        obj[game_title_label] = Value::from(&game_title);
+    }
 
     let output_data: Vec<u8> = if engine_type == EngineType::New {
-        to_vec(&obj).unwrap_log()
+        unsafe { to_vec(&obj).unwrap_unchecked() }
     } else {
         dump(obj, Some(""))
     };
 
     let filename: &str = unsafe {
         system_file_path
+            .as_ref()
             .file_name()
             .unwrap_unchecked()
             .to_str()
             .unwrap_unchecked()
     };
 
-    write(output_path.join(filename), output_data).unwrap_log();
+    write(output_path.as_ref().join(filename), output_data).unwrap_log();
 
     if logging {
         println!("{WROTE_FILE_MSG} {filename}");
@@ -1307,22 +1184,12 @@ pub fn write_system(
 /// * `plugins_path` - path to the plugins directory
 /// * `output_path` - path to the output directory
 /// * `logging` - whether to log or not
-pub fn write_plugins(pluigns_file_path: &Path, plugins_path: &Path, output_path: &Path, logging: bool) {
+pub fn write_plugins<P: AsRef<Path>>(pluigns_file_path: P, plugins_path: P, output_path: P, logging: bool) {
     let mut obj_arr: Vec<Object> = from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
 
-    let original_content: String = read_to_string(plugins_path.join("plugins.txt")).unwrap_log();
+    let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
 
-    let lines_map: StringHashMap =
-        HashMap::from_iter(original_content.split('\n').enumerate().filter_map(|(i, line)| {
-            if line.starts_with("<!--") {
-                None
-            } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                Some((original.trim().to_owned(), translated.trim().to_owned()))
-            } else {
-                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-                None
-            }
-        }));
+    let lines_map: StringHashMap = parse_translation(translation);
 
     obj_arr.par_iter_mut().for_each(|obj: &mut Object| {
         // For now, plugins writing only implemented for Fear & Hunger: Termina, so you should manually translate the plugins.js file if it's not Termina
@@ -1386,8 +1253,8 @@ pub fn write_plugins(pluigns_file_path: &Path, plugins_path: &Path, output_path:
     });
 
     write(
-        output_path.join("plugins.js"),
-        String::from("var $plugins =\n") + &to_string(&obj_arr).unwrap_log(),
+        output_path.as_ref().join("plugins.js"),
+        String::from("var $plugins =\n") + unsafe { &to_string(&obj_arr).unwrap_unchecked() },
     )
     .unwrap_log();
 
@@ -1406,44 +1273,20 @@ pub fn write_plugins(pluigns_file_path: &Path, plugins_path: &Path, output_path:
 /// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
 /// * `logging` - whether to log or not
 /// * `engine_type` - engine type for right files processing
-pub fn write_scripts(
-    scripts_file_path: &Path,
-    other_path: &Path,
-    output_path: &Path,
+pub fn write_scripts<P: AsRef<Path>>(
+    scripts_file_path: P,
+    other_path: P,
+    output_path: P,
     romanize: bool,
     logging: bool,
     engine_type: EngineType,
 ) {
     let mut script_entries: Value =
-        load(&read(scripts_file_path).unwrap_log(), Some(StringMode::Binary), None).unwrap_log();
+        load(&read(&scripts_file_path).unwrap_log(), Some(StringMode::Binary), None).unwrap_log();
 
-    let original_content: String = read_to_string(other_path.join("scripts.txt")).unwrap_log();
+    let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
 
-    let lines_map: StringHashMap = {
-        let mut hashmap: StringHashMap = HashMap::default();
-
-        for (i, line) in original_content.split('\n').enumerate() {
-            if line.starts_with("<!--") {
-                continue;
-            }
-
-            if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                hashmap.insert(original.trim().to_owned(), translated.trim().to_owned());
-            } else {
-                eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-            }
-        }
-
-        hashmap
-    };
-
-    let encodings: [&Encoding; 5] = [
-        encoding_rs::UTF_8,
-        encoding_rs::WINDOWS_1252,
-        encoding_rs::WINDOWS_1251,
-        encoding_rs::SHIFT_JIS,
-        encoding_rs::GB18030,
-    ];
+    let lines_map: StringHashMap = parse_translation(translation);
 
     script_entries
         .as_array_mut()
@@ -1457,7 +1300,7 @@ pub fn write_scripts(
 
             let mut code: String = String::new();
 
-            for encoding in encodings {
+            for encoding in ENCODINGS {
                 let (cow, _, had_errors) = encoding.decode(&inflated);
 
                 if !had_errors {
@@ -1498,12 +1341,14 @@ pub fn write_scripts(
         });
 
     write(
-        output_path.join(String::from("Scripts") + determine_extension(engine_type)),
+        output_path
+            .as_ref()
+            .join(String::from("Scripts") + determine_extension(engine_type)),
         dump(script_entries, None),
     )
     .unwrap_log();
 
     if logging {
-        println!("{WROTE_FILE_MSG} {}", scripts_file_path.display());
+        println!("{WROTE_FILE_MSG} {}", scripts_file_path.as_ref().display());
     }
 }
