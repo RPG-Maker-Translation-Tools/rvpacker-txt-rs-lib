@@ -374,21 +374,20 @@ fn parse_list<'a>(
         match code {
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
-                    let mut buf = Vec::new();
-
-                    let subparameter_string: String = value[i]
-                        .as_str()
-                        .unwrap_or_else(|| match value[i].as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => unreachable!(),
-                        })
-                        .trim()
-                        .to_owned();
-
-                    drop(buf);
+                    let subparameter_string: String = {
+                        let mut buf = Vec::new();
+                        value[i]
+                            .as_str()
+                            .unwrap_or_else(|| match value[i].as_object() {
+                                Some(obj) => {
+                                    buf = get_object_data(obj);
+                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                }
+                                None => unreachable!(),
+                            })
+                            .trim()
+                            .to_owned()
+                    };
 
                     if !subparameter_string.is_empty() {
                         let parsed: Option<String> =
@@ -410,21 +409,20 @@ fn parse_list<'a>(
                 }
             }
             _ => {
-                let mut buf: Vec<u8> = Vec::new();
-
-                let parameter_string: String = value
-                    .as_str()
-                    .unwrap_or_else(|| match value.as_object() {
-                        Some(obj) => {
-                            buf = get_object_data(obj);
-                            unsafe { std::str::from_utf8_unchecked(&buf) }
-                        }
-                        None => "",
-                    })
-                    .trim()
-                    .to_owned();
-
-                drop(buf);
+                let parameter_string: String = {
+                    let mut buf: Vec<u8> = Vec::new();
+                    value
+                        .as_str()
+                        .unwrap_or_else(|| match value.as_object() {
+                            Some(obj) => {
+                                buf = get_object_data(obj);
+                                unsafe { std::str::from_utf8_unchecked(&buf) }
+                            }
+                            None => "",
+                        })
+                        .trim()
+                        .to_owned()
+                };
 
                 // We push even the empty lines for credits case.
                 if code != Code::Credit && parameter_string.is_empty() {
@@ -462,7 +460,7 @@ fn parse_list<'a>(
     }
 }
 
-/// Reads all Map files of maps_path and parses them into .txt files in output_path.
+/// Reads all Map files of maps_path and parses them into .txt files in `output_path`.
 /// # Parameters
 /// * `maps_path` - path to directory than contains game files
 /// * `output_path` - path to output directory
@@ -491,26 +489,27 @@ pub fn read_map<P: AsRef<Path>>(
         return;
     }
 
-    let obj_vec_iter = read_dir(original_path)
-        .unwrap_log()
-        .filter_map(|entry| filter_maps(entry, engine_type));
+    // Allocated when maps processing mode is SEPARATE.
+    let mut translation_lines_vec: Vec<String> = Vec::new();
 
-    let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
-        get_maps_labels(engine_type);
+    // Default structure for collecting translation lines.
+    // Allocated when maps processing mode is DEFAULT or SEPARATE.
+    // When maps processing mode is separate, for each new map this
+    // set is drained and its data passed to translation_lines_vec.
+    let translation_lines_set: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
+    let lines_set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *translation_lines_set.get() };
+    let lines_set_ref: &Xxh3IndexSet = unsafe { &*translation_lines_set.get() };
+
+    // Allocated when processing mode is APPEND.
+    // Reads the transaltion from existing .txt file and then appends new lines.
+    let mut translation_map: Xxh3IndexMap = IndexMap::default();
+
+    // Allocated when maps processing mode is PRESERVE.
+    let mut names_deque: VecDeque<String> = VecDeque::new();
+    let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
+    let mut lines_pos: usize = 0;
 
     let translation: String;
-
-    let mut lines_vec: Vec<String> = Vec::new();
-
-    let lines_set: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
-    let lines_set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines_set.get() };
-    let lines_set_ref: &Xxh3IndexSet = unsafe { &*lines_set.get() };
-
-    let mut lines_map: Xxh3IndexMap = IndexMap::default();
-
-    let mut names_lines_vec: VecDeque<String> = VecDeque::new();
-    let mut lines_tuple_vec: Vec<(String, String)> = Vec::new();
-    let mut lines_pos: usize = 0;
 
     if processing_mode == ProcessingMode::Append {
         if output_path.exists() {
@@ -521,15 +520,15 @@ pub fn read_map<P: AsRef<Path>>(
                     if maps_processing_mode == MapsProcessingMode::Preserve {
                         if original.starts_with("<!-- Map") {
                             if original.len() > 20 {
-                                names_lines_vec.push_back(translated.to_owned());
+                                names_deque.push_back(translated.to_owned());
                             }
 
                             continue;
                         }
 
-                        lines_tuple_vec.push((original.to_owned(), translated.to_owned()));
+                        translation_map_vec.push((original.to_owned(), translated.to_owned()));
                     } else {
-                        lines_map.insert(original, translated);
+                        translation_map.insert(original, translated);
                     }
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
@@ -540,6 +539,13 @@ pub fn read_map<P: AsRef<Path>>(
             processing_mode = ProcessingMode::Default;
         }
     };
+
+    let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
+        get_maps_labels(engine_type);
+
+    let obj_vec_iter = read_dir(original_path)
+        .unwrap_log()
+        .filter_map(|entry| filter_maps(entry, engine_type));
 
     for (filename, obj) in obj_vec_iter {
         let mut filename_comment: String = format!("<!-- {filename} -->");
@@ -562,7 +568,7 @@ pub fn read_map<P: AsRef<Path>>(
                 lines_set_mut_ref.insert(filename_comment);
 
                 if processing_mode == ProcessingMode::Append {
-                    lines_map.shift_insert(
+                    translation_map.shift_insert(
                         lines_set_ref.len() - 1,
                         unsafe { lines_set_ref.last().unwrap_unchecked() },
                         "",
@@ -570,11 +576,11 @@ pub fn read_map<P: AsRef<Path>>(
                 }
             }
             MapsProcessingMode::Separate => {
-                lines_vec.extend(lines_set_mut_ref.drain(..));
-                lines_vec.push(filename_comment);
+                translation_lines_vec.extend(lines_set_mut_ref.drain(..));
+                translation_lines_vec.push(filename_comment);
 
                 if processing_mode == ProcessingMode::Append {
-                    lines_map.shift_insert(
+                    translation_map.shift_insert(
                         lines_set_ref.len() - 1,
                         unsafe { lines_set_ref.last().unwrap_unchecked() },
                         "",
@@ -583,12 +589,12 @@ pub fn read_map<P: AsRef<Path>>(
             }
             MapsProcessingMode::Preserve => {
                 let filename_comment_len: usize = filename_comment.len();
-                lines_tuple_vec.insert(
+                translation_map_vec.insert(
                     lines_pos,
                     (
                         filename_comment,
-                        if filename_comment_len > 20 && names_lines_vec.front().is_some() {
-                            names_lines_vec.pop_front().unwrap_log()
+                        if filename_comment_len > 20 && names_deque.front().is_some() {
+                            names_deque.pop_front().unwrap_log()
                         } else {
                             String::new()
                         },
@@ -644,13 +650,13 @@ pub fn read_map<P: AsRef<Path>>(
 
                                 if let Some(parsed) = parsed {
                                     if processing_mode == ProcessingMode::Append {
-                                        if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                        if let Some((o, _)) = translation_map_vec.get(lines_pos) {
                                             if *o != parsed {
-                                                lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                                translation_map_vec.insert(lines_pos, (parsed, String::new()));
                                             }
                                         }
                                     } else {
-                                        lines_tuple_vec.push((parsed, String::new()));
+                                        translation_map_vec.push((parsed, String::new()));
                                     }
 
                                     lines_pos += 1;
@@ -678,21 +684,20 @@ pub fn read_map<P: AsRef<Path>>(
                         match code {
                             Code::ChoiceArray => {
                                 for i in 0..value.as_array().unwrap_log().len() {
-                                    let mut buf = Vec::new();
-
-                                    let subparameter_string: String = value[i]
-                                        .as_str()
-                                        .unwrap_or_else(|| match value[i].as_object() {
-                                            Some(obj) => {
-                                                buf = get_object_data(obj);
-                                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                                            }
-                                            None => unreachable!(),
-                                        })
-                                        .trim()
-                                        .to_owned();
-
-                                    drop(buf);
+                                    let subparameter_string: String = {
+                                        let mut buf = Vec::new();
+                                        value[i]
+                                            .as_str()
+                                            .unwrap_or_else(|| match value[i].as_object() {
+                                                Some(obj) => {
+                                                    buf = get_object_data(obj);
+                                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                                }
+                                                None => unreachable!(),
+                                            })
+                                            .trim()
+                                            .to_owned()
+                                    };
 
                                     if !subparameter_string.is_empty() {
                                         let parsed: Option<String> =
@@ -704,13 +709,13 @@ pub fn read_map<P: AsRef<Path>>(
                                             }
 
                                             if processing_mode == ProcessingMode::Append {
-                                                if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                                if let Some((o, _)) = translation_map_vec.get(lines_pos) {
                                                     if *o != parsed {
-                                                        lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                                        translation_map_vec.insert(lines_pos, (parsed, String::new()));
                                                     }
                                                 }
                                             } else {
-                                                lines_tuple_vec.push((parsed, String::new()));
+                                                translation_map_vec.push((parsed, String::new()));
                                             }
 
                                             lines_pos += 1;
@@ -718,23 +723,21 @@ pub fn read_map<P: AsRef<Path>>(
                                     }
                                 }
                             }
-
                             _ => {
-                                let mut buf = Vec::new();
-
-                                let parameter_string: String = value
-                                    .as_str()
-                                    .unwrap_or_else(|| match value.as_object() {
-                                        Some(obj) => {
-                                            buf = get_object_data(obj);
-                                            unsafe { std::str::from_utf8_unchecked(&buf) }
-                                        }
-                                        None => "",
-                                    })
-                                    .trim()
-                                    .to_owned();
-
-                                drop(buf);
+                                let parameter_string: String = {
+                                    let mut buf = Vec::new();
+                                    value
+                                        .as_str()
+                                        .unwrap_or_else(|| match value.as_object() {
+                                            Some(obj) => {
+                                                buf = get_object_data(obj);
+                                                unsafe { std::str::from_utf8_unchecked(&buf) }
+                                            }
+                                            None => "",
+                                        })
+                                        .trim()
+                                        .to_owned()
+                                };
 
                                 if parameter_string.is_empty() {
                                     continue;
@@ -745,7 +748,6 @@ pub fn read_map<P: AsRef<Path>>(
                                         line.push(parameter_string);
                                         in_sequence = true;
                                     }
-
                                     _ => {
                                         let parsed: Option<String> =
                                             parse_parameter(code, &parameter_string, game_type, engine_type);
@@ -756,13 +758,13 @@ pub fn read_map<P: AsRef<Path>>(
                                             }
 
                                             if processing_mode == ProcessingMode::Append {
-                                                if let Some((o, _)) = lines_tuple_vec.get(lines_pos) {
+                                                if let Some((o, _)) = translation_map_vec.get(lines_pos) {
                                                     if *o != parsed {
-                                                        lines_tuple_vec.insert(lines_pos, (parsed, String::new()));
+                                                        translation_map_vec.insert(lines_pos, (parsed, String::new()));
                                                     }
                                                 }
                                             } else {
-                                                lines_tuple_vec.push((parsed, String::new()));
+                                                translation_map_vec.push((parsed, String::new()));
                                             }
 
                                             lines_pos += 1;
@@ -780,8 +782,8 @@ pub fn read_map<P: AsRef<Path>>(
                         engine_type,
                         processing_mode,
                         (code_label, parameters_label),
-                        &lines_set,
-                        &mut lines_map,
+                        &translation_lines_set,
+                        &mut translation_map,
                     );
                 }
             }
@@ -808,20 +810,26 @@ pub fn read_map<P: AsRef<Path>>(
     }
 
     let mut output_content: String = if processing_mode == ProcessingMode::Append {
-        String::from_iter(lines_map.into_iter().map(|(o, t)| format!("{o}{LINES_SEPARATOR}{t}\n")))
+        String::from_iter(
+            translation_map
+                .into_iter()
+                .map(|(o, t)| format!("{o}{LINES_SEPARATOR}{t}\n")),
+        )
     } else {
         match maps_processing_mode {
             MapsProcessingMode::Default => String::from_iter(
-                lines_set
+                translation_lines_set
                     .into_inner()
                     .into_iter()
                     .map(|l: String| l + LINES_SEPARATOR + "\n"),
             ),
-            MapsProcessingMode::Separate => {
-                String::from_iter(lines_vec.into_iter().map(|l: String| l + LINES_SEPARATOR + "\n"))
-            }
+            MapsProcessingMode::Separate => String::from_iter(
+                translation_lines_vec
+                    .into_iter()
+                    .map(|l: String| l + LINES_SEPARATOR + "\n"),
+            ),
             MapsProcessingMode::Preserve => String::from_iter(
-                lines_tuple_vec
+                translation_map_vec
                     .into_iter()
                     .map(|(o, t)| o + LINES_SEPARATOR + &t + "\n"),
             ),
@@ -832,15 +840,15 @@ pub fn read_map<P: AsRef<Path>>(
     write(output_path, output_content).unwrap_log();
 }
 
-/// Reads all other files of original_path and parses them into .txt files in output_path.
+/// Reads all other files of original_path and parses them into .txt files in `output_path`.
 /// # Parameters
 /// * `original_path` - path to directory than contains game files
 /// * `output_path` - path to output directory
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
 /// * `game_type` - game type for custom parsing
-/// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
+/// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_other<P: AsRef<Path>>(
     original_path: P,
@@ -856,8 +864,6 @@ pub fn read_other<P: AsRef<Path>>(
         .unwrap_log()
         .filter_map(|entry| filter_other(entry, engine_type, game_type));
 
-    let mut inner_processing_mode: ProcessingMode = processing_mode;
-
     let (
         name_label,
         nickname_label,
@@ -872,6 +878,8 @@ pub fn read_other<P: AsRef<Path>>(
         code_label,
         parameters_label,
     ) = get_other_labels(engine_type);
+
+    let mut inner_processing_mode: ProcessingMode = processing_mode;
 
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap().0.to_owned();
@@ -936,35 +944,29 @@ pub fn read_other<P: AsRef<Path>>(
                     (message4_label, Variable::Message4),
                     (note_label, Variable::Note),
                 ] {
-                    let variable_text: Option<&Value> = obj.get(variable_label);
+                    let value: Option<&Value> = obj.get(variable_label);
 
-                    let mut buf = Vec::new();
-
-                    let mut variable_str: String = variable_text
-                        .as_str()
-                        .unwrap_or_else(|| match variable_text.as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => "",
-                        })
-                        .to_string();
-
-                    drop(buf);
+                    let mut string: String = {
+                        let mut buf = Vec::new();
+                        value
+                            .as_str()
+                            .unwrap_or_else(|| match value.as_object() {
+                                Some(obj) => {
+                                    buf = get_object_data(obj);
+                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                }
+                                None => "",
+                            })
+                            .to_owned()
+                    };
 
                     if variable_type != Variable::Note {
-                        variable_str = variable_str.trim().to_string();
+                        string = string.trim().to_owned();
                     }
 
-                    if !variable_str.is_empty() {
-                        let parsed: Option<(String, bool)> = parse_variable(
-                            variable_str.to_owned(),
-                            &variable_type,
-                            &filename,
-                            game_type,
-                            engine_type,
-                        );
+                    if !string.is_empty() {
+                        let parsed: Option<(String, bool)> =
+                            parse_variable(string, &variable_type, &filename, game_type, engine_type);
 
                         if let Some((mut parsed, is_continuation_of_description)) = parsed {
                             if is_continuation_of_description {
@@ -977,6 +979,7 @@ pub fn read_other<P: AsRef<Path>>(
                                     let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
+                                    // uhhh... so what i actually need to do? i forgot...
                                     if inner_processing_mode == ProcessingMode::Append {
                                         let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
                                         lines_map.shift_insert(idx, string_ref, value);
@@ -1088,7 +1091,7 @@ pub fn read_other<P: AsRef<Path>>(
     }
 }
 
-/// Reads System file of system_file_path and parses it into .txt file of output_path.
+/// Reads System file of system_file_path and parses it into .txt file of `output_path`.
 /// # Parameters
 /// * `system_file_path` - path to directory than contains game files
 /// * `output_path` - path to output directory
@@ -1113,19 +1116,13 @@ pub fn read_system<P: AsRef<Path>>(
         return;
     }
 
-    let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
-    };
-
     let lines: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
     let lines_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines.get() };
     let lines_ref: &Xxh3IndexSet = unsafe { &*lines.get() };
 
-    let translation: String;
-
     let mut lines_map: Xxh3IndexMap = IndexMap::default();
+
+    let translation: String;
 
     if processing_mode == ProcessingMode::Append {
         if output_path.exists() {
@@ -1144,6 +1141,12 @@ pub fn read_system<P: AsRef<Path>>(
             processing_mode = ProcessingMode::Default;
         }
     }
+
+    let obj: Value = if engine_type == EngineType::New {
+        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
+    } else {
+        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
+    };
 
     if engine_type != EngineType::New {
         if let Some(mut str) = obj["__symbol__currency_unit"].as_str() {
@@ -1170,21 +1173,20 @@ pub fn read_system<P: AsRef<Path>>(
         get_system_labels(engine_type);
 
     let mut parse_str = |value: &Value| {
-        let mut buf = Vec::new();
-
-        let str: String = value
-            .as_str()
-            .unwrap_or_else(|| match value.as_object() {
-                Some(obj) => {
-                    buf = get_object_data(obj);
-                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                }
-                None => unreachable!(),
-            })
-            .trim()
-            .to_string();
-
-        drop(buf);
+        let str: String = {
+            let mut buf = Vec::new();
+            value
+                .as_str()
+                .unwrap_or_else(|| match value.as_object() {
+                    Some(obj) => {
+                        buf = get_object_data(obj);
+                        unsafe { std::str::from_utf8_unchecked(&buf) }
+                    }
+                    None => unreachable!(),
+                })
+                .trim()
+                .to_owned()
+        };
 
         if !str.is_empty() {
             let mut string: String = str.to_owned();
@@ -1248,21 +1250,20 @@ pub fn read_system<P: AsRef<Path>>(
 
     // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
     {
-        let mut buf = Vec::new();
-
-        let mut game_title_string: String = obj[game_title_label]
-            .as_str()
-            .unwrap_or_else(|| match obj[game_title_label].as_object() {
-                Some(obj) => {
-                    buf = get_object_data(obj);
-                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                }
-                None => unreachable!(),
-            })
-            .trim()
-            .to_string();
-
-        drop(buf);
+        let mut game_title_string: String = {
+            let mut buf = Vec::new();
+            obj[game_title_label]
+                .as_str()
+                .unwrap_or_else(|| match obj[game_title_label].as_object() {
+                    Some(obj) => {
+                        buf = get_object_data(obj);
+                        unsafe { std::str::from_utf8_unchecked(&buf) }
+                    }
+                    None => unreachable!(),
+                })
+                .trim()
+                .to_owned()
+        };
 
         if romanize {
             game_title_string = romanize_string(game_title_string)
@@ -1322,22 +1323,23 @@ pub fn read_system<P: AsRef<Path>>(
     }
 }
 
-/// Reads Scripts file of scripts_file_path and parses it into .txt file of output_path.
+/// Reads Scripts file of scripts_file_path and parses it into .txt file of `output_path`.
 /// # Parameters
 /// * `scripts_file_path` - path to directory than contains game files
 /// * `output_path` - path to output directory
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
+/// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `generate_json` - whether to generate json representations of older engines' files
 pub fn read_scripts<P: AsRef<Path>>(
     scripts_file_path: P,
-    other_path: P,
+    output_path: P,
     romanize: bool,
     logging: bool,
     mut processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
-    let output_path: &Path = &other_path.as_ref().join("scripts.txt");
+    let output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
     if processing_mode == ProcessingMode::Default && output_path.exists() {
         println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
@@ -1348,9 +1350,9 @@ pub fn read_scripts<P: AsRef<Path>>(
     let lines_ref: &Vec<String> = unsafe { &*lines.get() };
     let lines_mut_ref: &mut Vec<String> = unsafe { &mut *lines.get() };
 
-    let translation: String;
-
     let mut lines_map: Vec<(&str, &str)> = Vec::new();
+
+    let translation: String;
 
     if processing_mode == ProcessingMode::Append {
         if output_path.exists() {

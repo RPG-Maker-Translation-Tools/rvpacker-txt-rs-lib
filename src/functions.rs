@@ -96,7 +96,7 @@ pub fn get_object_data(object: &Object) -> Vec<u8> {
 
 pub fn extract_strings(
     ruby_code: &str,
-    mode: bool,
+    write: bool,
 ) -> (IndexSet<String, BuildHasherDefault<Xxh3>>, Vec<std::ops::Range<usize>>) {
     fn is_escaped(index: usize, string: &str) -> bool {
         let mut backslash_count: u8 = 0;
@@ -162,7 +162,7 @@ pub fn extract_strings(
                 if !strings.contains(&extracted_string) {
                     strings.insert(extracted_string);
 
-                    if mode {
+                    if write {
                         ranges.push(range);
                     }
                 }

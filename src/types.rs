@@ -15,9 +15,9 @@ pub enum GameType {
 #[derive(PartialEq, Clone, Copy)]
 #[repr(u8)]
 pub enum ProcessingMode {
-    Force,
-    Append,
     Default,
+    Append,
+    Force,
 }
 
 #[derive(PartialEq, Clone, Copy)]
