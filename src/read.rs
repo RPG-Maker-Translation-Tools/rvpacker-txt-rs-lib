@@ -490,9 +490,9 @@ pub fn read_map<P: AsRef<Path>>(
     mut processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
-    let output_path: &Path = &output_path.as_ref().join("maps.txt");
+    let txt_output_path: &Path = &output_path.as_ref().join("maps.txt");
 
-    if processing_mode == ProcessingMode::Default && output_path.exists() {
+    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
         println!("maps.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -520,8 +520,8 @@ pub fn read_map<P: AsRef<Path>>(
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
-        if output_path.exists() {
-            translation = read_to_string(output_path).unwrap_log();
+        if txt_output_path.exists() {
+            translation = read_to_string(txt_output_path).unwrap_log();
 
             for (i, line) in translation.split('\n').enumerate() {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -658,8 +658,8 @@ pub fn read_map<P: AsRef<Path>>(
 
                                 if let Some(parsed) = parsed {
                                     if processing_mode == ProcessingMode::Append {
-                                        if let Some((o, _)) = translation_map_vec.get(lines_pos) {
-                                            if *o != parsed {
+                                        if let Some((original, _)) = translation_map_vec.get(lines_pos) {
+                                            if *original != parsed {
                                                 translation_map_vec.insert(lines_pos, (parsed, String::new()));
                                             }
                                         }
@@ -772,8 +772,8 @@ pub fn read_map<P: AsRef<Path>>(
                                             }
 
                                             if processing_mode == ProcessingMode::Append {
-                                                if let Some((o, _)) = translation_map_vec.get(lines_pos) {
-                                                    if *o != parsed {
+                                                if let Some((original, _)) = translation_map_vec.get(lines_pos) {
+                                                    if *original != parsed {
                                                         translation_map_vec.insert(lines_pos, (parsed, String::new()));
                                                     }
                                                 }
@@ -811,11 +811,10 @@ pub fn read_map<P: AsRef<Path>>(
             write(
                 unsafe {
                     output_path
+                        .as_ref()
                         .parent()
                         .unwrap_unchecked()
-                        .parent()
-                        .unwrap_unchecked()
-                        .join(format!("json/{}.json", &filename[..filename.rfind('.').unwrap_log()]))
+                        .join(format!("json/{}.json", &filename.rsplit_once('.').unwrap_log().0))
                 },
                 unsafe { to_string(&obj).unwrap_unchecked() },
             )
@@ -827,7 +826,7 @@ pub fn read_map<P: AsRef<Path>>(
         String::from_iter(
             translation_map
                 .into_iter()
-                .map(|(o, t)| format!("{o}{LINES_SEPARATOR}{t}\n")),
+                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         )
     } else {
         match maps_processing_mode {
@@ -835,23 +834,23 @@ pub fn read_map<P: AsRef<Path>>(
                 translation_lines_set
                     .into_inner()
                     .into_iter()
-                    .map(|l: String| l + LINES_SEPARATOR + "\n"),
+                    .map(|line: String| line + LINES_SEPARATOR + "\n"),
             ),
             MapsProcessingMode::Separate => String::from_iter(
                 translation_lines_vec
                     .into_iter()
-                    .map(|l: String| l + LINES_SEPARATOR + "\n"),
+                    .map(|line: String| line + LINES_SEPARATOR + "\n"),
             ),
             MapsProcessingMode::Preserve => String::from_iter(
                 translation_map_vec
                     .into_iter()
-                    .map(|(o, t)| o + LINES_SEPARATOR + &t + "\n"),
+                    .map(|(original, translation)| original + LINES_SEPARATOR + &translation + "\n"),
             ),
         }
     };
 
     output_content.pop();
-    write(output_path, output_content).unwrap_log();
+    write(txt_output_path, output_content).unwrap_log();
 }
 
 /// Reads all other files of original_path and parses them into .txt files in `output_path`.
@@ -897,11 +896,15 @@ pub fn read_other<P: AsRef<Path>>(
 
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap().0.to_owned();
-        let output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
+        let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
 
-        if processing_mode == ProcessingMode::Default && output_path.exists() {
+        if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
             println!("{} {FILE_ALREADY_EXISTS_MSG}", unsafe {
-                output_path.file_name().unwrap_unchecked().to_str().unwrap_unchecked()
+                txt_output_path
+                    .file_name()
+                    .unwrap_unchecked()
+                    .to_str()
+                    .unwrap_unchecked()
             });
             continue;
         }
@@ -915,8 +918,8 @@ pub fn read_other<P: AsRef<Path>>(
         let mut lines_map: Xxh3IndexMap = IndexMap::default();
 
         if processing_mode == ProcessingMode::Append {
-            if output_path.exists() {
-                translation = read_to_string(output_path).unwrap_log();
+            if txt_output_path.exists() {
+                translation = read_to_string(txt_output_path).unwrap_log();
 
                 lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
                     if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -1090,7 +1093,7 @@ pub fn read_other<P: AsRef<Path>>(
 
         output_content.pop();
 
-        write(output_path, output_content).unwrap_log();
+        write(txt_output_path, output_content).unwrap_log();
 
         if logging {
             println!("{PARSED_FILE_MSG} {filename}");
@@ -1100,8 +1103,7 @@ pub fn read_other<P: AsRef<Path>>(
             write(
                 unsafe {
                     output_path
-                        .parent()
-                        .unwrap_unchecked()
+                        .as_ref()
                         .parent()
                         .unwrap_unchecked()
                         .join(format!("json/{basename}.json"))
@@ -1131,9 +1133,9 @@ pub fn read_system<P: AsRef<Path>>(
     engine_type: EngineType,
     generate_json: bool,
 ) {
-    let output_path: &Path = &output_path.as_ref().join("system.txt");
+    let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
 
-    if processing_mode == ProcessingMode::Default && output_path.exists() {
+    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
         println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -1147,8 +1149,8 @@ pub fn read_system<P: AsRef<Path>>(
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
-        if output_path.exists() {
-            translation = read_to_string(output_path).unwrap_log();
+        if txt_output_path.exists() {
+            translation = read_to_string(txt_output_path).unwrap_log();
 
             lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -1323,7 +1325,7 @@ pub fn read_system<P: AsRef<Path>>(
 
     output_content.pop();
 
-    write(output_path, output_content).unwrap_log();
+    write(txt_output_path, output_content).unwrap_log();
 
     if logging {
         println!("{PARSED_FILE_MSG} {}", unsafe {
@@ -1340,8 +1342,7 @@ pub fn read_system<P: AsRef<Path>>(
         write(
             unsafe {
                 output_path
-                    .parent()
-                    .unwrap_unchecked()
+                    .as_ref()
                     .parent()
                     .unwrap_unchecked()
                     .join("json/System.json")
@@ -1368,9 +1369,9 @@ pub fn read_scripts<P: AsRef<Path>>(
     mut processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
-    let output_path: &Path = &output_path.as_ref().join("scripts.txt");
+    let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
-    if processing_mode == ProcessingMode::Default && output_path.exists() {
+    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
         println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -1384,8 +1385,8 @@ pub fn read_scripts<P: AsRef<Path>>(
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
-        if output_path.exists() {
-            translation = read_to_string(output_path).unwrap_log();
+        if txt_output_path.exists() {
+            translation = read_to_string(txt_output_path).unwrap_log();
 
             lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -1431,7 +1432,8 @@ pub fn read_scripts<P: AsRef<Path>>(
         codes_content.push(code);
     }
 
-    let extracted_strings: Xxh3IndexSet = extract_strings(&codes_content.join(""), false).0;
+    let codes_text: String = codes_content.join("");
+    let extracted_strings: Xxh3IndexSet = extract_strings(&codes_text, false).0;
 
     let regexes: [Regex; 11] = unsafe {
         [
@@ -1493,7 +1495,7 @@ pub fn read_scripts<P: AsRef<Path>>(
 
     output_content.pop();
 
-    write(output_path, output_content).unwrap_log();
+    write(txt_output_path, output_content).unwrap_log();
 
     if logging {
         println!("{PARSED_FILE_MSG} {}", unsafe {
@@ -1510,14 +1512,12 @@ pub fn read_scripts<P: AsRef<Path>>(
         write(
             unsafe {
                 output_path
+                    .as_ref()
                     .parent()
                     .unwrap_unchecked()
-                    .parent()
-                    .unwrap_unchecked()
-                    .join("json")
-                    .join("Scripts.json")
+                    .join("json/Scripts.txt")
             },
-            unsafe { to_string(&scripts_entries).unwrap_unchecked() },
+            codes_text,
         )
         .unwrap_log();
     }
