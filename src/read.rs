@@ -375,8 +375,9 @@ fn parse_list<'a>(
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
                     let subparameter_string: String = {
-                        let mut buf = Vec::new();
-                        value[i]
+                        let mut buf: Vec<u8> = Vec::new();
+
+                        let subparameter_string: &str = value[i]
                             .as_str()
                             .unwrap_or_else(|| match value[i].as_object() {
                                 Some(obj) => {
@@ -385,25 +386,27 @@ fn parse_list<'a>(
                                 }
                                 None => unreachable!(),
                             })
-                            .trim()
-                            .to_owned()
+                            .trim();
+
+                        if subparameter_string.is_empty() {
+                            continue;
+                        }
+
+                        subparameter_string.to_owned()
                     };
 
-                    if !subparameter_string.is_empty() {
-                        let parsed: Option<String> =
-                            parse_parameter(code, &subparameter_string, game_type, engine_type);
+                    let parsed: Option<String> = parse_parameter(code, &subparameter_string, game_type, engine_type);
 
-                        if let Some(mut parsed) = parsed {
-                            if romanize {
-                                parsed = romanize_string(parsed);
-                            }
+                    if let Some(mut parsed) = parsed {
+                        if romanize {
+                            parsed = romanize_string(parsed);
+                        }
 
-                            set_mut_ref.insert(parsed);
-                            let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
+                        set_mut_ref.insert(parsed);
+                        let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
 
-                            if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
-                                map.shift_insert(set_ref.len() - 1, string_ref, "");
-                            }
+                        if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
+                            map.shift_insert(set_ref.len() - 1, string_ref, "");
                         }
                     }
                 }
@@ -411,7 +414,8 @@ fn parse_list<'a>(
             _ => {
                 let parameter_string: String = {
                     let mut buf: Vec<u8> = Vec::new();
-                    value
+
+                    let parameter_string: &str = value
                         .as_str()
                         .unwrap_or_else(|| match value.as_object() {
                             Some(obj) => {
@@ -420,14 +424,14 @@ fn parse_list<'a>(
                             }
                             None => "",
                         })
-                        .trim()
-                        .to_owned()
-                };
+                        .trim();
 
-                // We push even the empty lines for credits case.
-                if code != Code::Credit && parameter_string.is_empty() {
-                    continue;
-                }
+                    if code != Code::Credit && parameter_string.is_empty() {
+                        continue;
+                    }
+
+                    parameter_string.to_owned()
+                };
 
                 match code {
                     Code::Dialogue => {
@@ -685,8 +689,9 @@ pub fn read_map<P: AsRef<Path>>(
                             Code::ChoiceArray => {
                                 for i in 0..value.as_array().unwrap_log().len() {
                                     let subparameter_string: String = {
-                                        let mut buf = Vec::new();
-                                        value[i]
+                                        let mut buf: Vec<u8> = Vec::new();
+
+                                        let subparameter_string: &str = value[i]
                                             .as_str()
                                             .unwrap_or_else(|| match value[i].as_object() {
                                                 Some(obj) => {
@@ -695,38 +700,42 @@ pub fn read_map<P: AsRef<Path>>(
                                                 }
                                                 None => unreachable!(),
                                             })
-                                            .trim()
-                                            .to_owned()
+                                            .trim();
+
+                                        if subparameter_string.is_empty() {
+                                            continue;
+                                        }
+
+                                        subparameter_string.to_owned()
                                     };
 
-                                    if !subparameter_string.is_empty() {
-                                        let parsed: Option<String> =
-                                            parse_parameter(code, &subparameter_string, game_type, engine_type);
+                                    let parsed: Option<String> =
+                                        parse_parameter(code, &subparameter_string, game_type, engine_type);
 
-                                        if let Some(mut parsed) = parsed {
-                                            if romanize {
-                                                parsed = romanize_string(parsed);
-                                            }
-
-                                            if processing_mode == ProcessingMode::Append {
-                                                if let Some((o, _)) = translation_map_vec.get(lines_pos) {
-                                                    if *o != parsed {
-                                                        translation_map_vec.insert(lines_pos, (parsed, String::new()));
-                                                    }
-                                                }
-                                            } else {
-                                                translation_map_vec.push((parsed, String::new()));
-                                            }
-
-                                            lines_pos += 1;
+                                    if let Some(mut parsed) = parsed {
+                                        if romanize {
+                                            parsed = romanize_string(parsed);
                                         }
+
+                                        if processing_mode == ProcessingMode::Append {
+                                            if let Some((o, _)) = translation_map_vec.get(lines_pos) {
+                                                if *o != parsed {
+                                                    translation_map_vec.insert(lines_pos, (parsed, String::new()));
+                                                }
+                                            }
+                                        } else {
+                                            translation_map_vec.push((parsed, String::new()));
+                                        }
+
+                                        lines_pos += 1;
                                     }
                                 }
                             }
                             _ => {
                                 let parameter_string: String = {
-                                    let mut buf = Vec::new();
-                                    value
+                                    let mut buf: Vec<u8> = Vec::new();
+
+                                    let parameter_string: &str = value
                                         .as_str()
                                         .unwrap_or_else(|| match value.as_object() {
                                             Some(obj) => {
@@ -735,13 +744,14 @@ pub fn read_map<P: AsRef<Path>>(
                                             }
                                             None => "",
                                         })
-                                        .trim()
-                                        .to_owned()
-                                };
+                                        .trim();
 
-                                if parameter_string.is_empty() {
-                                    continue;
-                                }
+                                    if parameter_string.is_empty() {
+                                        continue;
+                                    }
+
+                                    parameter_string.to_owned()
+                                };
 
                                 match code {
                                     Code::Dialogue => {
@@ -946,71 +956,75 @@ pub fn read_other<P: AsRef<Path>>(
                 ] {
                     let value: Option<&Value> = obj.get(variable_label);
 
-                    let mut string: String = {
-                        let mut buf = Vec::new();
-                        value
-                            .as_str()
-                            .unwrap_or_else(|| match value.as_object() {
-                                Some(obj) => {
-                                    buf = get_object_data(obj);
-                                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                                }
-                                None => "",
-                            })
-                            .to_owned()
+                    let string: String = {
+                        let mut buf: Vec<u8> = Vec::new();
+
+                        let string: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                            Some(obj) => {
+                                buf = get_object_data(obj);
+                                unsafe { std::str::from_utf8_unchecked(&buf) }
+                            }
+                            None => "",
+                        });
+
+                        let trimmed: &str = string.trim();
+
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        if variable_type != Variable::Note {
+                            trimmed.to_owned()
+                        } else {
+                            string.to_owned()
+                        }
                     };
 
-                    if variable_type != Variable::Note {
-                        string = string.trim().to_owned();
-                    }
+                    let parsed: Option<(String, bool)> =
+                        parse_variable(string, &variable_type, &filename, game_type, engine_type);
 
-                    if !string.is_empty() {
-                        let parsed: Option<(String, bool)> =
-                            parse_variable(string, &variable_type, &filename, game_type, engine_type);
-
-                        if let Some((mut parsed, is_continuation_of_description)) = parsed {
-                            if is_continuation_of_description {
-                                if prev_variable_type != Some(Variable::Description) {
-                                    continue;
-                                }
-
-                                if let Some(last) = lines_mut_ref.pop() {
-                                    lines_mut_ref.insert(last.trim().to_owned() + &parsed);
-                                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                                    // TODO: this shit rewrites the translation line but inserts RIGHT original line
-                                    // uhhh... so what i actually need to do? i forgot...
-                                    if inner_processing_mode == ProcessingMode::Append {
-                                        let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
-                                        lines_map.shift_insert(idx, string_ref, value);
-                                    }
-                                }
+                    if let Some((mut parsed, is_continuation_of_description)) = parsed {
+                        if is_continuation_of_description {
+                            if prev_variable_type != Some(Variable::Description) {
                                 continue;
                             }
 
-                            prev_variable_type = Some(variable_type);
+                            if let Some(last) = lines_mut_ref.pop() {
+                                lines_mut_ref.insert(last.trim().to_owned() + &parsed);
+                                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-                            if romanize {
-                                parsed = romanize_string(parsed);
+                                // TODO: this shit rewrites the translation line but inserts RIGHT original line
+                                // uhhh... so what i actually need to do? i forgot...
+                                if inner_processing_mode == ProcessingMode::Append {
+                                    let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
+                                    lines_map.shift_insert(idx, string_ref, value);
+                                }
                             }
-
-                            let replaced: String = parsed
-                                .split('\n')
-                                .map(str::trim)
-                                .collect::<Vec<_>>()
-                                .join(NEW_LINE)
-                                .trim()
-                                .to_owned();
-
-                            lines_mut_ref.insert(replaced);
-                            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                            if inner_processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                            }
-                        } else if variable_type == Variable::Name {
-                            continue 'obj;
+                            continue;
                         }
+
+                        prev_variable_type = Some(variable_type);
+
+                        if romanize {
+                            parsed = romanize_string(parsed);
+                        }
+
+                        let replaced: String = parsed
+                            .split('\n')
+                            .map(str::trim)
+                            .collect::<Vec<_>>()
+                            .join(NEW_LINE)
+                            .trim()
+                            .to_owned();
+
+                        lines_mut_ref.insert(replaced);
+                        let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+
+                        if inner_processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+                            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+                        }
+                    } else if variable_type == Variable::Name {
+                        continue 'obj;
                     }
                 }
             }
@@ -1174,8 +1188,9 @@ pub fn read_system<P: AsRef<Path>>(
 
     let mut parse_str = |value: &Value| {
         let str: String = {
-            let mut buf = Vec::new();
-            value
+            let mut buf: Vec<u8> = Vec::new();
+
+            let str: &str = value
                 .as_str()
                 .unwrap_or_else(|| match value.as_object() {
                     Some(obj) => {
@@ -1184,23 +1199,26 @@ pub fn read_system<P: AsRef<Path>>(
                     }
                     None => unreachable!(),
                 })
-                .trim()
-                .to_owned()
+                .trim();
+
+            if str.is_empty() {
+                return;
+            }
+
+            str.to_owned()
         };
 
-        if !str.is_empty() {
-            let mut string: String = str.to_owned();
+        let mut string: String = str.to_owned();
 
-            if romanize {
-                string = romanize_string(string)
-            }
+        if romanize {
+            string = romanize_string(string)
+        }
 
-            lines_mut_ref.insert(string);
-            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+        lines_mut_ref.insert(string);
+        let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-            }
+        if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
         }
     };
 
@@ -1251,7 +1269,8 @@ pub fn read_system<P: AsRef<Path>>(
     // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
     {
         let mut game_title_string: String = {
-            let mut buf = Vec::new();
+            let mut buf: Vec<u8> = Vec::new();
+
             obj[game_title_label]
                 .as_str()
                 .unwrap_or_else(|| match obj[game_title_label].as_object() {
@@ -1265,15 +1284,17 @@ pub fn read_system<P: AsRef<Path>>(
                 .to_owned()
         };
 
-        if romanize {
-            game_title_string = romanize_string(game_title_string)
-        }
+        if !game_title_string.is_empty() {
+            if romanize {
+                game_title_string = romanize_string(game_title_string)
+            }
 
-        lines_mut_ref.insert(game_title_string);
-        let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+            lines_mut_ref.insert(game_title_string);
+            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-        if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+            }
         }
     }
 

@@ -394,8 +394,9 @@ fn write_list(
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
                     let mut subparameter_string: String = {
-                        let mut buf = Vec::new();
-                        value[i]
+                        let mut buf: Vec<u8> = Vec::new();
+
+                        let subparameter_string: &str = value[i]
                             .as_str()
                             .unwrap_or_else(|| match value[i].as_object() {
                                 Some(obj) => {
@@ -404,40 +405,38 @@ fn write_list(
                                 }
                                 None => unreachable!(),
                             })
-                            .trim()
-                            .to_owned()
-                    };
+                            .trim();
 
-                    if !subparameter_string.is_empty() {
-                        if romanize {
-                            subparameter_string = romanize_string(subparameter_string);
+                        if subparameter_string.is_empty() {
+                            continue;
                         }
 
-                        let translated: Option<String> = get_translated_parameter(
-                            code,
-                            &subparameter_string,
-                            Some(map),
-                            None,
-                            game_type,
-                            engine_type,
-                        );
+                        subparameter_string.to_owned()
+                    };
 
-                        if let Some(translated) = translated {
-                            if !translated.is_empty() {
-                                value[i] = if engine_type == EngineType::New {
-                                    Value::from(&translated)
-                                } else {
-                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                };
-                            }
+                    if romanize {
+                        subparameter_string = romanize_string(subparameter_string);
+                    }
+
+                    let translated: Option<String> =
+                        get_translated_parameter(code, &subparameter_string, Some(map), None, game_type, engine_type);
+
+                    if let Some(translated) = translated {
+                        if !translated.is_empty() {
+                            value[i] = if engine_type == EngineType::New {
+                                Value::from(&translated)
+                            } else {
+                                json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                            };
                         }
                     }
                 }
             }
             _ => {
                 let mut parameter_string: String = {
-                    let mut buf = Vec::new();
-                    value
+                    let mut buf: Vec<u8> = Vec::new();
+
+                    let parameter_string: &str = value
                         .as_str()
                         .unwrap_or_else(|| match value.as_object() {
                             Some(obj) => {
@@ -446,14 +445,14 @@ fn write_list(
                             }
                             None => "",
                         })
-                        .trim()
-                        .to_owned()
-                };
+                        .trim();
 
-                // We push even the empty lines for credits case.
-                if code != Code::Credit && parameter_string.is_empty() {
-                    continue;
-                }
+                    if code != Code::Credit && parameter_string.is_empty() {
+                        continue;
+                    }
+
+                    parameter_string.to_owned()
+                };
 
                 match code {
                     Code::Dialogue => {
@@ -770,21 +769,26 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                             match code {
                                 Code::ChoiceArray => {
                                     for i in 0..value.as_array().unwrap_log().len() {
+                                        let mut subparameter_string: String = {
+                                            let mut buf: Vec<u8> = Vec::new();
 
+                                            let subparameter_string: &str = value[i]
+                                                .as_str()
+                                                .unwrap_or_else(|| match value[i].as_object() {
+                                                    Some(obj) => {
+                                                        buf = get_object_data(obj);
+                                                        unsafe { std::str::from_utf8_unchecked(&buf) }
+                                                    }
+                                                    None => unreachable!(),
+                                                })
+                                                .trim();
 
-                                        let mut subparameter_string: String = {let mut buf = Vec::new();value[i]
-                                            .as_str()
-                                            .unwrap_or_else(|| match value[i].as_object() {
-                                                Some(obj) => {
-                                                    buf = get_object_data(obj);
-                                                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                                                }
-                                                None => unreachable!(),
-                                            })
-                                            .trim()
-                                            .to_owned()};
+                                            if subparameter_string.is_empty() {
+                                                continue;
+                                            }
 
-
+                                            subparameter_string.to_owned()
+                                        };
 
                                         if romanize {
                                             subparameter_string = romanize_string(subparameter_string);
@@ -809,23 +813,26 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                     }
                                 }
                                 _ => {
+                                    let mut parameter_string: String = {
+                                        let mut buf: Vec<u8> = Vec::new();
 
-                                    let mut parameter_string: String = {let mut buf = Vec::new();value
-                                        .as_str()
-                                        .unwrap_or_else(|| match value.as_object() {
-                                            Some(obj) => {
-                                                buf = get_object_data(obj);
-                                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                                            }
-                                            None => "",
-                                        })
-                                        .trim()
-                                        .to_owned()};
+                                        let parameter_string: &str = value
+                                            .as_str()
+                                            .unwrap_or_else(|| match value.as_object() {
+                                                Some(obj) => {
+                                                    buf = get_object_data(obj);
+                                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                                }
+                                                None => "",
+                                            })
+                                            .trim();
 
+                                        if parameter_string.is_empty() {
+                                            continue;
+                                        }
 
-                                    if parameter_string.is_empty() {
-                                        continue;
-                                    }
+                                        parameter_string.to_owned()
+                                    };
 
                                     match code {
                                         Code::Dialogue => {
