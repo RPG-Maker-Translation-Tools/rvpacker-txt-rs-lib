@@ -217,15 +217,13 @@ pub fn filter_other(
     game_type: Option<GameType>,
 ) -> Option<(String, Value)> {
     if let Ok(entry) = entry {
-        let filename_os_string: OsString = entry.file_name();
-        let filename: &str = unsafe { from_utf8_unchecked(filename_os_string.as_encoded_bytes()) };
+        let filename: OsString = entry.file_name();
+        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
-        if let Some((actual_string, _)) = filename.split_once('.') {
-            let name = actual_string;
-
+        if let Some((name, _)) = filename_str.split_once('.') {
             if !name.starts_with("Map")
                 && !matches!(name, "Tilesets" | "Animations" | "System" | "Scripts")
-                && filename.ends_with(determine_extension(engine_type))
+                && filename_str.ends_with(determine_extension(engine_type))
             {
                 if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && name == "States" {
                     return None;
@@ -237,7 +235,7 @@ pub fn filter_other(
                     load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
                 };
 
-                Some((filename.to_owned(), json))
+                Some((filename_str.to_owned(), json))
             } else {
                 None
             }
