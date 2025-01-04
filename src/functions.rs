@@ -1,6 +1,6 @@
 use crate::{
     statics::NEW_LINE,
-    types::{EachLine, EngineType, GameType, OptionExt, ResultExt},
+    types::{EachLine, EngineType, GameType, ResultExt},
 };
 use indexmap::IndexSet;
 use marshal_rs::load;
@@ -219,23 +219,28 @@ pub fn filter_other(
     if let Ok(entry) = entry {
         let filename_os_string: OsString = entry.file_name();
         let filename: &str = unsafe { from_utf8_unchecked(filename_os_string.as_encoded_bytes()) };
-        let (name, _) = filename.split_once('.').unwrap_log();
 
-        if !name.starts_with("Map")
-            && !matches!(name, "Tilesets" | "Animations" | "System" | "Scripts")
-            && filename.ends_with(determine_extension(engine_type))
-        {
-            if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && name == "States" {
-                return None;
-            }
+        if let Some((actual_string, _)) = filename.split_once('.') {
+            let name = actual_string;
 
-            let json: Value = if engine_type == EngineType::New {
-                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+            if !name.starts_with("Map")
+                && !matches!(name, "Tilesets" | "Animations" | "System" | "Scripts")
+                && filename.ends_with(determine_extension(engine_type))
+            {
+                if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && name == "States" {
+                    return None;
+                }
+
+                let json: Value = if engine_type == EngineType::New {
+                    from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                } else {
+                    load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                };
+
+                Some((filename.to_owned(), json))
             } else {
-                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-            };
-
-            Some((filename.to_owned(), json))
+                None
+            }
         } else {
             None
         }
