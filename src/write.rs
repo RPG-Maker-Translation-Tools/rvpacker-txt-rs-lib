@@ -385,7 +385,7 @@ fn write_list(
         }
 
         let value_i: usize = match code {
-            Code::Misc1 | Code::Misc2 => 1,
+            Code::Misc1 | Code::Misc2 | Code::Choice => 1,
             _ => 0,
         };
         let value: &mut Value = &mut list[it][parameters_label][value_i];
@@ -761,7 +761,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                             }
 
                             let value_i: usize = match code {
-                                Code::Misc1 | Code::Misc2 => 1,
+                                Code::Misc1 | Code::Misc2 | Code::Choice => 1,
                                 _ => 0,
                             };
 
