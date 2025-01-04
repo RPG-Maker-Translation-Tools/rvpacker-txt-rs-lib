@@ -945,90 +945,94 @@ pub fn read_other<P: AsRef<Path>>(
                 ]);
             }
 
-            'obj: for obj in obj_arr.as_array().unwrap_log() {
-                let mut prev_variable_type: Option<Variable> = None;
+            if let Some(obj_real_arr) = obj_arr.as_array() {
+                //obj_real_arr = obj_real_arr.unwrap_log();
 
-                for (variable_label, variable_type) in [
-                    (name_label, Variable::Name),
-                    (nickname_label, Variable::Nickname),
-                    (description_label, Variable::Description),
-                    (message1_label, Variable::Message1),
-                    (message2_label, Variable::Message2),
-                    (message3_label, Variable::Message3),
-                    (message4_label, Variable::Message4),
-                    (note_label, Variable::Note),
-                ] {
-                    let value: Option<&Value> = obj.get(variable_label);
+                'obj: for obj in obj_real_arr {
+                    let mut prev_variable_type: Option<Variable> = None;
 
-                    let string: String = {
-                        let mut buf: Vec<u8> = Vec::new();
+                    for (variable_label, variable_type) in [
+                        (name_label, Variable::Name),
+                        (nickname_label, Variable::Nickname),
+                        (description_label, Variable::Description),
+                        (message1_label, Variable::Message1),
+                        (message2_label, Variable::Message2),
+                        (message3_label, Variable::Message3),
+                        (message4_label, Variable::Message4),
+                        (note_label, Variable::Note),
+                    ] {
+                        let value: Option<&Value> = obj.get(variable_label);
 
-                        let string: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => "",
-                        });
+                        let string: String = {
+                            let mut buf: Vec<u8> = Vec::new();
 
-                        let trimmed: &str = string.trim();
+                            let string: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                                Some(obj) => {
+                                    buf = get_object_data(obj);
+                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                }
+                                None => "",
+                            });
 
-                        if trimmed.is_empty() {
-                            continue;
-                        }
+                            let trimmed: &str = string.trim();
 
-                        if variable_type != Variable::Note {
-                            trimmed.to_owned()
-                        } else {
-                            string.to_owned()
-                        }
-                    };
-
-                    let parsed: Option<(String, bool)> =
-                        parse_variable(string, &variable_type, &filename, game_type, engine_type);
-
-                    if let Some((mut parsed, is_continuation_of_description)) = parsed {
-                        if is_continuation_of_description {
-                            if prev_variable_type != Some(Variable::Description) {
+                            if trimmed.is_empty() {
                                 continue;
                             }
 
-                            if let Some(last) = lines_mut_ref.pop() {
-                                lines_mut_ref.insert(last.trim().to_owned() + &parsed);
-                                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                                // TODO: this shit rewrites the translation line but inserts RIGHT original line
-                                // uhhh... so what i actually need to do? i forgot...
-                                if inner_processing_mode == ProcessingMode::Append {
-                                    let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
-                                    lines_map.shift_insert(idx, string_ref, value);
-                                }
+                            if variable_type != Variable::Note {
+                                trimmed.to_owned()
+                            } else {
+                                string.to_owned()
                             }
-                            continue;
+                        };
+
+                        let parsed: Option<(String, bool)> =
+                            parse_variable(string, &variable_type, &filename, game_type, engine_type);
+
+                        if let Some((mut parsed, is_continuation_of_description)) = parsed {
+                            if is_continuation_of_description {
+                                if prev_variable_type != Some(Variable::Description) {
+                                    continue;
+                                }
+
+                                if let Some(last) = lines_mut_ref.pop() {
+                                    lines_mut_ref.insert(last.trim().to_owned() + &parsed);
+                                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+
+                                    // TODO: this shit rewrites the translation line but inserts RIGHT original line
+                                    // uhhh... so what i actually need to do? i forgot...
+                                    if inner_processing_mode == ProcessingMode::Append {
+                                        let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
+                                        lines_map.shift_insert(idx, string_ref, value);
+                                    }
+                                }
+                                continue;
+                            }
+
+                            prev_variable_type = Some(variable_type);
+
+                            if romanize {
+                                parsed = romanize_string(parsed);
+                            }
+
+                            let replaced: String = parsed
+                                .split('\n')
+                                .map(str::trim)
+                                .collect::<Vec<_>>()
+                                .join(NEW_LINE)
+                                .trim()
+                                .to_owned();
+
+                            lines_mut_ref.insert(replaced);
+                            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+
+                            if inner_processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+                                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+                            }
+                        } else if variable_type == Variable::Name {
+                            continue 'obj;
                         }
-
-                        prev_variable_type = Some(variable_type);
-
-                        if romanize {
-                            parsed = romanize_string(parsed);
-                        }
-
-                        let replaced: String = parsed
-                            .split('\n')
-                            .map(str::trim)
-                            .collect::<Vec<_>>()
-                            .join(NEW_LINE)
-                            .trim()
-                            .to_owned();
-
-                        lines_mut_ref.insert(replaced);
-                        let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                        if inner_processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                        }
-                    } else if variable_type == Variable::Name {
-                        continue 'obj;
                     }
                 }
             }
@@ -1505,13 +1509,13 @@ pub fn read_scripts<P: AsRef<Path>>(
     if generate_json {
         write(
             unsafe {
-                scripts_file_path
-                    .as_ref()
+                output_path
                     .parent()
                     .unwrap_unchecked()
                     .parent()
                     .unwrap_unchecked()
-                    .join("json/Scripts.json")
+                    .join("json")
+                    .join("Scripts.json")
             },
             unsafe { to_string(&scripts_entries).unwrap_unchecked() },
         )
