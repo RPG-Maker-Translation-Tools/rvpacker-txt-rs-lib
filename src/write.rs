@@ -476,40 +476,68 @@ fn write_list(
                                 return;
                             }
 
-                            let split: (&str, &str) = parameter_string.split_once('=').unwrap();
-                            let actual_string: &str = split.1.trim();
-                            let mut without_quotes: String = actual_string[1..actual_string.len() - 1].to_owned();
+                            let split: Option<(&str, &str)> = parameter_string.split_once('=');
 
-                            if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
-                                return;
-                            }
+                            if let Some((left, mut actual_string)) = split {
+                                actual_string = actual_string.trim();
+                                let mut without_quotes: String = actual_string[1..actual_string.len() - 1].to_owned();
 
-                            if romanize {
-                                without_quotes = romanize_string(without_quotes);
-                            }
-
-                            let translated: Option<String> = get_translated_parameter(
-                                code,
-                                &without_quotes,
-                                Some(map),
-                                None,
-                                game_type,
-                                engine_type,
-                            );
-
-                            if let Some(mut translated) = translated {
-                                translated = split.0.to_owned() + &translated;
-
-                                if !translated.is_empty() {
-                                    *value = if engine_type == EngineType::New {
-                                        Value::from(&translated)
-                                    } else {
-                                        json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                    };
+                                if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
+                                    return;
                                 }
-                            }
 
-                            continue;
+                                if romanize {
+                                    without_quotes = romanize_string(without_quotes);
+                                }
+
+                                let translated: Option<String> = get_translated_parameter(
+                                    code,
+                                    &without_quotes,
+                                    Some(map),
+                                    None,
+                                    game_type,
+                                    engine_type,
+                                );
+
+                                if let Some(mut translated) = translated {
+                                    translated = left.to_owned() + &translated;
+
+                                    if !translated.is_empty() {
+                                        *value = if engine_type == EngineType::New {
+                                            Value::from(&translated)
+                                        } else {
+                                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                        };
+                                    }
+                                }
+
+                                continue;
+                            } else {
+                                if romanize {
+                                    parameter_string = romanize_string(parameter_string);
+                                }
+
+                                let translated: Option<String> = get_translated_parameter(
+                                    code,
+                                    &parameter_string,
+                                    Some(map),
+                                    None,
+                                    game_type,
+                                    engine_type,
+                                );
+
+                                if let Some(translated) = translated {
+                                    if !translated.is_empty() {
+                                        *value = if engine_type == EngineType::New {
+                                            Value::from(&translated)
+                                        } else {
+                                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                                        };
+                                    }
+                                }
+
+                                continue;
+                            }
                         }
 
                         if romanize {

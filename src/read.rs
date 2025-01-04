@@ -102,13 +102,17 @@ fn parse_parameter(
                     return None;
                 }
 
-                let actual_string: &str = parameter.split_once('=').unwrap().1.trim();
+                let split: Option<(&str, &str)> = parameter.split_once('=');
 
-                // removing the quotes
-                parameter = &actual_string[1..actual_string.len() - 1];
+                if let Some((_, mut actual_string)) = split {
+                    actual_string = actual_string.trim();
 
-                if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
-                    return None;
+                    // removing the quotes
+                    parameter = &actual_string[1..actual_string.len() - 1];
+
+                    if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
+                        return None;
+                    }
                 }
             }
             _ => {}
