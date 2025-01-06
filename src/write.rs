@@ -20,16 +20,15 @@ use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array,
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{read, read_dir, read_to_string, write},
-    hash::BuildHasherDefault,
     io::{Read, Write},
     mem::{take, transmute},
     path::Path,
     str::Chars,
     sync::{Arc, Mutex},
 };
-use xxhash_rust::xxh3::Xxh3;
+use xxhash_rust::xxh3::{Xxh3Builder, Xxh3DefaultBuilder};
 
-type StringHashMap = HashMap<String, String, BuildHasherDefault<Xxh3>>;
+type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 
 fn parse_translation(translation: String) -> StringHashMap {
     HashMap::from_iter(translation.split('\n').enumerate().filter_map(|(i, line)| {
@@ -45,6 +44,36 @@ fn parse_translation(translation: String) -> StringHashMap {
             None
         }
     }))
+}
+
+fn process_parameter(
+    code: Code,
+    mut parameter: String,
+    map: Option<&StringHashMap>,
+    deque: Option<Arc<Mutex<VecDeque<String>>>>,
+    game_type: Option<GameType>,
+    engine_type: EngineType,
+    romanize: bool,
+    value: &mut Value,
+) {
+    if romanize {
+        parameter = romanize_string(parameter);
+    }
+
+    let translated: Option<String> = get_translated_parameter(code, &parameter, map, deque, game_type, engine_type);
+
+    if let Some(mut translated) = translated {
+        if code == Code::Shop {
+            let left: &str = unsafe { parameter.split_once('=').unwrap_unchecked().0 };
+            translated = left.to_owned() + &translated;
+        }
+
+        *value = if engine_type == EngineType::New {
+            Value::from(&translated)
+        } else {
+            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+        };
+    }
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
@@ -95,6 +124,24 @@ fn get_translated_parameter(
             parameter = &parameter[re_match.start()..];
             remaining_strings.push(re_match.as_str().to_owned());
             insert_positions.push(true);
+        }
+
+        match code {
+            Code::Shop => {
+                if !parameter.contains("shop_talk") {
+                    return None;
+                }
+
+                let actual_string: &str = unsafe { parameter.split_once('=').unwrap_unchecked().1 }.trim();
+                let without_quotes: &str = &actual_string[1..actual_string.len() - 1];
+
+                if STRING_IS_ONLY_SYMBOLS_RE.is_match(without_quotes) {
+                    return None;
+                }
+
+                parameter = without_quotes;
+            }
+            _ => {}
         }
     }
 
@@ -308,7 +355,6 @@ fn write_list(
     let mut in_sequence: bool = false;
     let mut lines: Vec<String> = Vec::with_capacity(4);
     let mut item_indices: Vec<usize> = Vec::with_capacity(4);
-    let mut credits_lines: Vec<String> = Vec::new();
 
     for it in 0..list_length {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
@@ -330,14 +376,8 @@ fn write_list(
         };
 
         if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
-            let line: &mut Vec<String> = if !credits_lines.is_empty() {
-                &mut credits_lines
-            } else {
-                &mut lines
-            };
-
-            if !line.is_empty() {
-                let mut joined: String = line.join("\n");
+            if !lines.is_empty() {
+                let mut joined: String = lines.join("\n");
 
                 if romanize {
                     joined = romanize_string(joined)
@@ -349,7 +389,7 @@ fn write_list(
                 if let Some(translated) = translated {
                     let split_vec: Vec<&str> = translated.split('\n').collect();
                     let split_length: usize = split_vec.len();
-                    let line_length: usize = line.len();
+                    let line_length: usize = lines.len();
 
                     for (i, &index) in item_indices.iter().enumerate() {
                         list[index][parameters_label][0] = if i < split_length {
@@ -373,7 +413,7 @@ fn write_list(
                     }
                 }
 
-                line.clear();
+                lines.clear();
                 item_indices.clear();
             }
 
@@ -393,7 +433,7 @@ fn write_list(
         match code {
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
-                    let mut subparameter_string: String = {
+                    let subparameter_string: String = {
                         let mut buf: Vec<u8> = Vec::new();
 
                         let subparameter_string: &str = value[i]
@@ -414,26 +454,20 @@ fn write_list(
                         subparameter_string.to_owned()
                     };
 
-                    if romanize {
-                        subparameter_string = romanize_string(subparameter_string);
-                    }
-
-                    let translated: Option<String> =
-                        get_translated_parameter(code, &subparameter_string, Some(map), None, game_type, engine_type);
-
-                    if let Some(translated) = translated {
-                        if !translated.is_empty() {
-                            value[i] = if engine_type == EngineType::New {
-                                Value::from(&translated)
-                            } else {
-                                json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                            };
-                        }
-                    }
+                    process_parameter(
+                        code,
+                        subparameter_string,
+                        Some(map),
+                        None,
+                        game_type,
+                        engine_type,
+                        romanize,
+                        &mut value[i],
+                    );
                 }
             }
             _ => {
-                let mut parameter_string: String = {
+                let parameter_string: String = {
                     let mut buf: Vec<u8> = Vec::new();
 
                     let parameter_string: &str = value
@@ -455,107 +489,22 @@ fn write_list(
                 };
 
                 match code {
-                    Code::Dialogue => {
+                    Code::Dialogue | Code::Credit => {
                         lines.push(parameter_string);
                         item_indices.push(it);
                         in_sequence = true;
                     }
-                    Code::Credit => {
-                        credits_lines.push(parameter_string);
-                        item_indices.push(it);
-                        in_sequence = true;
-                    }
                     _ => {
-                        if code == Code::Shop {
-                            // TODO: Probably move returns to get_translated_parameter?
-
-                            if parameter_string.starts_with("$game_system.shopback")
-                                || parameter_string.starts_with("$game_system.shop_windowskin")
-                                || !parameter_string.ends_with(['"', '\''])
-                            {
-                                return;
-                            }
-
-                            let split: Option<(&str, &str)> = parameter_string.split_once('=');
-
-                            if let Some((left, mut actual_string)) = split {
-                                actual_string = actual_string.trim();
-                                let mut without_quotes: String = actual_string[1..actual_string.len() - 1].to_owned();
-
-                                if STRING_IS_ONLY_SYMBOLS_RE.is_match(&without_quotes) {
-                                    return;
-                                }
-
-                                if romanize {
-                                    without_quotes = romanize_string(without_quotes);
-                                }
-
-                                let translated: Option<String> = get_translated_parameter(
-                                    code,
-                                    &without_quotes,
-                                    Some(map),
-                                    None,
-                                    game_type,
-                                    engine_type,
-                                );
-
-                                if let Some(mut translated) = translated {
-                                    translated = left.to_owned() + &translated;
-
-                                    if !translated.is_empty() {
-                                        *value = if engine_type == EngineType::New {
-                                            Value::from(&translated)
-                                        } else {
-                                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                        };
-                                    }
-                                }
-
-                                continue;
-                            } else {
-                                if romanize {
-                                    parameter_string = romanize_string(parameter_string);
-                                }
-
-                                let translated: Option<String> = get_translated_parameter(
-                                    code,
-                                    &parameter_string,
-                                    Some(map),
-                                    None,
-                                    game_type,
-                                    engine_type,
-                                );
-
-                                if let Some(translated) = translated {
-                                    if !translated.is_empty() {
-                                        *value = if engine_type == EngineType::New {
-                                            Value::from(&translated)
-                                        } else {
-                                            json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                        };
-                                    }
-                                }
-
-                                continue;
-                            }
-                        }
-
-                        if romanize {
-                            parameter_string = romanize_string(parameter_string);
-                        }
-
-                        let translated: Option<String> =
-                            get_translated_parameter(code, &parameter_string, Some(map), None, game_type, engine_type);
-
-                        if let Some(translated) = translated {
-                            if !translated.is_empty() {
-                                *value = if engine_type == EngineType::New {
-                                    Value::from(&translated)
-                                } else {
-                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                };
-                            }
-                        }
+                        process_parameter(
+                            code,
+                            parameter_string,
+                            Some(map),
+                            None,
+                            game_type,
+                            engine_type,
+                            romanize,
+                            value,
+                        );
                     }
                 }
             }
@@ -680,7 +629,12 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
 
         let mut events_arr: Vec<&mut Value> = if engine_type == EngineType::New {
             // Skipping first element in array as it is null
-            obj[events_label].as_array_mut().unwrap_log().par_iter_mut().skip(1).collect()
+            obj[events_label]
+                .as_array_mut()
+                .unwrap_log()
+                .par_iter_mut()
+                .skip(1)
+                .collect()
         } else {
             obj[events_label]
                 .as_object_mut()
@@ -727,7 +681,9 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                             } else {
                                 !match code {
                                     Code::ChoiceArray => list[it][parameters_label][0][0].is_object(),
-                                    Code::Misc1 | Code::Misc2 | Code::Choice => list[it][parameters_label][1].is_object(),
+                                    Code::Misc1 | Code::Misc2 | Code::Choice => {
+                                        list[it][parameters_label][1].is_object()
+                                    }
                                     _ => list[it][parameters_label][0].is_object(),
                                 }
                             };
@@ -771,8 +727,8 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
 
                                         if split_length > line_length {
                                             let remaining: String = split_vec[line_length - 1..].join("\n");
-                                            list[*unsafe { item_indices.last().unwrap_unchecked() }][parameters_label][0] =
-                                                Value::from(&remaining);
+                                            list[*unsafe { item_indices.last().unwrap_unchecked() }]
+                                                [parameters_label][0] = Value::from(&remaining);
                                         }
                                     }
 
@@ -797,7 +753,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                             match code {
                                 Code::ChoiceArray => {
                                     for i in 0..value.as_array().unwrap_log().len() {
-                                        let mut subparameter_string: String = {
+                                        let subparameter_string: String = {
                                             let mut buf: Vec<u8> = Vec::new();
 
                                             let subparameter_string: &str = value[i]
@@ -818,30 +774,20 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                             subparameter_string.to_owned()
                                         };
 
-                                        if romanize {
-                                            subparameter_string = romanize_string(subparameter_string);
-                                        }
-
-                                        let translated: Option<String> = get_translated_parameter(
+                                        process_parameter(
                                             code,
-                                            &subparameter_string,
+                                            subparameter_string,
                                             None,
                                             Some(lines_deque_mutex.clone()),
                                             game_type,
                                             engine_type,
+                                            romanize,
+                                            &mut value[i],
                                         );
-
-                                        if let Some(translated) = translated {
-                                            value[i] = if engine_type == EngineType::New {
-                                                Value::from(&translated)
-                                            } else {
-                                                json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                            };
-                                        }
                                     }
                                 }
                                 _ => {
-                                    let mut parameter_string: String = {
+                                    let parameter_string: String = {
                                         let mut buf: Vec<u8> = Vec::new();
 
                                         let parameter_string: &str = value
@@ -869,26 +815,16 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                             in_sequence = true;
                                         }
                                         _ => {
-                                            if romanize {
-                                                parameter_string = romanize_string(parameter_string);
-                                            }
-
-                                            let translated: Option<String> = get_translated_parameter(
+                                            process_parameter(
                                                 code,
-                                                &parameter_string,
+                                                parameter_string,
                                                 None,
                                                 Some(lines_deque_mutex.clone()),
                                                 game_type,
                                                 engine_type,
+                                                romanize,
+                                                value,
                                             );
-
-                                            if let Some(translated) = translated {
-                                                *value = if engine_type == EngineType::New {
-                                                    Value::from(&translated)
-                                                } else {
-                                                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
-                                                }
-                                            }
                                         }
                                     }
                                 }
@@ -1234,7 +1170,7 @@ pub fn write_plugins<P: AsRef<Path>>(pluigns_file_path: P, plugins_path: P, outp
         // For now, plugins writing only implemented for Fear & Hunger: Termina, so you should manually translate the plugins.js file if it's not Termina
 
         // Plugins with needed text
-        let plugin_names: HashSet<&str, BuildHasherDefault<Xxh3>> = HashSet::from_iter([
+        let plugin_names: HashSet<&str, Xxh3Builder> = HashSet::from_iter([
             "YEP_BattleEngineCore",
             "YEP_OptionsCore",
             "SRD_NameInputUpgrade",

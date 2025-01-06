@@ -15,7 +15,7 @@ use crate::{
             ENDS_WITH_IF_RE, INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, LISA_PREFIX_RE,
             STRING_IS_ONLY_SYMBOLS_RE,
         },
-        ALLOWED_CODES, ENCODINGS, LINES_SEPARATOR, NEW_LINE,
+        ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, Variable},
 };
@@ -28,16 +28,15 @@ use std::{
     cell::UnsafeCell,
     collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
-    hash::BuildHasherDefault,
     io::Read,
     mem::transmute,
     path::Path,
     str::Chars,
 };
-use xxhash_rust::xxh3::Xxh3;
+use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
-type Xxh3IndexSet = IndexSet<String, BuildHasherDefault<Xxh3>>;
-type Xxh3IndexMap<'a, 'b> = IndexMap<&'a str, &'b str, BuildHasherDefault<Xxh3>>;
+type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
+type IndexMapXxh3<'a> = IndexMap<&'a str, &'a str, Xxh3DefaultBuilder>;
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
 fn parse_parameter(
@@ -95,24 +94,19 @@ fn parse_parameter(
 
         match code {
             Code::Shop => {
-                if parameter.starts_with("$game_system.shopback")
-                    || parameter.starts_with("$game_system.shop_windowskin")
-                    || !parameter.ends_with(['"', '\''])
-                {
+                if !parameter.contains("shop_talk") {
                     return None;
                 }
 
-                let split: Option<(&str, &str)> = parameter.split_once('=');
+                let (_, mut actual_string) = unsafe { parameter.split_once('=').unwrap_unchecked() };
 
-                if let Some((_, mut actual_string)) = split {
-                    actual_string = actual_string.trim();
+                actual_string = actual_string.trim();
 
-                    // removing the quotes
-                    parameter = &actual_string[1..actual_string.len() - 1];
+                // removing the quotes
+                parameter = &actual_string[1..actual_string.len() - 1];
 
-                    if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
-                        return None;
-                    }
+                if parameter.is_empty() || STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
+                    return None;
                 }
             }
             _ => {}
@@ -313,15 +307,33 @@ fn parse_list<'a>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
     (code_label, parameters_label): (&str, &str),
-    set: &'a UnsafeCell<Xxh3IndexSet>,
-    map: &'a mut Xxh3IndexMap,
+    set: &'a UnsafeCell<IndexSetXxh3>,
+    map: &'a mut IndexMapXxh3,
 ) {
     let mut in_sequence: bool = false;
-    let mut lines: Vec<String> = Vec::with_capacity(4);
-    let mut credits_lines: Vec<String> = Vec::new();
 
-    let set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *set.get() };
-    let set_ref: &Xxh3IndexSet = unsafe { &*set.get() };
+    let mut lines: Vec<&str> = Vec::with_capacity(4);
+    let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
+
+    let set_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *set.get() };
+    let set_ref: &IndexSetXxh3 = unsafe { &*set.get() };
+
+    let mut process_parameter = |code: Code, parameter: &str| {
+        let parsed: Option<String> = parse_parameter(code, parameter, game_type, engine_type);
+
+        if let Some(mut parsed) = parsed {
+            if romanize {
+                parsed = romanize_string(parsed);
+            }
+
+            set_mut_ref.insert(parsed);
+            let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
+
+            if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
+                map.shift_insert(set_ref.len() - 1, string_ref, "");
+            }
+        }
+    };
 
     for item in list {
         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
@@ -333,31 +345,13 @@ fn parse_list<'a>(
         };
 
         if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
-            let line: &mut Vec<String> = if !credits_lines.is_empty() {
-                &mut credits_lines
-            } else {
-                &mut lines
-            };
+            if !lines.is_empty() {
+                let joined: String = lines.join(NEW_LINE);
 
-            if !line.is_empty() {
-                let mut joined: String = line.join(NEW_LINE);
+                process_parameter(Code::Dialogue, &joined);
 
-                if romanize {
-                    joined = romanize_string(joined);
-                }
-
-                let parsed: Option<String> = parse_parameter(Code::Dialogue, &joined, game_type, engine_type);
-
-                if let Some(parsed) = parsed {
-                    set_mut_ref.insert(parsed);
-                    let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
-
-                    if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
-                        map.shift_insert(set_ref.len() - 1, string_ref, "");
-                    }
-                }
-
-                line.clear();
+                lines.clear();
+                unsafe { &mut *buf.get() }.clear();
             }
 
             in_sequence = false;
@@ -378,89 +372,49 @@ fn parse_list<'a>(
         match code {
             Code::ChoiceArray => {
                 for i in 0..value.as_array().unwrap_log().len() {
-                    let subparameter_string: String = {
-                        let mut buf: Vec<u8> = Vec::new();
-
-                        let subparameter_string: &str = value[i]
-                            .as_str()
-                            .unwrap_or_else(|| match value[i].as_object() {
-                                Some(obj) => {
-                                    buf = get_object_data(obj);
-                                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                                }
-                                None => unreachable!(),
-                            })
-                            .trim();
-
-                        if subparameter_string.is_empty() {
-                            continue;
-                        }
-
-                        subparameter_string.to_owned()
-                    };
-
-                    let parsed: Option<String> = parse_parameter(code, &subparameter_string, game_type, engine_type);
-
-                    if let Some(mut parsed) = parsed {
-                        if romanize {
-                            parsed = romanize_string(parsed);
-                        }
-
-                        set_mut_ref.insert(parsed);
-                        let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
-
-                        if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
-                            map.shift_insert(set_ref.len() - 1, string_ref, "");
-                        }
-                    }
-                }
-            }
-            _ => {
-                let parameter_string: String = {
                     let mut buf: Vec<u8> = Vec::new();
 
-                    let parameter_string: &str = value
+                    let subparameter_string: &str = value[i]
                         .as_str()
-                        .unwrap_or_else(|| match value.as_object() {
+                        .unwrap_or_else(|| match value[i].as_object() {
                             Some(obj) => {
                                 buf = get_object_data(obj);
                                 unsafe { std::str::from_utf8_unchecked(&buf) }
                             }
-                            None => "",
+                            None => unreachable!(),
                         })
                         .trim();
 
-                    if code != Code::Credit && parameter_string.is_empty() {
+                    if subparameter_string.is_empty() {
                         continue;
                     }
 
-                    parameter_string.to_owned()
-                };
+                    process_parameter(code, subparameter_string);
+                }
+            }
+            _ => {
+                let parameter_string: &str = value
+                    .as_str()
+                    .unwrap_or_else(|| match value.as_object() {
+                        Some(obj) => {
+                            unsafe { &mut *buf.get() }.push(get_object_data(obj));
+                            unsafe { std::str::from_utf8_unchecked(&(*buf.get())[lines.len()]) }
+                        }
+                        None => "",
+                    })
+                    .trim();
+
+                if code != Code::Credit && parameter_string.is_empty() {
+                    continue;
+                }
 
                 match code {
-                    Code::Dialogue => {
+                    Code::Dialogue | Code::Credit => {
                         lines.push(parameter_string);
                         in_sequence = true;
                     }
-                    Code::Credit => {
-                        credits_lines.push(parameter_string);
-                        in_sequence = true;
-                    }
                     _ => {
-                        let parsed: Option<String> = parse_parameter(code, &parameter_string, game_type, engine_type);
-
-                        if let Some(mut parsed) = parsed {
-                            if romanize {
-                                parsed = romanize_string(parsed);
-                            }
-
-                            set_mut_ref.insert(parsed);
-                            let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
-
-                            if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
-                                map.shift_insert(set_ref.len() - 1, string_ref, "");
-                            }
-                        }
+                        process_parameter(code, parameter_string);
                     }
                 }
             }
@@ -504,13 +458,13 @@ pub fn read_map<P: AsRef<Path>>(
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
     // When maps processing mode is separate, for each new map this
     // set is drained and its data passed to translation_lines_vec.
-    let translation_lines_set: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
-    let lines_set_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *translation_lines_set.get() };
-    let lines_set_ref: &Xxh3IndexSet = unsafe { &*translation_lines_set.get() };
+    let translation_lines_set: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
+    let lines_set_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *translation_lines_set.get() };
+    let lines_set_ref: &IndexSetXxh3 = unsafe { &*translation_lines_set.get() };
 
     // Allocated when processing mode is APPEND.
     // Reads the transaltion from existing .txt file and then appends new lines.
-    let mut translation_map: Xxh3IndexMap = IndexMap::default();
+    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
     // Allocated when maps processing mode is PRESERVE.
     let mut names_deque: VecDeque<String> = VecDeque::new();
@@ -625,6 +579,28 @@ pub fn read_map<P: AsRef<Path>>(
             )
         };
 
+        let mut process_parameter_preserve = |code: Code, parameter: &str| {
+            let parsed: Option<String> = parse_parameter(code, parameter, game_type, engine_type);
+
+            if let Some(mut parsed) = parsed {
+                if romanize {
+                    parsed = romanize_string(parsed);
+                }
+
+                if processing_mode == ProcessingMode::Append {
+                    if let Some((original, _)) = translation_map_vec.get(lines_pos) {
+                        if *original != parsed {
+                            translation_map_vec.insert(lines_pos, (parsed, String::new()));
+                        }
+                    }
+                } else {
+                    translation_map_vec.push((parsed, String::new()));
+                }
+
+                lines_pos += 1;
+            }
+        };
+
         for event in events_arr {
             if !event[pages_label].is_array() {
                 continue;
@@ -634,7 +610,9 @@ pub fn read_map<P: AsRef<Path>>(
                 if maps_processing_mode == MapsProcessingMode::Preserve {
                     let list: &Array = page[list_label].as_array().unwrap_log();
                     let mut in_sequence: bool = false;
-                    let mut line: Vec<String> = Vec::with_capacity(4);
+
+                    let mut line: Vec<&str> = Vec::with_capacity(4);
+                    let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
 
                     for item in list {
                         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
@@ -647,30 +625,12 @@ pub fn read_map<P: AsRef<Path>>(
 
                         if in_sequence && code != Code::Dialogue {
                             if !line.is_empty() {
-                                let mut joined: String = line.join(NEW_LINE);
+                                let joined: String = line.join(NEW_LINE);
 
-                                if romanize {
-                                    joined = romanize_string(joined);
-                                }
-
-                                let parsed: Option<String> =
-                                    parse_parameter(Code::Dialogue, &joined, game_type, engine_type);
-
-                                if let Some(parsed) = parsed {
-                                    if processing_mode == ProcessingMode::Append {
-                                        if let Some((original, _)) = translation_map_vec.get(lines_pos) {
-                                            if *original != parsed {
-                                                translation_map_vec.insert(lines_pos, (parsed, String::new()));
-                                            }
-                                        }
-                                    } else {
-                                        translation_map_vec.push((parsed, String::new()));
-                                    }
-
-                                    lines_pos += 1;
-                                }
+                                process_parameter_preserve(Code::Dialogue, &joined);
 
                                 line.clear();
+                                unsafe { (*buf.get()).clear() }
                             }
 
                             in_sequence = false;
@@ -692,70 +652,41 @@ pub fn read_map<P: AsRef<Path>>(
                         match code {
                             Code::ChoiceArray => {
                                 for i in 0..value.as_array().unwrap_log().len() {
-                                    let subparameter_string: String = {
-                                        let mut buf: Vec<u8> = Vec::new();
-
-                                        let subparameter_string: &str = value[i]
-                                            .as_str()
-                                            .unwrap_or_else(|| match value[i].as_object() {
-                                                Some(obj) => {
-                                                    buf = get_object_data(obj);
-                                                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                                                }
-                                                None => unreachable!(),
-                                            })
-                                            .trim();
-
-                                        if subparameter_string.is_empty() {
-                                            continue;
-                                        }
-
-                                        subparameter_string.to_owned()
-                                    };
-
-                                    let parsed: Option<String> =
-                                        parse_parameter(code, &subparameter_string, game_type, engine_type);
-
-                                    if let Some(mut parsed) = parsed {
-                                        if romanize {
-                                            parsed = romanize_string(parsed);
-                                        }
-
-                                        if processing_mode == ProcessingMode::Append {
-                                            if let Some((o, _)) = translation_map_vec.get(lines_pos) {
-                                                if *o != parsed {
-                                                    translation_map_vec.insert(lines_pos, (parsed, String::new()));
-                                                }
-                                            }
-                                        } else {
-                                            translation_map_vec.push((parsed, String::new()));
-                                        }
-
-                                        lines_pos += 1;
-                                    }
-                                }
-                            }
-                            _ => {
-                                let parameter_string: String = {
                                     let mut buf: Vec<u8> = Vec::new();
 
-                                    let parameter_string: &str = value
+                                    let subparameter_string: &str = value[i]
                                         .as_str()
-                                        .unwrap_or_else(|| match value.as_object() {
+                                        .unwrap_or_else(|| match value[i].as_object() {
                                             Some(obj) => {
                                                 buf = get_object_data(obj);
                                                 unsafe { std::str::from_utf8_unchecked(&buf) }
                                             }
-                                            None => "",
+                                            None => unreachable!(),
                                         })
                                         .trim();
 
-                                    if parameter_string.is_empty() {
+                                    if subparameter_string.is_empty() {
                                         continue;
                                     }
 
-                                    parameter_string.to_owned()
-                                };
+                                    process_parameter_preserve(code, subparameter_string);
+                                }
+                            }
+                            _ => {
+                                let parameter_string: &str = value
+                                    .as_str()
+                                    .unwrap_or_else(|| match value.as_object() {
+                                        Some(obj) => {
+                                            unsafe { (*buf.get()).push(get_object_data(obj)) };
+                                            unsafe { std::str::from_utf8_unchecked(&(*buf.get())[line.len()]) }
+                                        }
+                                        None => "",
+                                    })
+                                    .trim();
+
+                                if parameter_string.is_empty() {
+                                    continue;
+                                }
 
                                 match code {
                                     Code::Dialogue => {
@@ -763,26 +694,7 @@ pub fn read_map<P: AsRef<Path>>(
                                         in_sequence = true;
                                     }
                                     _ => {
-                                        let parsed: Option<String> =
-                                            parse_parameter(code, &parameter_string, game_type, engine_type);
-
-                                        if let Some(mut parsed) = parsed {
-                                            if romanize {
-                                                parsed = romanize_string(parsed);
-                                            }
-
-                                            if processing_mode == ProcessingMode::Append {
-                                                if let Some((original, _)) = translation_map_vec.get(lines_pos) {
-                                                    if *original != parsed {
-                                                        translation_map_vec.insert(lines_pos, (parsed, String::new()));
-                                                    }
-                                                }
-                                            } else {
-                                                translation_map_vec.push((parsed, String::new()));
-                                            }
-
-                                            lines_pos += 1;
-                                        }
+                                        process_parameter_preserve(code, parameter_string);
                                     }
                                 }
                             }
@@ -909,13 +821,13 @@ pub fn read_other<P: AsRef<Path>>(
             continue;
         }
 
-        let lines: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
-        let lines_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines.get() };
-        let lines_ref: &Xxh3IndexSet = unsafe { &*lines.get() };
+        let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
+        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
+        let lines_ref: &IndexSetXxh3 = unsafe { &*lines.get() };
 
         let translation: String;
 
-        let mut lines_map: Xxh3IndexMap = IndexMap::default();
+        let mut lines_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
@@ -1134,17 +1046,18 @@ pub fn read_system<P: AsRef<Path>>(
     generate_json: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
+    println!("{}", txt_output_path.display());
 
     if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
         println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
 
-    let lines: UnsafeCell<Xxh3IndexSet> = UnsafeCell::new(IndexSet::default());
-    let lines_mut_ref: &mut Xxh3IndexSet = unsafe { &mut *lines.get() };
-    let lines_ref: &Xxh3IndexSet = unsafe { &*lines.get() };
+    let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
+    let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
+    let lines_ref: &IndexSetXxh3 = unsafe { &*lines.get() };
 
-    let mut lines_map: Xxh3IndexMap = IndexMap::default();
+    let mut lines_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
     let translation: String;
 
@@ -1166,38 +1079,8 @@ pub fn read_system<P: AsRef<Path>>(
         }
     }
 
-    let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
-    };
-
-    if engine_type != EngineType::New {
-        if let Some(mut str) = obj["__symbol__currency_unit"].as_str() {
-            str = str.trim();
-
-            if !str.is_empty() {
-                let mut string: String = str.to_owned();
-
-                if romanize {
-                    string = romanize_string(string)
-                }
-
-                lines_mut_ref.insert(string);
-                let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
-
-                if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                    lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-                }
-            }
-        }
-    }
-
-    let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
-        get_system_labels(engine_type);
-
     let mut parse_str = |value: &Value| {
-        let str: String = {
+        let mut string: String = {
             let mut buf: Vec<u8> = Vec::new();
 
             let str: &str = value
@@ -1207,7 +1090,7 @@ pub fn read_system<P: AsRef<Path>>(
                         buf = get_object_data(obj);
                         unsafe { std::str::from_utf8_unchecked(&buf) }
                     }
-                    None => unreachable!(),
+                    None => "",
                 })
                 .trim();
 
@@ -1217,8 +1100,6 @@ pub fn read_system<P: AsRef<Path>>(
 
             str.to_owned()
         };
-
-        let mut string: String = str.to_owned();
 
         if romanize {
             string = romanize_string(string)
@@ -1232,6 +1113,15 @@ pub fn read_system<P: AsRef<Path>>(
         }
     };
 
+    let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
+        get_system_labels(engine_type);
+
+    let obj: Value = if engine_type == EngineType::New {
+        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
+    } else {
+        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
+    };
+
     // Armor types and elements - mostly system strings, but may be required for some purposes
     for label in [
         armor_types_label,
@@ -1241,7 +1131,7 @@ pub fn read_system<P: AsRef<Path>>(
         "equipTypes",
     ] {
         if label == "equipTypes" && engine_type != EngineType::New {
-            return;
+            continue;
         }
 
         if let Some(arr) = obj[label].as_array() {
@@ -1274,6 +1164,10 @@ pub fn read_system<P: AsRef<Path>>(
                 parse_str(value);
             }
         }
+    }
+
+    if engine_type != EngineType::New {
+        parse_str(&obj["__symbol__currency_unit"]);
     }
 
     // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
@@ -1380,7 +1274,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     let lines_ref: &Vec<String> = unsafe { &*lines.get() };
     let lines_mut_ref: &mut Vec<String> = unsafe { &mut *lines.get() };
 
-    let mut lines_map: Vec<(&str, &str)> = Vec::new();
+    let mut translation_map: Vec<(&str, &str)> = Vec::new();
 
     let translation: String;
 
@@ -1388,7 +1282,7 @@ pub fn read_scripts<P: AsRef<Path>>(
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
 
-            lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
+            translation_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     Some((original, translated))
                 } else {
@@ -1433,7 +1327,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     }
 
     let codes_text: String = codes_content.join("");
-    let extracted_strings: Xxh3IndexSet = extract_strings(&codes_text, false).0;
+    let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
 
     let regexes: [Regex; 11] = unsafe {
         [
@@ -1471,8 +1365,8 @@ pub fn read_scripts<P: AsRef<Path>>(
         lines_mut_ref.push(extracted);
         let last: &String = unsafe { lines_ref.last().unwrap_unchecked() };
 
-        if processing_mode == ProcessingMode::Append && lines_map.get(i).is_some_and(|x| last != x.0) {
-            lines_map.insert(lines_ref.len() - 1, (last, ""));
+        if processing_mode == ProcessingMode::Append && translation_map.get(i).is_some_and(|x| last != x.0) {
+            translation_map.insert(lines_ref.len() - 1, (last, ""));
         }
 
         i += 1;
@@ -1480,7 +1374,7 @@ pub fn read_scripts<P: AsRef<Path>>(
 
     let mut output_content: String = if processing_mode == ProcessingMode::Append {
         String::from_iter(
-            lines_map
+            translation_map
                 .into_iter()
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )

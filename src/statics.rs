@@ -1,3 +1,5 @@
+use xxhash_rust::xxh3::Xxh3DefaultBuilder;
+
 pub mod localization {
     // read messages
     pub const FILES_ARE_NOT_PARSED_MSG: &str =
@@ -29,17 +31,19 @@ pub mod regexes {
         Lazy::new(|| unsafe { Regex::new(r"^[+-]?[0-9]+$|^///|---|restrict eval").unwrap_unchecked() });
 }
 
-/// 401 - Dialogue line
+/// 401 - Dialogue line.
 ///
-/// 102 - Dialogue choices array
+/// 102 - Dialogue choices array.
 ///
-/// 402 - One of the dialogue choices from the array (**WRITE ONLY!**)
+/// 402 - One of the dialogue choices from the array. (**WRITE ONLY!**)
 ///
-/// 356 - System line, special text (that one needs clarification)
+/// 405 - Credits lines. (**probably NEWER ENGINES ONLY!**)
 ///
-/// 655 - Line displayed in shop - probably from an external script (**OLDER ENGINES ONLY!**)
+/// 356 - System line, special text. (that one needs clarification)
 ///
-/// 324, 320 - Some used in-game line (**probably NEWER ENGINES ONLY!**)
+/// 655 - Line displayed in shop - probably from an external script. (**OLDER ENGINES ONLY!**)
+///
+/// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
 pub const ALLOWED_CODES: [u16; 8] = [102, 320, 324, 356, 401, 402, 405, 655];
 pub const NEW_LINE: &str = r"\#";
 pub const LINES_SEPARATOR: &str = "<#>";
@@ -51,3 +55,5 @@ pub const ENCODINGS: [&encoding_rs::Encoding; 5] = [
     encoding_rs::SHIFT_JIS,
     encoding_rs::GB18030,
 ];
+
+pub const HASHER: Xxh3DefaultBuilder = Xxh3DefaultBuilder::new();

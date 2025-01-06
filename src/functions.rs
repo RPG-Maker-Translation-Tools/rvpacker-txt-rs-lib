@@ -1,5 +1,5 @@
 use crate::{
-    statics::NEW_LINE,
+    statics::{HASHER, NEW_LINE},
     types::{EachLine, EngineType, GameType, ResultExt},
 };
 use indexmap::IndexSet;
@@ -8,10 +8,9 @@ use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
     ffi::OsString,
     fs::{read, read_to_string, DirEntry},
-    hash::BuildHasherDefault,
     str::from_utf8_unchecked,
 };
-use xxhash_rust::xxh3::Xxh3;
+use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 pub fn romanize_string(string: String) -> String {
     let mut result: String = String::with_capacity(string.capacity());
@@ -97,7 +96,7 @@ pub fn get_object_data(object: &Object) -> Vec<u8> {
 pub fn extract_strings(
     ruby_code: &str,
     write: bool,
-) -> (IndexSet<String, BuildHasherDefault<Xxh3>>, Vec<std::ops::Range<usize>>) {
+) -> (IndexSet<String, Xxh3DefaultBuilder>, Vec<std::ops::Range<usize>>) {
     fn is_escaped(index: usize, string: &str) -> bool {
         let mut backslash_count: u8 = 0;
 
@@ -112,7 +111,7 @@ pub fn extract_strings(
         backslash_count % 2 == 1
     }
 
-    let mut strings: IndexSet<String, BuildHasherDefault<Xxh3>> = IndexSet::default();
+    let mut strings: IndexSet<String, Xxh3DefaultBuilder> = IndexSet::with_hasher(HASHER);
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
     let mut inside_string: bool = false;
     let mut inside_multiline_comment: bool = false;
@@ -192,6 +191,10 @@ pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineT
         let filename: OsString = entry.file_name();
         let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
+        if !entry.file_type().unwrap_log().is_file() {
+            return None;
+        };
+
         if filename_str.starts_with("Map")
             && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
             && filename_str.ends_with(determine_extension(engine_type))
@@ -220,25 +223,27 @@ pub fn filter_other(
         let filename: OsString = entry.file_name();
         let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
-        if let Some((name, _)) = filename_str.split_once('.') {
-            if !name.starts_with("Map")
-                && !matches!(name, "Tilesets" | "Animations" | "System" | "Scripts")
-                && filename_str.ends_with(determine_extension(engine_type))
-            {
-                if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && name == "States" {
-                    return None;
-                }
+        if !entry.file_type().unwrap_log().is_file() {
+            return None;
+        };
 
-                let json: Value = if engine_type == EngineType::New {
-                    from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
-                } else {
-                    load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
-                };
+        let (name, _) = unsafe { filename_str.split_once('.').unwrap_unchecked() };
 
-                Some((filename_str.to_owned(), json))
-            } else {
-                None
+        if !name.starts_with("Map")
+            && !matches!(name, "Areas" | "Tilesets" | "Animations" | "System" | "Scripts")
+            && filename_str.ends_with(determine_extension(engine_type))
+        {
+            if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && name == "States" {
+                return None;
             }
+
+            let json: Value = if engine_type == EngineType::New {
+                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+            } else {
+                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+            };
+
+            Some((filename_str.to_owned(), json))
         } else {
             None
         }
