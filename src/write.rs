@@ -1054,7 +1054,16 @@ pub fn write_system<P: AsRef<Path>>(
     let translation_map: StringHashMap = parse_translation(translation);
 
     let replace_value = |value: &mut Value| {
-        if let Some(str) = value.as_str() {
+let mut buf: Vec<u8> = Vec::new();
+        let str: &str = value.as_str().unwrap_or_else(|| {
+        if let Some(obj) = value.as_object() {
+buf = get_object_data(obj);
+                unsafe { std::str::from_utf8_unchecked(&buf) }
+            } else {
+                ""
+            }
+        });
+
             let mut string: String = str.trim().to_owned();
 
             if !string.is_empty() {
@@ -1063,8 +1072,11 @@ pub fn write_system<P: AsRef<Path>>(
                 }
 
                 if let Some(translated) = translation_map.get(&string) {
-                    *value = Value::from(translated);
-                }
+                    *value = if engine_type == EngineType::New {
+Value::from(translated)
+                } else {
+                    json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
+                };
             }
         }
     };
@@ -1085,15 +1097,9 @@ pub fn write_system<P: AsRef<Path>>(
         weapon_types_label,
         "equipTypes",
     ] {
-        if label == "equipTypes" && engine_type != EngineType::New {
-            return;
-        }
-
-        obj[label]
-            .as_array_mut()
-            .unwrap_log()
-            .iter_mut()
-            .for_each(replace_value);
+        if let Some(arr) = obj[label].as_array_mut() {
+            arr.iter_mut().for_each(replace_value);
+}
     }
 
     obj[terms_label]
@@ -1105,8 +1111,12 @@ pub fn write_system<P: AsRef<Path>>(
                 return;
             }
 
-            if key != "messages" {
-                value.as_array_mut().unwrap_log().par_iter_mut().for_each(replace_value);
+if engine_type != EngineType::New {
+                replace_value(value)
+            } else if key != "messages" {
+if let Some(arr) = value.as_array_mut() {
+                    arr.par_iter_mut().for_each(replace_value);
+}
             } else {
                 if !value.is_object() {
                     return;
