@@ -158,7 +158,7 @@ pub fn extract_strings(
                     .replace("\r\n", NEW_LINE)
                     .replace('\n', NEW_LINE);
 
-                if !strings.contains(&extracted_string) {
+                if !extracted_string.is_empty() && !strings.contains(&extracted_string) {
                     strings.insert(extracted_string);
 
                     if write {
