@@ -1127,10 +1127,6 @@ pub fn read_system<P: AsRef<Path>>(
         weapon_types_label,
         "equipTypes",
     ] {
-        if label == "equipTypes" && engine_type != EngineType::New {
-            continue;
-        }
-
         if let Some(arr) = obj[label].as_array() {
             for value in arr {
                 parse_str(value)
