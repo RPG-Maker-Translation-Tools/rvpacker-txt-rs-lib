@@ -2,8 +2,7 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 pub mod localization {
     // read messages
-    pub const FILES_ARE_NOT_PARSED_MSG: &str =
-        "Files aren't already parsed. Continuing as if --mode append argument was omitted.";
+    pub const FILES_ARE_NOT_PARSED_MSG: &str = "Files aren't already parsed. Skipping processing.";
     pub const PARSED_FILE_MSG: &str = "Parsed file";
     pub const FILE_ALREADY_EXISTS_MSG: &str = "file already exists. If you want to forcefully re-read files or append \
                                                new text, use --mode force or --mode append arguments.";
