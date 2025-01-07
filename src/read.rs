@@ -1140,7 +1140,7 @@ pub fn read_system<P: AsRef<Path>>(
 
     // Game terms vocabulary
     for (key, value) in obj[terms_label].as_object().unwrap_log() {
-        if !key.starts_with("__symbol__") {
+        if engine_type != EngineType::New && !key.starts_with("__symbol__") {
             continue;
         }
 
