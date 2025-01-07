@@ -12,6 +12,7 @@ pub mod localization {
     pub const COULD_NOT_SPLIT_LINE_MSG: &str =
         "Couldn't split line to original and translated part.\nThe line won't be written to the output file.";
     pub const AT_POSITION_MSG: &str = "At position:";
+    pub const IN_FILE_MSG: &str = "In file:";
 }
 
 pub mod regexes {

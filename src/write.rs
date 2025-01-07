@@ -7,7 +7,7 @@ use crate::{
         get_other_labels, get_system_labels, romanize_string,
     },
     statics::{
-        localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, WROTE_FILE_MSG},
+        localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
@@ -30,7 +30,7 @@ use xxhash_rust::xxh3::{Xxh3Builder, Xxh3DefaultBuilder};
 
 type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 
-fn parse_translation(translation: String) -> StringHashMap {
+fn parse_translation(translation: String, file: &str) -> StringHashMap {
     HashMap::from_iter(translation.split('\n').enumerate().filter_map(|(i, line)| {
         if line.starts_with("<!--") {
             None
@@ -44,7 +44,10 @@ fn parse_translation(translation: String) -> StringHashMap {
                 ))
             }
         } else {
-            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
+            eprintln!(
+                "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
+                i = i + 1
+            );
             None
         }
     }))
@@ -553,7 +556,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                         translation_maps.push(take(&mut translation_map));
                     }
                 } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
             } else if !line.starts_with("<!--") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -570,7 +573,10 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                         );
                     }
                 } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                    eprintln!(
+                        "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} maps.txt",
+                        i = i + 1
+                    );
                 }
             }
         }
@@ -905,13 +911,11 @@ pub fn write_other<P: AsRef<Path> + std::marker::Sync>(
         .filter_map(|entry| filter_other(entry, engine_type, game_type));
 
     other_obj_arr_iter.for_each(|(filename, mut obj_arr)| {
-        let translation: String = read_to_string(
-            other_path
-                .as_ref()
-                .join(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt"),
-        )
-        .unwrap_log();
-        let translation_map: StringHashMap = parse_translation(translation);
+        let txt_filename: &str =
+            &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
+
+        let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
+        let translation_map: StringHashMap = parse_translation(translation, txt_filename);
 
         // Other files except CommonEvents and Troops have the structure that consists
         // of name, nickname, description and note
@@ -1051,29 +1055,29 @@ pub fn write_system<P: AsRef<Path>>(
     let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
 
     let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
-    let translation_map: StringHashMap = parse_translation(translation);
+    let translation_map: StringHashMap = parse_translation(translation, "system.txt");
 
     let replace_value = |value: &mut Value| {
-let mut buf: Vec<u8> = Vec::new();
+        let mut buf: Vec<u8> = Vec::new();
         let str: &str = value.as_str().unwrap_or_else(|| {
-        if let Some(obj) = value.as_object() {
-buf = get_object_data(obj);
+            if let Some(obj) = value.as_object() {
+                buf = get_object_data(obj);
                 unsafe { std::str::from_utf8_unchecked(&buf) }
             } else {
                 ""
             }
         });
 
-            let mut string: String = str.trim().to_owned();
+        let mut string: String = str.trim().to_owned();
 
-            if !string.is_empty() {
-                if romanize {
-                    string = romanize_string(string);
-                }
+        if !string.is_empty() {
+            if romanize {
+                string = romanize_string(string);
+            }
 
-                if let Some(translated) = translation_map.get(&string) {
-                    *value = if engine_type == EngineType::New {
-Value::from(translated)
+            if let Some(translated) = translation_map.get(&string) {
+                *value = if engine_type == EngineType::New {
+                    Value::from(translated)
                 } else {
                     json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
                 };
@@ -1099,7 +1103,7 @@ Value::from(translated)
     ] {
         if let Some(arr) = obj[label].as_array_mut() {
             arr.iter_mut().for_each(replace_value);
-}
+        }
     }
 
     obj[terms_label]
@@ -1111,12 +1115,12 @@ Value::from(translated)
                 return;
             }
 
-if engine_type != EngineType::New {
+            if engine_type != EngineType::New {
                 replace_value(value)
             } else if key != "messages" {
-if let Some(arr) = value.as_array_mut() {
+                if let Some(arr) = value.as_array_mut() {
                     arr.par_iter_mut().for_each(replace_value);
-}
+                }
             } else {
                 if !value.is_object() {
                     return;
@@ -1168,7 +1172,7 @@ if let Some(arr) = value.as_array_mut() {
 /// * `logging` - whether to log or not
 pub fn write_plugins<P: AsRef<Path>>(pluigns_file_path: P, plugins_path: P, output_path: P, logging: bool) {
     let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-    let translation_map: StringHashMap = parse_translation(translation);
+    let translation_map: StringHashMap = parse_translation(translation, "plugins.txt");
 
     let mut obj_arr: Vec<Object> = from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
 
@@ -1263,7 +1267,7 @@ pub fn write_scripts<P: AsRef<Path>>(
     engine_type: EngineType,
 ) {
     let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-    let translation_map: StringHashMap = parse_translation(translation);
+    let translation_map: StringHashMap = parse_translation(translation, "scripts.txt");
 
     let mut script_entries: Value =
         load(&read(&scripts_file_path).unwrap_log(), Some(StringMode::Binary), None).unwrap_log();
