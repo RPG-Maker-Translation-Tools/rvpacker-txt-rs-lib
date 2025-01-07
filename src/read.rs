@@ -1044,7 +1044,6 @@ pub fn read_system<P: AsRef<Path>>(
     generate_json: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
-    println!("{}", txt_output_path.display());
 
     if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
         println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
