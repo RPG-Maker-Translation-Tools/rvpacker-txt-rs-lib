@@ -441,7 +441,7 @@ pub fn read_map<P: AsRef<Path>>(
     logging: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
-    mut processing_mode: ProcessingMode,
+    processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("maps.txt");
@@ -498,7 +498,7 @@ pub fn read_map<P: AsRef<Path>>(
             }
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
-            processing_mode = ProcessingMode::Default;
+            return;
         }
     };
 
@@ -804,8 +804,6 @@ pub fn read_other<P: AsRef<Path>>(
         parameters_label,
     ) = get_other_labels(engine_type);
 
-    let mut inner_processing_mode: ProcessingMode = processing_mode;
-
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap().0.to_owned();
         let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
@@ -843,7 +841,7 @@ pub fn read_other<P: AsRef<Path>>(
                 }));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
-                inner_processing_mode = ProcessingMode::Default;
+                continue;
             }
         }
 
@@ -917,7 +915,7 @@ pub fn read_other<P: AsRef<Path>>(
 
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
                                     // uhhh... so what i actually need to do? i forgot...
-                                    if inner_processing_mode == ProcessingMode::Append {
+                                    if processing_mode == ProcessingMode::Append {
                                         let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
                                         lines_map.shift_insert(idx, string_ref, value);
                                     }
@@ -942,7 +940,7 @@ pub fn read_other<P: AsRef<Path>>(
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-                            if inner_processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+                            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
                                 lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
                             }
                         } else if variable_type == Variable::Name {
@@ -1041,7 +1039,7 @@ pub fn read_system<P: AsRef<Path>>(
     output_path: P,
     romanize: bool,
     logging: bool,
-    mut processing_mode: ProcessingMode,
+    processing_mode: ProcessingMode,
     engine_type: EngineType,
     generate_json: bool,
 ) {
@@ -1075,7 +1073,7 @@ pub fn read_system<P: AsRef<Path>>(
             }));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
-            processing_mode = ProcessingMode::Default;
+            return;
         }
     }
 
@@ -1260,7 +1258,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     output_path: P,
     romanize: bool,
     logging: bool,
-    mut processing_mode: ProcessingMode,
+    processing_mode: ProcessingMode,
     generate_json: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
@@ -1292,7 +1290,7 @@ pub fn read_scripts<P: AsRef<Path>>(
             }));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
-            processing_mode = ProcessingMode::Default;
+            return;
         }
     }
 
