@@ -9,7 +9,7 @@ use crate::{
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, WROTE_FILE_MSG},
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
-        ALLOWED_CODES, ENCODINGS, LINES_SEPARATOR, NEW_LINE,
+        ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, Variable},
 };
@@ -35,10 +35,14 @@ fn parse_translation(translation: String) -> StringHashMap {
         if line.starts_with("<!--") {
             None
         } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-            Some((
-                original.replace(r"\#", "\n").trim().to_owned(),
-                translated.replace(r"\#", "\n").trim().to_owned(),
-            ))
+            if translated.is_empty() {
+                None
+            } else {
+                Some((
+                    original.replace(r"\#", "\n").trim().to_owned(),
+                    translated.replace(r"\#", "\n").trim().to_owned(),
+                ))
+            }
         } else {
             eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
             None
@@ -163,10 +167,6 @@ fn get_translated_parameter(
     };
 
     if let Some(mut translated) = translated {
-        if translated.is_empty() {
-            return None;
-        }
-
         for (string, position) in remaining_strings.into_iter().zip(insert_positions) {
             match position {
                 false => translated = string + &translated,
@@ -332,12 +332,6 @@ fn get_translated_variable(
 
         result
     });
-
-    if let Some(ref translated) = translated {
-        if translated.is_empty() {
-            return None;
-        }
-    }
 
     translated
 }
@@ -538,14 +532,14 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
         // Allocated when maps processing mode is PRESERVE.
         let mut translation_deque: VecDeque<String> = VecDeque::new();
         // Default map for translation from the .txt file.
-        let mut translation_map: StringHashMap = HashMap::default();
+        let mut translation_map: StringHashMap = HashMap::with_hasher(HASHER);
         // A vec that holds translation maps. If maps processing mode is
         // DEFAULT, only ever holds one hashmap with all the translation lines.
         // If maps processing mode is SEPARATE, holds multiple hashmap, each
         // respective to a single map file.
         let mut translation_maps: Vec<StringHashMap> = Vec::new();
         // Always allocated.
-        let mut names_map: StringHashMap = HashMap::default();
+        let mut names_map: StringHashMap = HashMap::with_hasher(HASHER);
 
         for (i, line) in translation.split('\n').enumerate() {
             if line.starts_with("<!-- Map") {
@@ -563,6 +557,10 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                 }
             } else if !line.starts_with("<!--") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    if translated.is_empty() {
+                        continue;
+                    }
+
                     if maps_processing_mode == MapsProcessingMode::Preserve {
                         translation_deque.push_back(translated.replace(NEW_LINE, "\n").trim().to_owned());
                     } else {
@@ -608,7 +606,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
         }
 
         let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
-            &StringHashMap::default()
+            &StringHashMap::with_hasher(HASHER)
         } else {
             let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
                 unsafe {
@@ -1065,9 +1063,7 @@ pub fn write_system<P: AsRef<Path>>(
                 }
 
                 if let Some(translated) = translation_map.get(&string) {
-                    if !translated.is_empty() {
-                        *value = Value::from(translated);
-                    }
+                    *value = Value::from(translated);
                 }
             }
         }
@@ -1286,7 +1282,7 @@ pub fn write_scripts<P: AsRef<Path>>(
             let (strings_array, indices_array) = extract_strings(&code, true);
 
             for (mut string, range) in strings_array.into_iter().zip(indices_array).rev() {
-                if string.is_empty() || !translation_map.contains_key(&string) {
+                if !translation_map.contains_key(&string) {
                     continue;
                 }
 
@@ -1297,9 +1293,7 @@ pub fn write_scripts<P: AsRef<Path>>(
                 let translated: Option<&String> = translation_map.get(&string);
 
                 if let Some(translated) = translated {
-                    if !translated.is_empty() {
-                        code.replace_range(range, translated);
-                    }
+                    code.replace_range(range, translated);
                 }
             }
 
