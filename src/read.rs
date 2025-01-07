@@ -1179,23 +1179,23 @@ pub fn read_system<P: AsRef<Path>>(
                         buf = get_object_data(obj);
                         unsafe { std::str::from_utf8_unchecked(&buf) }
                     }
-                    None => unreachable!(),
+                    None => "",
                 })
                 .trim()
                 .to_owned()
         };
 
-        if !game_title_string.is_empty() {
-            if romanize {
-                game_title_string = romanize_string(game_title_string)
-            }
+        // We aren't checking if game_title_string is empty because VX and XP don't include game title in System file, and we still need it last
 
-            lines_mut_ref.insert(game_title_string);
-            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+        if romanize {
+            game_title_string = romanize_string(game_title_string)
+        }
 
-            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
-            }
+        lines_mut_ref.insert(game_title_string);
+        let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+
+        if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
+            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
         }
     }
 
