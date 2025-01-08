@@ -6,6 +6,7 @@ use crate::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
         get_system_labels, romanize_string,
     },
+    read_to_string_without_bom,
     statics::{
         localization::{
             AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG,
@@ -1114,7 +1115,7 @@ pub fn read_system<P: AsRef<Path>>(
         get_system_labels(engine_type);
 
     let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
+        from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
     } else {
         load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
     };

@@ -4,7 +4,7 @@ use crate::{eprintln, println};
 use crate::{
     functions::{
         determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
-        get_other_labels, get_system_labels, romanize_string,
+        get_other_labels, get_system_labels, read_to_string_without_bom, romanize_string,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
@@ -35,14 +35,15 @@ fn parse_translation(translation: String, file: &str) -> StringHashMap {
         if line.starts_with("<!--") {
             None
         } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+            #[cfg(not(debug_assertions))]
             if translated.is_empty() {
-                None
-            } else {
-                Some((
-                    original.replace(r"\#", "\n").trim().to_owned(),
-                    translated.replace(r"\#", "\n").trim().to_owned(),
-                ))
+                return None;
             }
+
+            Some((
+                original.replace(r"\#", "\n").trim().to_owned(),
+                translated.replace(r"\#", "\n").trim().to_owned(),
+            ))
         } else {
             eprintln!(
                 "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
@@ -560,6 +561,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                 }
             } else if !line.starts_with("<!--") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    #[cfg(not(debug_assertions))]
                     if translated.is_empty() {
                         continue;
                     }
@@ -917,6 +919,10 @@ pub fn write_other<P: AsRef<Path> + std::marker::Sync>(
         let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
         let translation_map: StringHashMap = parse_translation(translation, txt_filename);
 
+        if translation_map.is_empty() {
+            return;
+        }
+
         // Other files except CommonEvents and Troops have the structure that consists
         // of name, nickname, description and note
         if !filename.starts_with("Co") && !filename.starts_with("Tr") {
@@ -1057,6 +1063,10 @@ pub fn write_system<P: AsRef<Path>>(
     let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
     let translation_map: StringHashMap = parse_translation(translation, "system.txt");
 
+    if translation_map.is_empty() {
+        return;
+    }
+
     let replace_value = |value: &mut Value| {
         let mut buf: Vec<u8> = Vec::new();
         let str: &str = value.as_str().unwrap_or_else(|| {
@@ -1089,7 +1099,7 @@ pub fn write_system<P: AsRef<Path>>(
         get_system_labels(engine_type);
 
     let mut obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
+        from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
     } else {
         load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
     };
@@ -1174,7 +1184,7 @@ pub fn write_plugins<P: AsRef<Path>>(pluigns_file_path: P, plugins_path: P, outp
     let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
     let translation_map: StringHashMap = parse_translation(translation, "plugins.txt");
 
-    let mut obj_arr: Vec<Object> = from_str(&read_to_string(pluigns_file_path).unwrap_log()).unwrap_log();
+    let mut obj_arr: Vec<Object> = from_str(&read_to_string_without_bom(pluigns_file_path).unwrap_log()).unwrap_log();
 
     obj_arr.par_iter_mut().for_each(|obj: &mut Object| {
         // For now, plugins writing only implemented for Fear & Hunger: Termina, so you should manually translate the plugins.js file if it's not Termina
@@ -1268,6 +1278,10 @@ pub fn write_scripts<P: AsRef<Path>>(
 ) {
     let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
     let translation_map: StringHashMap = parse_translation(translation, "scripts.txt");
+
+    if translation_map.is_empty() {
+        return;
+    }
 
     let mut script_entries: Value =
         load(&read(&scripts_file_path).unwrap_log(), Some(StringMode::Binary), None).unwrap_log();

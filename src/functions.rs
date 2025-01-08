@@ -7,7 +7,9 @@ use marshal_rs::{load, StringMode};
 use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
     ffi::OsString,
-    fs::{read, read_to_string, DirEntry},
+    fs::{read, DirEntry, File},
+    io::{self, BufReader, Read},
+    path::Path,
     str::from_utf8_unchecked,
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
@@ -200,7 +202,7 @@ pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineT
             && filename_str.ends_with(determine_extension(engine_type))
         {
             let json: Value = if engine_type == EngineType::New {
-                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                from_str(&read_to_string_without_bom(entry.path()).unwrap_log()).unwrap_log()
             } else {
                 load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
             };
@@ -238,7 +240,7 @@ pub fn filter_other(
             }
 
             let json: Value = if engine_type == EngineType::New {
-                from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
+                from_str(&read_to_string_without_bom(entry.path()).unwrap_log()).unwrap_log()
             } else {
                 load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
             };
@@ -359,4 +361,25 @@ pub fn get_other_labels(
             "__symbol__parameters",
         )
     }
+}
+
+pub fn read_to_string_without_bom<P: AsRef<Path>>(file_path: P) -> io::Result<String> {
+    const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+    let file: File = File::open(file_path.as_ref())?;
+    let mut reader: BufReader<File> = BufReader::new(file);
+
+    let mut buffer: [u8; 3] = [0u8; 3];
+    let mut content: String = String::new();
+
+    let read_bytes: usize = reader.read(&mut buffer)?;
+
+    if read_bytes == 3 && buffer == BOM {
+        reader.read_to_string(&mut content)?;
+    } else {
+        reader.seek_relative(-3)?;
+        reader.read_to_string(&mut content)?;
+    }
+
+    Ok(content)
 }
