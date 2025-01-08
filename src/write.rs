@@ -113,7 +113,7 @@ fn get_translated_parameter(
                 _ => {}
             },
             GameType::LisaRPG => match code {
-                Code::Dialogue => {
+                Code::DialogueMain | Code::DialogueAdditional => {
                     if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
                         parameter = &parameter[re_match.end()..];
                         remaining_strings.push(re_match.as_str().to_owned());
@@ -372,7 +372,7 @@ fn write_list(
             }
         };
 
-        if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
+        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional, Code::Credit].contains(&code) {
             if !lines.is_empty() {
                 let mut joined: String = lines.join("\n");
 
@@ -381,7 +381,7 @@ fn write_list(
                 }
 
                 let translated: Option<String> =
-                    get_translated_parameter(Code::Dialogue, &joined, Some(map), None, game_type, engine_type);
+                    get_translated_parameter(Code::DialogueMain, &joined, Some(map), None, game_type, engine_type);
 
                 if let Some(translated) = translated {
                     let split_vec: Vec<&str> = translated.split('\n').collect();
@@ -486,7 +486,7 @@ fn write_list(
                 };
 
                 match code {
-                    Code::Dialogue | Code::Credit => {
+                    Code::DialogueMain | Code::DialogueAdditional | Code::Credit => {
                         lines.push(parameter_string);
                         item_indices.push(it);
                         in_sequence = true;
@@ -692,7 +692,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                 }
                             };
 
-                            if in_sequence && code != Code::Dialogue {
+                            if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional].contains(&code) {
                                 if !line.is_empty() {
                                     let mut joined: String = line.join("\n");
 
@@ -701,7 +701,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                     }
 
                                     let translated: Option<String> = get_translated_parameter(
-                                        Code::Dialogue,
+                                        Code::DialogueMain,
                                         &joined,
                                         None,
                                         Some(lines_deque_mutex.clone()),
@@ -813,7 +813,7 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                                     };
 
                                     match code {
-                                        Code::Dialogue => {
+                                        Code::DialogueMain | Code::DialogueAdditional => {
                                             line.push(parameter_string);
                                             item_indices.push(it);
                                             in_sequence = true;
@@ -1091,7 +1091,7 @@ pub fn write_system<P: AsRef<Path>>(
     let mut obj: Value = if engine_type == EngineType::New {
         from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
     } else {
-        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
+        load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
     };
 
     for label in [

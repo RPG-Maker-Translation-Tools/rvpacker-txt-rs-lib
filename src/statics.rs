@@ -31,7 +31,7 @@ pub mod regexes {
         Lazy::new(|| unsafe { Regex::new(r"^[+-]?[0-9]+$|^///|---|restrict eval").unwrap_unchecked() });
 }
 
-/// 401 - Dialogue line.
+/// 401, 101 - Dialogue line.
 ///
 /// 102 - Dialogue choices array.
 ///
@@ -44,7 +44,7 @@ pub mod regexes {
 /// 655 - Line displayed in shop - probably from an external script. (**OLDER ENGINES ONLY!**)
 ///
 /// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
-pub const ALLOWED_CODES: [u16; 8] = [102, 320, 324, 356, 401, 402, 405, 655];
+pub const ALLOWED_CODES: [u16; 9] = [101, 102, 320, 324, 356, 401, 402, 405, 655];
 pub const NEW_LINE: &str = r"\#";
 pub const LINES_SEPARATOR: &str = "<#>";
 

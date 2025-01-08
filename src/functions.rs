@@ -3,7 +3,7 @@ use crate::{
     types::{EachLine, EngineType, GameType, ResultExt},
 };
 use indexmap::IndexSet;
-use marshal_rs::load;
+use marshal_rs::{load, StringMode};
 use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
     ffi::OsString,
@@ -202,7 +202,7 @@ pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineT
             let json: Value = if engine_type == EngineType::New {
                 from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
             } else {
-                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
             };
 
             Some((filename_str.to_owned(), json))
@@ -240,7 +240,7 @@ pub fn filter_other(
             let json: Value = if engine_type == EngineType::New {
                 from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log()
             } else {
-                load(&read(entry.path()).unwrap_log(), None, Some("")).unwrap_log()
+                load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
             };
 
             Some((filename_str.to_owned(), json))

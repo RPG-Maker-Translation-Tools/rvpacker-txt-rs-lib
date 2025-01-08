@@ -31,7 +31,8 @@ pub enum EngineType {
 #[derive(PartialEq, Clone, Copy)]
 #[repr(u16)]
 pub enum Code {
-    Dialogue = 401,
+    DialogueMain = 401,
+    DialogueAdditional = 101,
     Credit = 405,
     ChoiceArray = 102,
     Choice = 402,

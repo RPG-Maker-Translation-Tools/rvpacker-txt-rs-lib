@@ -72,7 +72,7 @@ fn parse_parameter(
             }
             GameType::LisaRPG => {
                 match code {
-                    Code::Dialogue => {
+                    Code::DialogueMain | Code::DialogueAdditional => {
                         if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
                             parameter = &parameter[re_match.end()..]
                         }
@@ -344,11 +344,11 @@ fn parse_list<'a>(
             unsafe { transmute::<u16, Code>(code) }
         };
 
-        if in_sequence && ![Code::Dialogue, Code::Credit].contains(&code) {
+        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional, Code::Credit].contains(&code) {
             if !lines.is_empty() {
                 let joined: String = lines.join(NEW_LINE);
 
-                process_parameter(Code::Dialogue, &joined);
+                process_parameter(Code::DialogueMain, &joined);
 
                 lines.clear();
                 unsafe { &mut *buf.get() }.clear();
@@ -409,7 +409,7 @@ fn parse_list<'a>(
                 }
 
                 match code {
-                    Code::Dialogue | Code::Credit => {
+                    Code::DialogueMain | Code::DialogueAdditional | Code::Credit => {
                         lines.push(parameter_string);
                         in_sequence = true;
                     }
@@ -623,11 +623,11 @@ pub fn read_map<P: AsRef<Path>>(
                             unsafe { transmute::<u16, Code>(code) }
                         };
 
-                        if in_sequence && code != Code::Dialogue {
+                        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional].contains(&code) {
                             if !line.is_empty() {
                                 let joined: String = line.join(NEW_LINE);
 
-                                process_parameter_preserve(Code::Dialogue, &joined);
+                                process_parameter_preserve(Code::DialogueMain, &joined);
 
                                 line.clear();
                                 unsafe { (*buf.get()).clear() }
@@ -689,7 +689,7 @@ pub fn read_map<P: AsRef<Path>>(
                                 }
 
                                 match code {
-                                    Code::Dialogue => {
+                                    Code::DialogueMain | Code::DialogueAdditional => {
                                         line.push(parameter_string);
                                         in_sequence = true;
                                     }
@@ -1116,7 +1116,7 @@ pub fn read_system<P: AsRef<Path>>(
     let obj: Value = if engine_type == EngineType::New {
         from_str(&read_to_string(&system_file_path).unwrap_log()).unwrap_log()
     } else {
-        load(&read(&system_file_path).unwrap_log(), None, Some("")).unwrap_log()
+        load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
     };
 
     // Armor types and elements - mostly system strings, but may be required for some purposes
