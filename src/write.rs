@@ -73,7 +73,7 @@ fn process_parameter(
     if let Some(mut translated) = translated {
         if code == Code::Shop {
             let left: &str = unsafe { parameter.split_once('=').unwrap_unchecked().0 };
-            translated = left.to_owned() + &translated;
+            translated = format!("{left}=\"{translated}\"");
         }
 
         *value = if engine_type == EngineType::New {
