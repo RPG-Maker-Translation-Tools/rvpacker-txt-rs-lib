@@ -1141,13 +1141,13 @@ pub fn read_system<P: AsRef<Path>>(
             continue;
         }
 
-        if engine_type != EngineType::New {
-            parse_str(value)
-        } else if key != "messages" {
+        if key != "messages" {
             if let Some(arr) = value.as_array() {
                 for value in arr {
                     parse_str(value);
                 }
+            } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes")) || value.is_str() {
+                parse_str(value)
             }
         } else {
             if !value.is_object() {

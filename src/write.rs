@@ -1125,11 +1125,13 @@ pub fn write_system<P: AsRef<Path>>(
                 return;
             }
 
-            if engine_type != EngineType::New {
-                replace_value(value)
-            } else if key != "messages" {
+            if key != "messages" {
                 if let Some(arr) = value.as_array_mut() {
                     arr.par_iter_mut().for_each(replace_value);
+                } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes"))
+                    || value.is_str()
+                {
+                    replace_value(value)
                 }
             } else {
                 if !value.is_object() {
