@@ -357,7 +357,7 @@ fn write_list(
     for it in 0..list_length {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !ALLOWED_CODES.contains(&code) {
+        let code: Code = if !ALLOWED_CODES.contains(&code) || (code == 101 && engine_type != EngineType::XP) {
             Code::Bad
         } else {
             unsafe { transmute::<u16, Code>(code) }
@@ -676,11 +676,12 @@ pub fn write_maps<P: AsRef<Path> + std::marker::Sync>(
                         for it in 0..list_length {
                             let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-                            let code: Code = if !ALLOWED_CODES.contains(&code) {
-                                Code::Bad
-                            } else {
-                                unsafe { transmute::<u16, Code>(code) }
-                            };
+                            let code: Code =
+                                if !ALLOWED_CODES.contains(&code) || (code == 101 && engine_type != EngineType::XP) {
+                                    Code::Bad
+                                } else {
+                                    unsafe { transmute::<u16, Code>(code) }
+                                };
 
                             let write_string_literally: bool = if engine_type == EngineType::New {
                                 true
