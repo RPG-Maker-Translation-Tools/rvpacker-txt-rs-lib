@@ -4,7 +4,7 @@ use crate::println;
 use crate::{
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, romanize_string,
+        get_system_labels, romanize_string, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -30,14 +30,71 @@ use std::{
     collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
-    mem::transmute,
+    mem::{take, transmute},
     path::Path,
     str::Chars,
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
-type IndexMapXxh3<'a> = IndexMap<&'a str, &'a str, Xxh3DefaultBuilder>;
+type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
+
+// genius
+pub trait IntoSplit {
+    fn into_split(self, delimiter: char) -> Vec<String>;
+}
+
+impl IntoSplit for String {
+    fn into_split(self, delimiter: char) -> Vec<String> {
+        let mut result: Vec<String> = Vec::new();
+        let mut current: String = String::with_capacity(self.len() / 4);
+
+        for c in self.chars() {
+            if c == delimiter {
+                if !current.is_empty() {
+                    result.push(take(&mut current));
+                }
+            } else {
+                current.push(c);
+            }
+        }
+
+        if !current.is_empty() {
+            result.push(current);
+        }
+
+        result
+    }
+}
+
+fn parse_translation<'a>(
+    translation: String,
+    maps_processing_mode: Option<MapsProcessingMode>,
+    mut names_deque: Option<&'a mut VecDeque<String>>,
+) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
+    Box::new(
+        translation
+            .into_split('\n')
+            .into_iter()
+            .enumerate()
+            .filter_map(move |(i, line)| {
+                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
+                        if original.starts_with("<!-- Map") && original.len() > 20 {
+                            unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
+                        }
+
+                        None
+                    } else {
+                        Some((original.to_owned(), translated.to_owned()))
+                    }
+                } else {
+                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+                    None
+                }
+            }),
+    )
+}
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
 fn parse_parameter(
@@ -45,6 +102,7 @@ fn parse_parameter(
     mut parameter: &str,
     game_type: Option<GameType>,
     engine_type: EngineType,
+    romanize: bool,
 ) -> Option<String> {
     if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
         return None;
@@ -73,7 +131,7 @@ fn parse_parameter(
             }
             GameType::LisaRPG => {
                 match code {
-                    Code::DialogueMain | Code::DialogueAdditional => {
+                    Code::Dialogue | Code::DialogueStart => {
                         if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
                             parameter = &parameter[re_match.end()..]
                         }
@@ -114,7 +172,13 @@ fn parse_parameter(
         }
     }
 
-    Some(parameter.to_owned())
+    let mut result: String = parameter.to_owned();
+
+    if romanize {
+        result = romanize_string(result);
+    }
+
+    Some(result)
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
@@ -124,6 +188,7 @@ fn parse_variable(
     filename: &str,
     game_type: Option<GameType>,
     engine_type: EngineType,
+    romanize: bool,
 ) -> Option<(String, bool)> {
     if STRING_IS_ONLY_SYMBOLS_RE.is_match(&variable_text) {
         return None;
@@ -298,6 +363,10 @@ fn parse_variable(
         }
     }
 
+    if romanize {
+        variable_text = romanize_string(variable_text);
+    }
+
     Some((variable_text, is_continuation_of_description))
 }
 
@@ -308,30 +377,44 @@ fn parse_list<'a>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
     (code_label, parameters_label): (&str, &str),
-    set: &'a UnsafeCell<IndexSetXxh3>,
-    map: &'a mut IndexMapXxh3,
+    map_mut_ref: &'a mut IndexMapXxh3,
+    map_ref: &'a IndexMapXxh3,
+    mut translation_map_vec: Option<&mut Vec<(String, String)>>,
+    mut lines_pos: Option<&mut usize>,
+    maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
 
     let mut lines: Vec<&str> = Vec::with_capacity(4);
     let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
 
-    let set_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *set.get() };
-    let set_ref: &IndexSetXxh3 = unsafe { &*set.get() };
-
     let mut process_parameter = |code: Code, parameter: &str| {
-        let parsed: Option<String> = parse_parameter(code, parameter, game_type, engine_type);
+        if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
+            if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
+                let pos: usize = unsafe { **lines_pos.as_ref().unwrap_unchecked() };
+                let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
 
-        if let Some(mut parsed) = parsed {
-            if romanize {
-                parsed = romanize_string(parsed);
-            }
+                if processing_mode == ProcessingMode::Append {
+                    if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
+                        vec.insert(pos, (parsed, String::new()));
+                    } else {
+                        vec.push((parsed, String::new()))
+                    }
+                } else {
+                    vec.push((parsed, String::new()))
+                }
 
-            set_mut_ref.insert(parsed);
-            let string_ref: &str = unsafe { set_ref.last().unwrap_unchecked() }.as_str();
+                unsafe { **lines_pos.as_mut().unwrap_unchecked() += 1 };
+            } else {
+                map_mut_ref.insert(parsed, String::new());
 
-            if processing_mode == ProcessingMode::Append && !map.contains_key(string_ref) {
-                map.shift_insert(set_ref.len() - 1, string_ref, "");
+                if processing_mode == ProcessingMode::Append {
+                    let string_ref: &String = unsafe { map_ref.last().unwrap_unchecked().0 };
+
+                    if !map_ref.contains_key(string_ref) {
+                        map_mut_ref.shift_insert(map_ref.len() - 1, string_ref.to_owned(), String::new());
+                    }
+                }
             }
         }
     };
@@ -339,20 +422,28 @@ fn parse_list<'a>(
     for item in list {
         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !ALLOWED_CODES.contains(&code) || (code == 101 && engine_type != EngineType::XP) {
+        let code: Code = if !ALLOWED_CODES.contains(&code) {
             Code::Bad
         } else {
-            unsafe { transmute::<u16, Code>(code) }
+            let code: Code = unsafe { transmute::<u16, Code>(code) };
+            if code == Code::DialogueStart && engine_type != EngineType::XP {
+                Code::Bad
+            } else {
+                code
+            }
         };
 
-        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional, Code::Credit].contains(&code) {
+        if in_sequence
+            && (![Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code)
+                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
+        {
             if !lines.is_empty() {
                 let joined: String = lines.join(NEW_LINE);
 
-                process_parameter(Code::DialogueMain, &joined);
+                process_parameter(Code::Dialogue, &joined);
 
                 lines.clear();
-                unsafe { &mut *buf.get() }.clear();
+                unsafe { (*buf.get()).clear() };
             }
 
             in_sequence = false;
@@ -370,54 +461,48 @@ fn parse_list<'a>(
         };
         let value: &Value = &parameters[value_i];
 
-        match code {
-            Code::ChoiceArray => {
-                for i in 0..value.as_array().unwrap_log().len() {
-                    let mut buf: Vec<u8> = Vec::new();
+        if code == Code::ChoiceArray {
+            for i in 0..value.as_array().unwrap_log().len() {
+                let mut buf: Vec<u8> = Vec::new();
 
-                    let subparameter_string: &str = value[i]
-                        .as_str()
-                        .unwrap_or_else(|| match value[i].as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => unreachable!(),
-                        })
-                        .trim();
-
-                    if subparameter_string.is_empty() {
-                        continue;
-                    }
-
-                    process_parameter(code, subparameter_string);
-                }
-            }
-            _ => {
-                let parameter_string: &str = value
+                let subparameter_string: &str = value[i]
                     .as_str()
-                    .unwrap_or_else(|| match value.as_object() {
+                    .unwrap_or_else(|| match value[i].as_object() {
                         Some(obj) => {
-                            unsafe { &mut *buf.get() }.push(get_object_data(obj));
-                            unsafe { std::str::from_utf8_unchecked(&(*buf.get())[lines.len()]) }
+                            buf = get_object_data(obj);
+                            unsafe { std::str::from_utf8_unchecked(&buf) }
                         }
-                        None => "",
+                        None => unreachable!(),
                     })
                     .trim();
 
-                if code != Code::Credit && parameter_string.is_empty() {
+                if subparameter_string.is_empty() {
                     continue;
                 }
 
-                match code {
-                    Code::DialogueMain | Code::DialogueAdditional | Code::Credit => {
-                        lines.push(parameter_string);
-                        in_sequence = true;
-                    }
-                    _ => {
-                        process_parameter(code, parameter_string);
-                    }
-                }
+                process_parameter(code, subparameter_string);
+            }
+        } else {
+            let parameter_string: &str = value
+                .as_str()
+                .unwrap_or_else(|| match value.as_object() {
+                    Some(obj) => unsafe {
+                        (*buf.get()).push(get_object_data(obj));
+                        std::str::from_utf8_unchecked(&(*buf.get())[lines.len()])
+                    },
+                    None => "",
+                })
+                .trim();
+
+            if code != Code::Credit && parameter_string.is_empty() {
+                continue;
+            }
+
+            if [Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code) {
+                lines.push(parameter_string);
+                in_sequence = true;
+            } else {
+                process_parameter(code, parameter_string);
             }
         }
     }
@@ -452,23 +537,15 @@ pub fn read_map<P: AsRef<Path>>(
         return;
     }
 
-    // Allocated when maps processing mode is SEPARATE.
-    let mut translation_lines_vec: Vec<String> = Vec::new();
-
-    // Default structure for collecting translation lines.
-    // Allocated when maps processing mode is DEFAULT or SEPARATE.
-    // When maps processing mode is separate, for each new map this
-    // set is drained and its data passed to translation_lines_vec.
-    let translation_lines_set: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
-    let lines_set_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *translation_lines_set.get() };
-    let lines_set_ref: &IndexSetXxh3 = unsafe { &*translation_lines_set.get() };
-
-    // Allocated when processing mode is APPEND.
+    // Allocated when processing mode is APPEND and maps processing mode is DEFAULT.
     // Reads the transaltion from existing .txt file and then appends new lines.
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+    let translation_map_mut_ref: &mut IndexMapXxh3 = unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) };
+    let translation_map_ref: &IndexMapXxh3 = unsafe { &*(&mut translation_map as *mut IndexMapXxh3) };
 
     // Allocated when maps processing mode is PRESERVE.
     let mut names_deque: VecDeque<String> = VecDeque::new();
+    // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
     let mut lines_pos: usize = 0;
 
@@ -478,24 +555,12 @@ pub fn read_map<P: AsRef<Path>>(
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
 
-            for (i, line) in translation.split('\n').enumerate() {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if maps_processing_mode == MapsProcessingMode::Preserve {
-                        if original.starts_with("<!-- Map") {
-                            if original.len() > 20 {
-                                names_deque.push_back(translated.to_owned());
-                            }
+            let parsed_translation = parse_translation(translation, Some(maps_processing_mode), Some(&mut names_deque));
 
-                            continue;
-                        }
-
-                        translation_map_vec.push((original.to_owned(), translated.to_owned()));
-                    } else {
-                        translation_map.insert(original, translated);
-                    }
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-                }
+            if maps_processing_mode == MapsProcessingMode::Preserve {
+                translation_map_vec.extend(parsed_translation);
+            } else {
+                translation_map.extend(parsed_translation);
             }
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -528,30 +593,20 @@ pub fn read_map<P: AsRef<Path>>(
 
         match maps_processing_mode {
             MapsProcessingMode::Default => {
-                lines_set_mut_ref.insert(filename_comment);
+                translation_map_mut_ref.insert(filename_comment, String::new());
 
                 if processing_mode == ProcessingMode::Append {
-                    translation_map.shift_insert(
-                        lines_set_ref.len() - 1,
-                        unsafe { lines_set_ref.last().unwrap_unchecked() },
-                        "",
-                    );
+                    let (key, _) = unsafe { translation_map_ref.last().unwrap_unchecked() };
+                    translation_map.shift_insert(translation_map_ref.len() - 1, key.to_owned(), String::new());
                 }
             }
             MapsProcessingMode::Separate => {
-                translation_lines_vec.extend(lines_set_mut_ref.drain(..));
-                translation_lines_vec.push(filename_comment);
-
-                if processing_mode == ProcessingMode::Append {
-                    translation_map.shift_insert(
-                        lines_set_ref.len() - 1,
-                        unsafe { lines_set_ref.last().unwrap_unchecked() },
-                        "",
-                    );
-                }
+                translation_map_vec.extend(translation_map_mut_ref.drain(..));
+                translation_map_vec.push((filename_comment, String::new()));
             }
             MapsProcessingMode::Preserve => {
                 let filename_comment_len: usize = filename_comment.len();
+
                 translation_map_vec.insert(
                     lines_pos,
                     (
@@ -580,140 +635,25 @@ pub fn read_map<P: AsRef<Path>>(
             )
         };
 
-        let mut process_parameter_preserve = |code: Code, parameter: &str| {
-            let parsed: Option<String> = parse_parameter(code, parameter, game_type, engine_type);
-
-            if let Some(mut parsed) = parsed {
-                if romanize {
-                    parsed = romanize_string(parsed);
-                }
-
-                if processing_mode == ProcessingMode::Append {
-                    if let Some((original, _)) = translation_map_vec.get(lines_pos) {
-                        if *original != parsed {
-                            translation_map_vec.insert(lines_pos, (parsed, String::new()));
-                        }
-                    }
-                } else {
-                    translation_map_vec.push((parsed, String::new()));
-                }
-
-                lines_pos += 1;
-            }
-        };
-
         for event in events_arr {
             if !event[pages_label].is_array() {
                 continue;
             }
 
             for page in event[pages_label].as_array().unwrap_log() {
-                if maps_processing_mode == MapsProcessingMode::Preserve {
-                    let list: &Array = page[list_label].as_array().unwrap_log();
-                    let mut in_sequence: bool = false;
-
-                    let mut line: Vec<&str> = Vec::with_capacity(4);
-                    let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
-
-                    for item in list {
-                        let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
-
-                        let code: Code =
-                            if !ALLOWED_CODES.contains(&code) || (code == 101 && engine_type != EngineType::XP) {
-                                Code::Bad
-                            } else {
-                                unsafe { transmute::<u16, Code>(code) }
-                            };
-
-                        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional].contains(&code) {
-                            if !line.is_empty() {
-                                let joined: String = line.join(NEW_LINE);
-
-                                process_parameter_preserve(Code::DialogueMain, &joined);
-
-                                line.clear();
-                                unsafe { (*buf.get()).clear() }
-                            }
-
-                            in_sequence = false;
-                        }
-
-                        if code == Code::Bad {
-                            continue;
-                        }
-
-                        let parameters: &Array = item[parameters_label].as_array().unwrap_log();
-
-                        let value_i: usize = match code {
-                            Code::Misc1 | Code::Misc2 => 1,
-                            _ => 0,
-                        };
-
-                        let value: &Value = &parameters[value_i];
-
-                        match code {
-                            Code::ChoiceArray => {
-                                for i in 0..value.as_array().unwrap_log().len() {
-                                    let mut buf: Vec<u8> = Vec::new();
-
-                                    let subparameter_string: &str = value[i]
-                                        .as_str()
-                                        .unwrap_or_else(|| match value[i].as_object() {
-                                            Some(obj) => {
-                                                buf = get_object_data(obj);
-                                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                                            }
-                                            None => unreachable!(),
-                                        })
-                                        .trim();
-
-                                    if subparameter_string.is_empty() {
-                                        continue;
-                                    }
-
-                                    process_parameter_preserve(code, subparameter_string);
-                                }
-                            }
-                            _ => {
-                                let parameter_string: &str = value
-                                    .as_str()
-                                    .unwrap_or_else(|| match value.as_object() {
-                                        Some(obj) => {
-                                            unsafe { (*buf.get()).push(get_object_data(obj)) };
-                                            unsafe { std::str::from_utf8_unchecked(&(*buf.get())[line.len()]) }
-                                        }
-                                        None => "",
-                                    })
-                                    .trim();
-
-                                if parameter_string.is_empty() {
-                                    continue;
-                                }
-
-                                match code {
-                                    Code::DialogueMain | Code::DialogueAdditional => {
-                                        line.push(parameter_string);
-                                        in_sequence = true;
-                                    }
-                                    _ => {
-                                        process_parameter_preserve(code, parameter_string);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    parse_list(
-                        page[list_label].as_array().unwrap_log(),
-                        romanize,
-                        game_type,
-                        engine_type,
-                        processing_mode,
-                        (code_label, parameters_label),
-                        &translation_lines_set,
-                        &mut translation_map,
-                    );
-                }
+                parse_list(
+                    page[list_label].as_array().unwrap_log(),
+                    romanize,
+                    game_type,
+                    engine_type,
+                    processing_mode,
+                    (code_label, parameters_label),
+                    unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) },
+                    unsafe { &*(&mut translation_map as *mut IndexMapXxh3) },
+                    Some(&mut translation_map_vec),
+                    Some(&mut lines_pos),
+                    Some(maps_processing_mode),
+                );
             }
         }
 
@@ -736,31 +676,18 @@ pub fn read_map<P: AsRef<Path>>(
         }
     }
 
-    let mut output_content: String = if processing_mode == ProcessingMode::Append {
+    let mut output_content: String = if maps_processing_mode == MapsProcessingMode::Default {
         String::from_iter(
             translation_map
                 .into_iter()
                 .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         )
     } else {
-        match maps_processing_mode {
-            MapsProcessingMode::Default => String::from_iter(
-                translation_lines_set
-                    .into_inner()
-                    .into_iter()
-                    .map(|line: String| line + LINES_SEPARATOR + "\n"),
-            ),
-            MapsProcessingMode::Separate => String::from_iter(
-                translation_lines_vec
-                    .into_iter()
-                    .map(|line: String| line + LINES_SEPARATOR + "\n"),
-            ),
-            MapsProcessingMode::Preserve => String::from_iter(
-                translation_map_vec
-                    .into_iter()
-                    .map(|(original, translation)| original + LINES_SEPARATOR + &translation + "\n"),
-            ),
-        }
+        String::from_iter(
+            translation_map_vec
+                .into_iter()
+                .map(|(original, translation)| original + LINES_SEPARATOR + &translation + "\n"),
+        )
     };
 
     output_content.pop();
@@ -811,19 +738,15 @@ pub fn read_other<P: AsRef<Path>>(
         let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
 
         if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
-            println!("{} {FILE_ALREADY_EXISTS_MSG}", unsafe {
-                txt_output_path
-                    .file_name()
-                    .unwrap_unchecked()
-                    .to_str()
-                    .unwrap_unchecked()
+            println!("{:?} {FILE_ALREADY_EXISTS_MSG}", unsafe {
+                txt_output_path.file_name().unwrap_unchecked()
             });
             continue;
         }
 
-        let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
-        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
-        let lines_ref: &IndexSetXxh3 = unsafe { &*lines.get() };
+        let mut lines: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
+        let lines_ref: &IndexSetXxh3 = unsafe { &*(&mut lines as *mut IndexSetXxh3) };
 
         let translation: String;
 
@@ -833,14 +756,7 @@ pub fn read_other<P: AsRef<Path>>(
             if txt_output_path.exists() {
                 translation = read_to_string(txt_output_path).unwrap_log();
 
-                lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
-                    if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                        Some((original, translated))
-                    } else {
-                        eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-                        None
-                    }
-                }));
+                lines_map.extend(parse_translation(translation, None, None));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 continue;
@@ -903,9 +819,9 @@ pub fn read_other<P: AsRef<Path>>(
                         };
 
                         let parsed: Option<(String, bool)> =
-                            parse_variable(string, &variable_type, &filename, game_type, engine_type);
+                            parse_variable(string, &variable_type, &filename, game_type, engine_type, romanize);
 
-                        if let Some((mut parsed, is_continuation_of_description)) = parsed {
+                        if let Some((parsed, is_continuation_of_description)) = parsed {
                             if is_continuation_of_description {
                                 if prev_variable_type != Some(Variable::Description) {
                                     continue;
@@ -913,23 +829,19 @@ pub fn read_other<P: AsRef<Path>>(
 
                                 if let Some(last) = lines_mut_ref.pop() {
                                     lines_mut_ref.insert(last.trim().to_owned() + &parsed);
-                                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+                                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() };
 
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
                                     // uhhh... so what i actually need to do? i forgot...
                                     if processing_mode == ProcessingMode::Append {
                                         let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
-                                        lines_map.shift_insert(idx, string_ref, value);
+                                        lines_map.shift_insert(idx, string_ref.to_owned(), value);
                                     }
                                 }
                                 continue;
                             }
 
                             prev_variable_type = Some(variable_type);
-
-                            if romanize {
-                                parsed = romanize_string(parsed);
-                            }
 
                             let replaced: String = parsed
                                 .split('\n')
@@ -943,7 +855,7 @@ pub fn read_other<P: AsRef<Path>>(
                             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
                             if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                                lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+                                lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
                             }
                         } else if variable_type == Variable::Name {
                             continue 'obj;
@@ -981,8 +893,11 @@ pub fn read_other<P: AsRef<Path>>(
                         engine_type,
                         processing_mode,
                         (code_label, parameters_label),
-                        &lines,
-                        &mut lines_map,
+                        unsafe { &mut *(&mut lines_map as *mut IndexMapXxh3) },
+                        unsafe { &*(&mut lines_map as *mut IndexMapXxh3) },
+                        None,
+                        None,
+                        None,
                     );
                 }
             }
@@ -995,12 +910,7 @@ pub fn read_other<P: AsRef<Path>>(
                     .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
             )
         } else {
-            String::from_iter(
-                lines
-                    .into_inner()
-                    .into_iter()
-                    .map(|line: String| line + LINES_SEPARATOR + "\n"),
-            )
+            String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
         };
 
         output_content.pop();
@@ -1064,14 +974,7 @@ pub fn read_system<P: AsRef<Path>>(
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
 
-            lines_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    Some((original, translated))
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-                    None
-                }
-            }));
+            lines_map.extend(parse_translation(translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1108,7 +1011,7 @@ pub fn read_system<P: AsRef<Path>>(
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
         if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+            lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
         }
     };
 
@@ -1193,7 +1096,7 @@ pub fn read_system<P: AsRef<Path>>(
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
         if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-            lines_map.shift_insert(lines_ref.len() - 1, string_ref, "");
+            lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
         }
     }
 
@@ -1217,13 +1120,8 @@ pub fn read_system<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {}", unsafe {
-            system_file_path
-                .as_ref()
-                .file_name()
-                .unwrap_unchecked()
-                .to_str()
-                .unwrap_unchecked()
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            system_file_path.as_ref().file_name().unwrap_unchecked()
         });
     }
 
@@ -1265,26 +1163,18 @@ pub fn read_scripts<P: AsRef<Path>>(
         return;
     }
 
-    let lines: UnsafeCell<Vec<String>> = UnsafeCell::new(Vec::new());
-    let lines_ref: &Vec<String> = unsafe { &*lines.get() };
-    let lines_mut_ref: &mut Vec<String> = unsafe { &mut *lines.get() };
+    let mut lines: Vec<String> = Vec::new();
+    let lines_ref: &Vec<String> = unsafe { &*(&mut lines as *mut Vec<String>) };
+    let lines_mut_ref: &mut Vec<String> = unsafe { &mut *(&mut lines as *mut Vec<String>) };
 
-    let mut translation_map: Vec<(&str, &str)> = Vec::new();
+    let mut translation_map: Vec<(String, String)> = Vec::new();
 
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
-
-            translation_map.extend(translation.split('\n').enumerate().filter_map(|(i, line)| {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    Some((original, translated))
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}",);
-                    None
-                }
-            }));
+            translation_map.extend(parse_translation(translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1360,8 +1250,8 @@ pub fn read_scripts<P: AsRef<Path>>(
         lines_mut_ref.push(extracted);
         let last: &String = unsafe { lines_ref.last().unwrap_unchecked() };
 
-        if processing_mode == ProcessingMode::Append && translation_map.get(i).is_some_and(|x| last != x.0) {
-            translation_map.insert(lines_ref.len() - 1, (last, ""));
+        if processing_mode == ProcessingMode::Append && translation_map.get(i).is_some_and(|x| *last != x.0) {
+            translation_map.insert(lines_ref.len() - 1, (last.to_owned(), String::new()));
         }
 
         i += 1;
@@ -1374,12 +1264,7 @@ pub fn read_scripts<P: AsRef<Path>>(
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )
     } else {
-        String::from_iter(
-            lines
-                .into_inner()
-                .into_iter()
-                .map(|line: String| line + LINES_SEPARATOR + "\n"),
-        )
+        String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
     };
 
     output_content.pop();
@@ -1387,13 +1272,8 @@ pub fn read_scripts<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {}", unsafe {
-            scripts_file_path
-                .as_ref()
-                .file_name()
-                .unwrap_unchecked()
-                .to_str()
-                .unwrap_unchecked()
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            scripts_file_path.as_ref().file_name().unwrap_unchecked()
         });
     }
 
@@ -1407,6 +1287,71 @@ pub fn read_scripts<P: AsRef<Path>>(
                     .join("json/Scripts.txt")
             },
             codes_text,
+        )
+        .unwrap_log();
+    }
+}
+
+pub fn read_plugins<P: AsRef<Path>>(
+    plugins_file_path: P,
+    output_path: P,
+    romanize: bool,
+    logging: bool,
+    processing_mode: ProcessingMode,
+    generate_json: bool,
+) {
+    let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
+
+    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+        println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
+        return;
+    }
+
+    let mut translation_map: Vec<(String, String)> = Vec::new();
+
+    let translation: String;
+
+    if processing_mode == ProcessingMode::Append {
+        if txt_output_path.exists() {
+            translation = read_to_string(txt_output_path).unwrap_log();
+            translation_map.extend(parse_translation(translation, None, None));
+        } else {
+            println!("{FILES_ARE_NOT_PARSED_MSG}");
+            return;
+        }
+    }
+
+    let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
+
+    let plugins_object: &str = plugins_content
+        .split_once('=')
+        .unwrap_log()
+        .1
+        .trim_end_matches([';', '\n']);
+
+    let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
+    let mut lines: Vec<String> = Vec::new();
+
+    traverse_json(None, &mut plugins_json, None, &mut Some(&mut lines), false, romanize);
+
+    write(txt_output_path, lines.join("\n")).unwrap_log();
+
+    if logging {
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            plugins_file_path.as_ref().file_name().unwrap_unchecked()
+        });
+    }
+
+    if generate_json {
+        write(
+            unsafe {
+                output_path
+                    .as_ref()
+                    .parent()
+                    .unwrap_unchecked()
+                    .join("json/Scripts.txt")
+            },
+            plugins_object,
         )
         .unwrap_log();
     }

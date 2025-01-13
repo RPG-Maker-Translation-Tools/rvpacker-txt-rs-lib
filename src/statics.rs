@@ -20,7 +20,7 @@ pub mod regexes {
     use regex::Regex;
 
     pub static STRING_IS_ONLY_SYMBOLS_RE: Lazy<Regex> = Lazy::new(|| unsafe {
-        Regex::new(r#"^[.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s0-9]+$"#).unwrap_unchecked()
+        Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s0-9]+$"#).unwrap_unchecked()
     });
     pub static ENDS_WITH_IF_RE: Lazy<Regex> = Lazy::new(|| unsafe { Regex::new(r" if\(.*\)$").unwrap_unchecked() });
     pub static LISA_PREFIX_RE: Lazy<Regex> =
@@ -31,7 +31,9 @@ pub mod regexes {
         Lazy::new(|| unsafe { Regex::new(r"^[+-]?[0-9]+$|^///|---|restrict eval").unwrap_unchecked() });
 }
 
-/// 401, 101 - Dialogue line.
+/// 401 - Dialogue line.
+///
+/// 101 - Start of the dialogue line. (**XP ENGINE ONLY!**)
 ///
 /// 102 - Dialogue choices array.
 ///
@@ -48,7 +50,7 @@ pub const ALLOWED_CODES: [u16; 9] = [101, 102, 320, 324, 356, 401, 402, 405, 655
 pub const NEW_LINE: &str = r"\#";
 pub const LINES_SEPARATOR: &str = "<#>";
 
-pub const ENCODINGS: [&encoding_rs::Encoding; 5] = [
+pub static ENCODINGS: [&encoding_rs::Encoding; 5] = [
     encoding_rs::UTF_8,
     encoding_rs::WINDOWS_1252,
     encoding_rs::WINDOWS_1251,
