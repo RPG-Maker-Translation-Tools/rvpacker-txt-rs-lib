@@ -4,7 +4,7 @@ use crate::println;
 use crate::{
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, romanize_string,
+        get_system_labels, romanize_string, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -131,7 +131,7 @@ fn parse_parameter(
             }
             GameType::LisaRPG => {
                 match code {
-                    Code::DialogueMain | Code::DialogueAdditional => {
+                    Code::Dialogue | Code::DialogueStart => {
                         if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
                             parameter = &parameter[re_match.end()..]
                         }
@@ -422,17 +422,25 @@ fn parse_list<'a>(
     for item in list {
         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !ALLOWED_CODES.contains(&code) || (code == 101 && engine_type != EngineType::XP) {
+        let code: Code = if !ALLOWED_CODES.contains(&code) {
             Code::Bad
         } else {
-            unsafe { transmute::<u16, Code>(code) }
+            let code: Code = unsafe { transmute::<u16, Code>(code) };
+            if code == Code::DialogueStart && engine_type != EngineType::XP {
+                Code::Bad
+            } else {
+                code
+            }
         };
 
-        if in_sequence && ![Code::DialogueMain, Code::DialogueAdditional, Code::Credit].contains(&code) {
+        if in_sequence
+            && (![Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code)
+                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
+        {
             if !lines.is_empty() {
                 let joined: String = lines.join(NEW_LINE);
 
-                process_parameter(Code::DialogueMain, &joined);
+                process_parameter(Code::Dialogue, &joined);
 
                 lines.clear();
                 unsafe { (*buf.get()).clear() };
@@ -490,7 +498,7 @@ fn parse_list<'a>(
                 continue;
             }
 
-            if [Code::DialogueMain, Code::DialogueAdditional, Code::Credit].contains(&code) {
+            if [Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code) {
                 lines.push(parameter_string);
                 in_sequence = true;
             } else {
@@ -730,12 +738,8 @@ pub fn read_other<P: AsRef<Path>>(
         let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
 
         if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
-            println!("{} {FILE_ALREADY_EXISTS_MSG}", unsafe {
-                txt_output_path
-                    .file_name()
-                    .unwrap_unchecked()
-                    .to_str()
-                    .unwrap_unchecked()
+            println!("{:?} {FILE_ALREADY_EXISTS_MSG}", unsafe {
+                txt_output_path.file_name().unwrap_unchecked()
             });
             continue;
         }
@@ -1116,13 +1120,8 @@ pub fn read_system<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {}", unsafe {
-            system_file_path
-                .as_ref()
-                .file_name()
-                .unwrap_unchecked()
-                .to_str()
-                .unwrap_unchecked()
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            system_file_path.as_ref().file_name().unwrap_unchecked()
         });
     }
 
@@ -1273,13 +1272,8 @@ pub fn read_scripts<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {}", unsafe {
-            scripts_file_path
-                .as_ref()
-                .file_name()
-                .unwrap_unchecked()
-                .to_str()
-                .unwrap_unchecked()
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            scripts_file_path.as_ref().file_name().unwrap_unchecked()
         });
     }
 
@@ -1295,153 +1289,6 @@ pub fn read_scripts<P: AsRef<Path>>(
             codes_text,
         )
         .unwrap_log();
-    }
-}
-
-fn parse_strings_in_json(key: Option<&str>, value: &Value, strings: &mut Vec<String>, romanize: bool) {
-    match value.get_type() {
-        sonic_rs::JsonType::String => {
-            if key.is_some_and(|str| {
-                [
-                    "name",
-                    "description",
-                    "Window Width",
-                    "Window Height",
-                    "ATTENTION!!!",
-                    "Shown Elements",
-                    "Width",
-                    "Outline Color",
-                    "Command Alignment",
-                    "Command Position",
-                    "Command Rows",
-                    "Chinese Font",
-                    "Korean Font",
-                    "Default Font",
-                    "Text Align",
-                    "Scenes To Draw",
-                    "displacementImage",
-                    "Turn Alignment",
-                    "Buff Formula",
-                    "Counter Alignment",
-                    "Buff Formula",
-                    "Counter Alignment",
-                    "Default Width",
-                    "Face Indent",
-                    "Fast Forward Key",
-                    "Font Name",
-                    "Font Name CH",
-                    "Font Name KR",
-                    "Name Box Padding",
-                    "Name Box Added Text",
-                    "Critical Rate Formula",
-                    "Critical Multplier Formula",
-                    "Flat Critical Formula",
-                    "Default SE",
-                    "---List---",
-                    "Button Events List",
-                    "Kill Switch",
-                    "Ex Turn Image",
-                    "Ex Turn Name Color",
-                    "Non Ex Turn Name Color",
-                    "Option menu entry",
-                    "Add to options",
-                    "Default Ambient Light",
-                    "Reset Lights",
-                    "Gab Font Name",
-                    "Escape Ratio",
-                    "Translated Format",
-                    "Default Sound",
-                    "Action Speed",
-                    "Default System",
-                    "Untranslated Format",
-                    "Default Format",
-                    "Victory Screen Level Sound",
-                    "Warning Side Battle UI",
-                    "Weapon Swap Text Hit",
-                    "Weapon Swap Text Critical",
-                    "Weapon Swap Command",
-                    "Weapon Swap Text Evasion",
-                    "alwaysDash",
-                    "renderingMode",
-                    "Attributes Command",
-                    "Attributes Column 1",
-                    "Attributes Column 2",
-                    "Attributes Column 3",
-                    "Warning OTB",
-                    "</span> Minimum Damage</span></td>",
-                    "Present Settings",
-                ]
-                .contains(&str)
-                    || str.starts_with("Boost Point") && !str.ends_with("Command")
-                    || str.contains("Icon")
-                    || str.starts_with("Folder") && str.ends_with(|c: char| c.is_alphanumeric())
-                    || str.ends_with(['X', 'Y'])
-                    || str.contains("BGM")
-                    || str.contains("Label")
-                    || str.starts_with("Custom ") && str.chars().nth(7).is_some_and(|c: char| c.is_alphanumeric())
-                    || str.starts_with("outlineColor")
-                    || ((str.starts_with("Menu")
-                        || str.starts_with("Item")
-                        || str.starts_with("Skill")
-                        || str.starts_with("Equip")
-                        || str.starts_with("Status")
-                        || str.starts_with("Save")
-                        || str.starts_with("Options")
-                        || str.starts_with("End"))
-                        && (str.ends_with("Background") || str.ends_with("Motion")))
-                    || str.starts_with("Menu ") && str.chars().nth(5).is_some_and(|c: char| c.is_alphanumeric())
-                    || ((str.starts_with("MHP")
-                        || str.starts_with("MMP")
-                        || str.starts_with("ATK")
-                        || str.starts_with("DEF")
-                        || str.starts_with("MAT")
-                        || str.starts_with("MDF")
-                        || str.starts_with("AGI")
-                        || str.starts_with("LUK"))
-                        && ((str.ends_with("Formula")
-                            || str.ends_with("Maximum")
-                            || str.ends_with("Minimum")
-                            || str.ends_with("Effect"))
-                            || str.ends_with("Color")))
-                    || str.starts_with("Damage") && str.ends_with(|c: char| c.is_alphanumeric())
-            }) {
-                return;
-            }
-
-            let str: &str = unsafe { value.as_str().unwrap_unchecked() }.trim();
-
-            if !(str.is_empty()
-                || STRING_IS_ONLY_SYMBOLS_RE.is_match(str)
-                || ["true", "false", "none", "time", "off"].contains(&str)
-                || str.starts_with("this.")
-                    && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic())
-                    && str.ends_with(")")
-                || str.starts_with("rgba"))
-            {
-                if let Some(key) = key {
-                    println!("{key:?}---{str:?}");
-                }
-
-                let mut string: String = str.replace('\n', NEW_LINE);
-
-                if romanize {
-                    string = romanize_string(string);
-                }
-
-                strings.push(string);
-            }
-        }
-        sonic_rs::JsonType::Object => {
-            for (key, value) in value.as_object().unwrap() {
-                parse_strings_in_json(Some(key), value, strings, romanize);
-            }
-        }
-        sonic_rs::JsonType::Array => {
-            for value in value.as_array().unwrap().iter() {
-                parse_strings_in_json(None, value, strings, romanize);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1482,21 +1329,16 @@ pub fn read_plugins<P: AsRef<Path>>(
         .1
         .trim_end_matches([';', '\n']);
 
-    let plugins_json: Value = from_str(plugins_object).unwrap_log();
-
+    let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
     let mut lines: Vec<String> = Vec::new();
-    parse_strings_in_json(None, &plugins_json, &mut lines, romanize);
+
+    traverse_json(None, &mut plugins_json, None, &mut Some(&mut lines), false, romanize);
 
     write(txt_output_path, lines.join("\n")).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {}", unsafe {
-            plugins_file_path
-                .as_ref()
-                .file_name()
-                .unwrap_unchecked()
-                .to_str()
-                .unwrap_unchecked()
+        println!("{PARSED_FILE_MSG} {:?}", unsafe {
+            plugins_file_path.as_ref().file_name().unwrap_unchecked()
         });
     }
 

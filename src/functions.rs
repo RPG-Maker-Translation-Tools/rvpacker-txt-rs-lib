@@ -1,5 +1,5 @@
 use crate::{
-    statics::{HASHER, NEW_LINE},
+    statics::{regexes::STRING_IS_ONLY_SYMBOLS_RE, HASHER, NEW_LINE},
     types::{EachLine, EngineType, GameType, ResultExt},
 };
 use indexmap::IndexSet;
@@ -382,4 +382,161 @@ pub fn read_to_string_without_bom<P: AsRef<Path>>(file_path: P) -> io::Result<St
     }
 
     Ok(content)
+}
+
+pub fn traverse_json(
+    key: Option<&str>,
+    value: &mut Value,
+    map: Option<&std::collections::HashMap<String, String, Xxh3DefaultBuilder>>,
+    strings: &mut Option<&mut Vec<String>>,
+    write: bool,
+    romanize: bool,
+) {
+    match value.get_type() {
+        sonic_rs::JsonType::String => {
+            // TODO: Remake this shit in regexps
+            if key.is_some_and(|str| {
+                [
+                    "name",
+                    "description",
+                    "Window Width",
+                    "Window Height",
+                    "ATTENTION!!!",
+                    "Shown Elements",
+                    "Width",
+                    "Outline Color",
+                    "Command Alignment",
+                    "Command Position",
+                    "Command Rows",
+                    "Chinese Font",
+                    "Korean Font",
+                    "Default Font",
+                    "Text Align",
+                    "Scenes To Draw",
+                    "displacementImage",
+                    "Turn Alignment",
+                    "Buff Formula",
+                    "Counter Alignment",
+                    "Buff Formula",
+                    "Counter Alignment",
+                    "Default Width",
+                    "Face Indent",
+                    "Fast Forward Key",
+                    "Font Name",
+                    "Font Name CH",
+                    "Font Name KR",
+                    "Name Box Padding",
+                    "Name Box Added Text",
+                    "Critical Rate Formula",
+                    "Critical Multplier Formula",
+                    "Flat Critical Formula",
+                    "Default SE",
+                    "---List---",
+                    "Button Events List",
+                    "Kill Switch",
+                    "Ex Turn Image",
+                    "Ex Turn Name Color",
+                    "Non Ex Turn Name Color",
+                    "Option menu entry",
+                    "Add to options",
+                    "Default Ambient Light",
+                    "Reset Lights",
+                    "Gab Font Name",
+                    "Escape Ratio",
+                    "Translated Format",
+                    "Default Sound",
+                    "Action Speed",
+                    "Default System",
+                    "Untranslated Format",
+                    "Default Format",
+                    "Victory Screen Level Sound",
+                    "Warning Side Battle UI",
+                    "Weapon Swap Text Hit",
+                    "Weapon Swap Text Critical",
+                    "Weapon Swap Command",
+                    "Weapon Swap Text Evasion",
+                    "alwaysDash",
+                    "renderingMode",
+                    "Attributes Command",
+                    "Attributes Column 1",
+                    "Attributes Column 2",
+                    "Attributes Column 3",
+                    "Warning OTB",
+                    "</span> Minimum Damage</span></td>",
+                    "Present Settings",
+                ]
+                .contains(&str)
+                    || str.starts_with("Boost Point") && !str.ends_with("Command")
+                    || str.contains("Icon")
+                    || str.starts_with("Folder") && str.ends_with(|c: char| c.is_alphanumeric())
+                    || str.ends_with(['X', 'Y'])
+                    || str.contains("BGM")
+                    || str.contains("Label")
+                    || str.starts_with("Custom ") && str.chars().nth(7).is_some_and(|c: char| c.is_alphanumeric())
+                    || str.starts_with("outlineColor")
+                    || ((str.starts_with("Menu")
+                        || str.starts_with("Item")
+                        || str.starts_with("Skill")
+                        || str.starts_with("Equip")
+                        || str.starts_with("Status")
+                        || str.starts_with("Save")
+                        || str.starts_with("Options")
+                        || str.starts_with("End"))
+                        && (str.ends_with("Background") || str.ends_with("Motion")))
+                    || str.starts_with("Menu ") && str.chars().nth(5).is_some_and(|c: char| c.is_alphanumeric())
+                    || ((str.starts_with("MHP")
+                        || str.starts_with("MMP")
+                        || str.starts_with("ATK")
+                        || str.starts_with("DEF")
+                        || str.starts_with("MAT")
+                        || str.starts_with("MDF")
+                        || str.starts_with("AGI")
+                        || str.starts_with("LUK"))
+                        && ((str.ends_with("Formula")
+                            || str.ends_with("Maximum")
+                            || str.ends_with("Minimum")
+                            || str.ends_with("Effect"))
+                            || str.ends_with("Color")))
+                    || str.starts_with("Damage") && str.ends_with(|c: char| c.is_alphanumeric())
+            }) {
+                return;
+            }
+
+            let str: &str = unsafe { value.as_str().unwrap_unchecked() }.trim();
+
+            if !(str.is_empty()
+                || STRING_IS_ONLY_SYMBOLS_RE.is_match(str)
+                || ["true", "false", "none", "time", "off"].contains(&str)
+                || str.starts_with("this.")
+                    && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic())
+                    && str.ends_with(")")
+                || str.starts_with("rgba"))
+            {
+                let mut string: String = str.replace('\n', NEW_LINE);
+
+                if romanize {
+                    string = romanize_string(string);
+                }
+
+                if write {
+                    if let Some(translated) = unsafe { map.unwrap_unchecked() }.get(&string) {
+                        *value = translated.into();
+                    }
+                } else {
+                    unsafe { strings.as_mut().unwrap_unchecked() }.push(string);
+                }
+            }
+        }
+        sonic_rs::JsonType::Object => {
+            for (key, value) in value.as_object_mut().unwrap() {
+                traverse_json(Some(key), value, map, strings, write, romanize);
+            }
+        }
+        sonic_rs::JsonType::Array => {
+            for value in value.as_array_mut().unwrap() {
+                traverse_json(None, value, map, strings, write, romanize);
+            }
+        }
+        _ => {}
+    }
 }
