@@ -379,8 +379,9 @@ fn parse_list<'a>(
     (code_label, parameters_label): (&str, &str),
     map_mut_ref: &'a mut IndexMapXxh3,
     map_ref: &'a IndexMapXxh3,
+    set_mut_ref: &'a mut IndexSetXxh3,
+    set_ref: &'a IndexSetXxh3,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
-    mut lines_pos: Option<&mut usize>,
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
@@ -390,31 +391,23 @@ fn parse_list<'a>(
 
     let mut process_parameter = |code: Code, parameter: &str| {
         if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
+            set_mut_ref.insert(parsed.clone());
+            let pos: usize = set_ref.len() - 1;
+
             if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
-                let pos: usize = unsafe { **lines_pos.as_ref().unwrap_unchecked() };
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
 
-                if processing_mode == ProcessingMode::Append {
-                    if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
-                        vec.insert(pos, (parsed, String::new()));
-                    } else {
-                        vec.push((parsed, String::new()))
-                    }
+                if processing_mode == ProcessingMode::Append && vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
+                    vec.insert(pos, (parsed, String::new()));
                 } else {
                     vec.push((parsed, String::new()))
                 }
-
-                unsafe { **lines_pos.as_mut().unwrap_unchecked() += 1 };
+            } else if processing_mode == ProcessingMode::Append {
+                if !map_ref.contains_key(&parsed) {
+                    map_mut_ref.shift_insert(pos, parsed, String::new());
+                }
             } else {
                 map_mut_ref.insert(parsed, String::new());
-
-                if processing_mode == ProcessingMode::Append {
-                    let string_ref: &String = unsafe { map_ref.last().unwrap_unchecked().0 };
-
-                    if !map_ref.contains_key(string_ref) {
-                        map_mut_ref.shift_insert(map_ref.len() - 1, string_ref.to_owned(), String::new());
-                    }
-                }
             }
         }
     };
@@ -537,17 +530,15 @@ pub fn read_map<P: AsRef<Path>>(
         return;
     }
 
+    let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+
     // Allocated when processing mode is APPEND and maps processing mode is DEFAULT.
     // Reads the transaltion from existing .txt file and then appends new lines.
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
-    let translation_map_mut_ref: &mut IndexMapXxh3 = unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) };
-    let translation_map_ref: &IndexMapXxh3 = unsafe { &*(&mut translation_map as *mut IndexMapXxh3) };
-
     // Allocated when maps processing mode is PRESERVE.
     let mut names_deque: VecDeque<String> = VecDeque::new();
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
-    let mut lines_pos: usize = 0;
 
     let translation: String;
 
@@ -555,7 +546,8 @@ pub fn read_map<P: AsRef<Path>>(
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
 
-            let parsed_translation = parse_translation(translation, Some(maps_processing_mode), Some(&mut names_deque));
+            let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
+                parse_translation(translation, Some(maps_processing_mode), Some(&mut names_deque));
 
             if maps_processing_mode == MapsProcessingMode::Preserve {
                 translation_map_vec.extend(parsed_translation);
@@ -591,24 +583,23 @@ pub fn read_map<P: AsRef<Path>>(
             }
         }
 
+        lines_set.insert(filename_comment.clone());
+
         match maps_processing_mode {
             MapsProcessingMode::Default => {
-                translation_map_mut_ref.insert(filename_comment, String::new());
-
                 if processing_mode == ProcessingMode::Append {
-                    let (key, _) = unsafe { translation_map_ref.last().unwrap_unchecked() };
-                    translation_map.shift_insert(translation_map_ref.len() - 1, key.to_owned(), String::new());
+                    translation_map.shift_insert(lines_set.len() - 1, filename_comment, String::new());
                 }
             }
             MapsProcessingMode::Separate => {
-                translation_map_vec.extend(translation_map_mut_ref.drain(..));
+                translation_map_vec.extend(translation_map.drain(..));
                 translation_map_vec.push((filename_comment, String::new()));
             }
             MapsProcessingMode::Preserve => {
                 let filename_comment_len: usize = filename_comment.len();
 
                 translation_map_vec.insert(
-                    lines_pos,
+                    lines_set.len() - 1,
                     (
                         filename_comment,
                         if filename_comment_len > 20 && names_deque.front().is_some() {
@@ -618,8 +609,6 @@ pub fn read_map<P: AsRef<Path>>(
                         },
                     ),
                 );
-
-                lines_pos += 1;
             }
         }
 
@@ -650,8 +639,9 @@ pub fn read_map<P: AsRef<Path>>(
                     (code_label, parameters_label),
                     unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) },
                     unsafe { &*(&mut translation_map as *mut IndexMapXxh3) },
+                    unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
+                    unsafe { &*(&mut lines_set as *mut IndexSetXxh3) },
                     Some(&mut translation_map_vec),
-                    Some(&mut lines_pos),
                     Some(maps_processing_mode),
                 );
             }
@@ -755,7 +745,6 @@ pub fn read_other<P: AsRef<Path>>(
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
                 translation = read_to_string(txt_output_path).unwrap_log();
-
                 lines_map.extend(parse_translation(translation, None, None));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -777,8 +766,6 @@ pub fn read_other<P: AsRef<Path>>(
             }
 
             if let Some(obj_real_arr) = obj_arr.as_array() {
-                //obj_real_arr = obj_real_arr.unwrap_log();
-
                 'obj: for obj in obj_real_arr {
                     let mut prev_variable_type: Option<Variable> = None;
 
@@ -812,10 +799,11 @@ pub fn read_other<P: AsRef<Path>>(
                             }
 
                             if variable_type != Variable::Note {
-                                trimmed.to_owned()
+                                trimmed
                             } else {
-                                string.to_owned()
+                                string
                             }
+                            .to_owned()
                         };
 
                         let parsed: Option<(String, bool)> =
@@ -895,7 +883,8 @@ pub fn read_other<P: AsRef<Path>>(
                         (code_label, parameters_label),
                         unsafe { &mut *(&mut lines_map as *mut IndexMapXxh3) },
                         unsafe { &*(&mut lines_map as *mut IndexMapXxh3) },
-                        None,
+                        lines_mut_ref,
+                        lines_ref,
                         None,
                         None,
                     );
