@@ -79,11 +79,11 @@ fn parse_translation<'a>(
             .enumerate()
             .filter_map(move |(i, line)| {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
-                        if original.starts_with("<!-- Map") && original.len() > 20 {
-                            unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
-                        }
-
+                    if maps_processing_mode.is_some_and(|mode| mode != MapsProcessingMode::Default)
+                        && original.starts_with("<!-- Map")
+                        && original.len() > 20
+                    {
+                        unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
                         None
                     } else {
                         Some((original.to_owned(), translated.to_owned()))
@@ -382,6 +382,7 @@ fn parse_list<'a>(
     set_mut_ref: &'a mut IndexSetXxh3,
     set_ref: &'a IndexSetXxh3,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
+    mut translation_map_vec_pos: Option<&mut usize>,
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
@@ -391,23 +392,30 @@ fn parse_list<'a>(
 
     let mut process_parameter = |code: Code, parameter: &str| {
         if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
-            set_mut_ref.insert(parsed.clone());
-            let pos: usize = set_ref.len() - 1;
-
             if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
+                let pos: usize = **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() };
 
-                if processing_mode == ProcessingMode::Append && vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
-                    vec.insert(pos, (parsed, String::new()));
+                if processing_mode == ProcessingMode::Append {
+                    if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
+                        vec.insert(pos, (parsed, String::new()));
+                    }
                 } else {
                     vec.push((parsed, String::new()))
                 }
-            } else if processing_mode == ProcessingMode::Append {
-                if !map_ref.contains_key(&parsed) {
-                    map_mut_ref.shift_insert(pos, parsed, String::new());
-                }
+
+                **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() } += 1;
             } else {
-                map_mut_ref.insert(parsed, String::new());
+                set_mut_ref.insert(parsed.clone());
+                let pos: usize = set_ref.len() - 1;
+
+                if processing_mode == ProcessingMode::Append {
+                    if !map_ref.contains_key(&parsed) {
+                        map_mut_ref.shift_insert(pos, parsed, String::new());
+                    }
+                } else {
+                    map_mut_ref.insert(parsed, String::new());
+                }
             }
         }
     };
@@ -530,15 +538,18 @@ pub fn read_map<P: AsRef<Path>>(
         return;
     }
 
+    // Allocated when maps processing mode is DEFAULT or SEPARATE.
     let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
 
-    // Allocated when processing mode is APPEND and maps processing mode is DEFAULT.
-    // Reads the transaltion from existing .txt file and then appends new lines.
+    // Allocated when maps processing mode is DEFAULT or SEPARATE.
+    // Reads the translation from existing .txt file and then appends new lines.
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
-    // Allocated when maps processing mode is PRESERVE.
-    let mut names_deque: VecDeque<String> = VecDeque::new();
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
+    let mut names_deque: VecDeque<String> = VecDeque::new();
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
+
+    // Used when maps processing mode is PRESERVE.
+    let mut translation_map_vec_pos: usize = 0;
 
     let translation: String;
 
@@ -583,32 +594,39 @@ pub fn read_map<P: AsRef<Path>>(
             }
         }
 
-        lines_set.insert(filename_comment.clone());
+        if maps_processing_mode != MapsProcessingMode::Preserve {
+            lines_set.insert(filename_comment.clone());
+        }
 
         match maps_processing_mode {
             MapsProcessingMode::Default => {
-                if processing_mode == ProcessingMode::Append {
+                if processing_mode == ProcessingMode::Append && !translation_map.contains_key(&filename_comment) {
                     translation_map.shift_insert(lines_set.len() - 1, filename_comment, String::new());
+                } else {
+                    translation_map.insert(filename_comment, String::new());
                 }
             }
             MapsProcessingMode::Separate => {
-                translation_map_vec.extend(translation_map.drain(..));
+                translation_map_vec.extend(translation_map.drain(..lines_set.len() - 1));
+                lines_set.clear();
                 translation_map_vec.push((filename_comment, String::new()));
             }
             MapsProcessingMode::Preserve => {
                 let filename_comment_len: usize = filename_comment.len();
 
                 translation_map_vec.insert(
-                    lines_set.len() - 1,
+                    translation_map_vec_pos,
                     (
                         filename_comment,
                         if filename_comment_len > 20 && names_deque.front().is_some() {
-                            names_deque.pop_front().unwrap_log()
+                            unsafe { names_deque.pop_front().unwrap_unchecked() }
                         } else {
                             String::new()
                         },
                     ),
                 );
+
+                translation_map_vec_pos += 1;
             }
         }
 
@@ -642,6 +660,7 @@ pub fn read_map<P: AsRef<Path>>(
                     unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
                     unsafe { &*(&mut lines_set as *mut IndexSetXxh3) },
                     Some(&mut translation_map_vec),
+                    Some(&mut translation_map_vec_pos),
                     Some(maps_processing_mode),
                 );
             }
@@ -666,6 +685,10 @@ pub fn read_map<P: AsRef<Path>>(
         }
     }
 
+    if maps_processing_mode == MapsProcessingMode::Separate {
+        translation_map_vec.extend(translation_map.drain(..));
+    }
+
     let mut output_content: String = if maps_processing_mode == MapsProcessingMode::Default {
         String::from_iter(
             translation_map
@@ -676,7 +699,7 @@ pub fn read_map<P: AsRef<Path>>(
         String::from_iter(
             translation_map_vec
                 .into_iter()
-                .map(|(original, translation)| original + LINES_SEPARATOR + &translation + "\n"),
+                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         )
     };
 
@@ -885,6 +908,7 @@ pub fn read_other<P: AsRef<Path>>(
                         unsafe { &*(&mut lines_map as *mut IndexMapXxh3) },
                         lines_mut_ref,
                         lines_ref,
+                        None,
                         None,
                         None,
                     );
