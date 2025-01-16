@@ -69,7 +69,8 @@ pub trait TrimReplace {
 
 impl TrimReplace for str {
     fn trim_replace(&self) -> String {
-        self.replace([' ', '\n', '\t', '\r'], "")
+        // okay i shouldn't have reinvented the wheel and just do this from the start
+        self.trim().to_owned()
     }
 }
 
