@@ -63,6 +63,16 @@ pub enum MapsProcessingMode {
     Preserve,
 }
 
+pub trait TrimReplace {
+    fn trim_replace(&self) -> String;
+}
+
+impl TrimReplace for str {
+    fn trim_replace(&self) -> String {
+        self.replace([' ', '\n', '\t', '\r'], "")
+    }
+}
+
 pub trait EachLine {
     fn each_line(&self) -> Vec<String>;
 }

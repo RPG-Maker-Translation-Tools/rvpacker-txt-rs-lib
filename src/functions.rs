@@ -190,12 +190,12 @@ pub fn determine_extension(engine_type: EngineType) -> &'static str {
 
 pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineType) -> Option<(String, Value)> {
     if let Ok(entry) = entry {
-        let filename: OsString = entry.file_name();
-        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
-
         if !entry.file_type().unwrap_log().is_file() {
             return None;
         };
+
+        let filename: OsString = entry.file_name();
+        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
         if filename_str.starts_with("Map")
             && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
@@ -222,12 +222,12 @@ pub fn filter_other(
     game_type: Option<GameType>,
 ) -> Option<(String, Value)> {
     if let Ok(entry) = entry {
-        let filename: OsString = entry.file_name();
-        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
-
         if !entry.file_type().unwrap_log().is_file() {
             return None;
         };
+
+        let filename: OsString = entry.file_name();
+        let filename_str: &str = unsafe { from_utf8_unchecked(filename.as_encoded_bytes()) };
 
         let (name, _) = unsafe { filename_str.split_once('.').unwrap_unchecked() };
 

@@ -11,7 +11,7 @@ use crate::{
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
-    types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, Variable},
+    types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, TrimReplace, Variable},
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
@@ -42,16 +42,8 @@ fn parse_translation(translation: String, file: &str) -> StringHashMap {
             }
 
             Some((
-                original
-                    .strip_suffix(NEW_LINE)
-                    .unwrap_or(original)
-                    .trim()
-                    .replace(NEW_LINE, "\n"),
-                translated
-                    .strip_suffix(NEW_LINE)
-                    .unwrap_or(translated)
-                    .trim()
-                    .replace(NEW_LINE, "\n"),
+                original.replace(NEW_LINE, "\n").trim_replace(),
+                translated.replace(NEW_LINE, "\n").trim_replace(),
             ))
         } else {
             eprintln!(
@@ -162,21 +154,19 @@ fn get_translated_parameter(
         }
     }
 
-    let translated: Option<String> = if let Some(mut deque) = deque {
-        let deque: &mut VecDeque<String> = &mut deque.lock().unwrap();
+    let translated: Option<String> = if let Some(hashmap) = hashmap {
+        hashmap.get(parameter).map(|translated: &String| {
+            let mut result: String = translated.to_owned();
+            result
+        })
+    } else {
+        let deque: &mut VecDeque<String> = &mut deque.as_ref().unwrap().lock().unwrap();
 
         if code == Code::ChoiceArray {
             deque.front().map(String::to_owned)
         } else {
             deque.pop_front()
         }
-    } else {
-        unsafe { hashmap.unwrap_unchecked() }
-            .get(parameter)
-            .map(|translated: &String| {
-                let mut result: String = translated.to_owned();
-                result
-            })
     };
 
     if let Some(mut translated) = translated {
@@ -567,21 +557,26 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         // DEFAULT, only ever holds one hashmap with all the translation lines.
         // If maps processing mode is SEPARATE, holds multiple hashmap, each
         // respective to a single map file.
-        let mut translation_maps: Vec<StringHashMap> = Vec::new();
+        let mut translation_maps: HashMap<u16, StringHashMap> = HashMap::new();
         // Always allocated.
         let mut names_map: StringHashMap = HashMap::with_hasher(HASHER);
+
+        let mut map_number: u16 = 0;
 
         for (i, line) in translation.split('\n').enumerate() {
             if line.starts_with("<!-- Map") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if original.len() > 20 {
-                        let map_name: &str = &original[17..original.len() - 4];
-                        names_map.insert(map_name.trim().to_owned(), translated.trim().to_owned());
+                    if !original.ends_with(&(determine_extension(engine_type).to_owned() + " -->")) {
+                        let map_display_name: &str = &original[17..original.len() - 4];
+                        names_map.insert(map_display_name.trim_replace(), translated.trim_replace());
                     }
 
                     if maps_processing_mode == MapsProcessingMode::Separate && i > 0 {
-                        translation_maps.push(take(&mut translation_map));
+                        translation_maps.insert(map_number, take(&mut translation_map));
                     }
+
+                    let left: &str = original.split_once('.').unwrap().0;
+                    map_number = left[left.len() - 3..].parse::<u16>().unwrap();
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
@@ -593,25 +588,11 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                     }
 
                     if maps_processing_mode == MapsProcessingMode::Preserve {
-                        translation_deque.push_back(
-                            translated
-                                .strip_suffix(NEW_LINE)
-                                .unwrap_or(original)
-                                .trim()
-                                .replace(NEW_LINE, "\n"),
-                        );
+                        translation_deque.push_back(translated.replace(NEW_LINE, "\n").trim_replace());
                     } else {
                         translation_map.insert(
-                            original
-                                .strip_suffix(NEW_LINE)
-                                .unwrap_or(original)
-                                .trim()
-                                .replace(NEW_LINE, "\n"),
-                            translated
-                                .strip_suffix(NEW_LINE)
-                                .unwrap_or(original)
-                                .trim()
-                                .replace(NEW_LINE, "\n"),
+                            original.replace(NEW_LINE, "\n").trim_replace(),
+                            translated.replace(NEW_LINE, "\n").trim_replace(),
                         );
                     }
                 } else {
@@ -623,8 +604,8 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             }
         }
 
-        if maps_processing_mode == MapsProcessingMode::Default {
-            translation_maps.push(translation_map);
+        if !translation_map.is_empty() {
+            translation_maps.insert(map_number, translation_map);
         }
 
         (names_map, translation_deque, translation_maps)
@@ -653,7 +634,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             }
         }
 
-        let reserve_map = StringHashMap::with_hasher(HASHER);
+        let reserve_map: StringHashMap = StringHashMap::with_hasher(HASHER);
 
         let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
             &reserve_map
@@ -661,11 +642,11 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
                 unsafe {
                     let filename: &str = filename.split_once('.').unwrap_unchecked().0;
-                    let map_number: &str = &filename[filename.len() - 3..];
-                    translation_maps.get_unchecked(map_number.parse::<usize>().unwrap_unchecked())
+                    let map_number: u16 = filename[filename.len() - 3..].parse::<u16>().unwrap();
+                    translation_maps.get(&map_number).unwrap()
                 }
             } else {
-                unsafe { translation_maps.get_unchecked(0) }
+                unsafe { translation_maps.iter().next().unwrap_unchecked().1 }
             };
 
             if hashmap.is_empty() {

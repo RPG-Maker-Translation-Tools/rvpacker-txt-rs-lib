@@ -18,7 +18,9 @@ use crate::{
         },
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
-    types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, Variable},
+    types::{
+        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
+    },
 };
 use flate2::read::ZlibDecoder;
 use indexmap::{IndexMap, IndexSet};
@@ -839,7 +841,7 @@ pub fn read_other<P: AsRef<Path>>(
                                 }
 
                                 if let Some(last) = lines_mut_ref.pop() {
-                                    lines_mut_ref.insert(last.trim().to_owned() + &parsed);
+                                    lines_mut_ref.insert(last.trim_replace() + &parsed);
                                     let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() };
 
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
@@ -859,8 +861,7 @@ pub fn read_other<P: AsRef<Path>>(
                                 .map(str::trim)
                                 .collect::<Vec<_>>()
                                 .join(NEW_LINE)
-                                .trim()
-                                .to_owned();
+                                .trim_replace();
 
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
@@ -1095,8 +1096,7 @@ pub fn read_system<P: AsRef<Path>>(
                     }
                     None => "",
                 })
-                .trim()
-                .to_owned()
+                .trim_replace()
         };
 
         // We aren't checking if game_title_string is empty because VX and XP don't include game title in System file, and we still need it last

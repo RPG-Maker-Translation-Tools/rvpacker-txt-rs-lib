@@ -43,7 +43,7 @@ pub mod regexes {
 ///
 /// 356 - System line, special text. (that one needs clarification)
 ///
-/// 655 - Line displayed in shop - probably from an external script. (**OLDER ENGINES ONLY!**)
+/// 655 - Line displayed in shop - from an external script. (**OLDER ENGINES ONLY!**)
 ///
 /// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
 pub const ALLOWED_CODES: [u16; 9] = [101, 102, 320, 324, 356, 401, 402, 405, 655];
