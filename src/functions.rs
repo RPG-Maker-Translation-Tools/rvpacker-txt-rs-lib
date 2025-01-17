@@ -1,11 +1,13 @@
 use crate::{
-    statics::{regexes::STRING_IS_ONLY_SYMBOLS_RE, HASHER, NEW_LINE},
-    types::{EachLine, EngineType, GameType, ResultExt},
+    statics::{HASHER, NEW_LINE},
+    types::{EachLine, EngineType, GameType, ProcessingMode, ResultExt},
 };
 use indexmap::IndexSet;
 use marshal_rs::{load, StringMode};
+use regex::Regex;
 use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
+    collections::{HashSet, VecDeque},
     ffi::OsString,
     fs::{read, DirEntry, File},
     io::{self, BufReader, Read},
@@ -384,134 +386,55 @@ pub fn read_to_string_without_bom<P: AsRef<Path>>(file_path: P) -> io::Result<St
     Ok(content)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn traverse_json(
     key: Option<&str>,
     value: &mut Value,
-    map: Option<&std::collections::HashMap<String, String, Xxh3DefaultBuilder>>,
-    strings: &mut Option<&mut Vec<String>>,
+    lines: &mut Option<&mut Vec<String>>,
+    map: &mut Option<&mut VecDeque<(String, String)>>,
+    set: &Option<&HashSet<String, Xxh3DefaultBuilder>>,
     write: bool,
     romanize: bool,
+    processing_mode: ProcessingMode,
 ) {
+    let regexes = unsafe {
+        [
+        Regex::new(r"^(name|description|Window Width|Window Height|ATTENTION!!!|Shown Elements|Width|Outline Color|Command Alignment|Command Position|Command Rows|Chinese Font|Korean Font|Default Font|Text Align|Scenes To Draw|displacementImage|Turn Alignment|Buff Formula|Counter Alignment|Default Width|Face Indent|Fast Forward Key|Font Name|Font Name CH|Font Name KR|Name Box Padding|Name Box Added Text|Critical Rate Formula|Critical Multplier Formula|Flat Critical Formula|Default SE|---List---|Button Events List|Kill Switch|Ex Turn Image|Ex Turn Name Color|Non Ex Turn Name Color|Option menu entry|Add to options|Default Ambient Light|Reset Lights|Gab Font Name|Escape Ratio|Translated Format|Default Sound|Action Speed|Default System|Untranslated Format|Default Format|Victory Screen Level Sound|Warning Side Battle UI|Weapon Swap Text Hit|Weapon Swap Text Critical|Weapon Swap Command|Weapon Swap Text Evasion|alwaysDash|renderingMode|Attributes Command|Attributes Column 1|Attributes Column 2|Attributes Column 3|Warning OTB|</span> Minimum Damage</span></td>|Present Settings)$").unwrap_unchecked(),
+        Regex::new(r"^Folder.*\w$").unwrap_unchecked(),
+        Regex::new(r"[XY]$").unwrap_unchecked(),
+        Regex::new(r"BGM").unwrap_unchecked(),
+        Regex::new(r"Label").unwrap_unchecked(),
+        Regex::new(r"^Custom \w").unwrap_unchecked(),
+        Regex::new(r"^outlineColor").unwrap_unchecked(),
+        Regex::new(r"^(Menu|Item|Skill|Equip|Status|Save|Options|End).*(Background|Motion)$").unwrap_unchecked(),
+        Regex::new(r"^Menu \w").unwrap_unchecked(),
+        Regex::new(r"^(MHP|MMP|ATK|DEF|MAT|MDF|AGI|LUK).*(Formula|Maximum|Minimum|Effect|Color)$").unwrap_unchecked(),
+        Regex::new(r"^Damage\w*$").unwrap_unchecked(),
+    ]
+    };
+
+    // TODO: Extremely slow. Regexes aren't an answer I guess.
+    let invalid_key = |key: &Option<&str>| -> bool {
+        if let Some(str) = key {
+            if str.starts_with("LATIN") {
+                false
+            } else {
+                regexes.iter().any(|re| re.is_match(str))
+            }
+        } else {
+            false
+        }
+    };
+
     match value.get_type() {
         sonic_rs::JsonType::String => {
-            // TODO: Remake this shit in regexps
-            if key.is_some_and(|str| {
-                [
-                    "name",
-                    "description",
-                    "Window Width",
-                    "Window Height",
-                    "ATTENTION!!!",
-                    "Shown Elements",
-                    "Width",
-                    "Outline Color",
-                    "Command Alignment",
-                    "Command Position",
-                    "Command Rows",
-                    "Chinese Font",
-                    "Korean Font",
-                    "Default Font",
-                    "Text Align",
-                    "Scenes To Draw",
-                    "displacementImage",
-                    "Turn Alignment",
-                    "Buff Formula",
-                    "Counter Alignment",
-                    "Buff Formula",
-                    "Counter Alignment",
-                    "Default Width",
-                    "Face Indent",
-                    "Fast Forward Key",
-                    "Font Name",
-                    "Font Name CH",
-                    "Font Name KR",
-                    "Name Box Padding",
-                    "Name Box Added Text",
-                    "Critical Rate Formula",
-                    "Critical Multplier Formula",
-                    "Flat Critical Formula",
-                    "Default SE",
-                    "---List---",
-                    "Button Events List",
-                    "Kill Switch",
-                    "Ex Turn Image",
-                    "Ex Turn Name Color",
-                    "Non Ex Turn Name Color",
-                    "Option menu entry",
-                    "Add to options",
-                    "Default Ambient Light",
-                    "Reset Lights",
-                    "Gab Font Name",
-                    "Escape Ratio",
-                    "Translated Format",
-                    "Default Sound",
-                    "Action Speed",
-                    "Default System",
-                    "Untranslated Format",
-                    "Default Format",
-                    "Victory Screen Level Sound",
-                    "Warning Side Battle UI",
-                    "Weapon Swap Text Hit",
-                    "Weapon Swap Text Critical",
-                    "Weapon Swap Command",
-                    "Weapon Swap Text Evasion",
-                    "alwaysDash",
-                    "renderingMode",
-                    "Attributes Command",
-                    "Attributes Column 1",
-                    "Attributes Column 2",
-                    "Attributes Column 3",
-                    "Warning OTB",
-                    "</span> Minimum Damage</span></td>",
-                    "Present Settings",
-                ]
-                .contains(&str)
-                    || str.starts_with("Boost Point") && !str.ends_with("Command")
-                    || str.contains("Icon")
-                    || str.starts_with("Folder") && str.ends_with(|c: char| c.is_alphanumeric())
-                    || str.ends_with(['X', 'Y'])
-                    || str.contains("BGM")
-                    || str.contains("Label")
-                    || str.starts_with("Custom ") && str.chars().nth(7).is_some_and(|c: char| c.is_alphanumeric())
-                    || str.starts_with("outlineColor")
-                    || ((str.starts_with("Menu")
-                        || str.starts_with("Item")
-                        || str.starts_with("Skill")
-                        || str.starts_with("Equip")
-                        || str.starts_with("Status")
-                        || str.starts_with("Save")
-                        || str.starts_with("Options")
-                        || str.starts_with("End"))
-                        && (str.ends_with("Background") || str.ends_with("Motion")))
-                    || str.starts_with("Menu ") && str.chars().nth(5).is_some_and(|c: char| c.is_alphanumeric())
-                    || ((str.starts_with("MHP")
-                        || str.starts_with("MMP")
-                        || str.starts_with("ATK")
-                        || str.starts_with("DEF")
-                        || str.starts_with("MAT")
-                        || str.starts_with("MDF")
-                        || str.starts_with("AGI")
-                        || str.starts_with("LUK"))
-                        && ((str.ends_with("Formula")
-                            || str.ends_with("Maximum")
-                            || str.ends_with("Minimum")
-                            || str.ends_with("Effect"))
-                            || str.ends_with("Color")))
-                    || str.starts_with("Damage") && str.ends_with(|c: char| c.is_alphanumeric())
-            }) {
+            if invalid_key(&key) {
                 return;
             }
 
             let str: &str = unsafe { value.as_str().unwrap_unchecked() }.trim();
 
-            if !(str.is_empty()
-                || STRING_IS_ONLY_SYMBOLS_RE.is_match(str)
-                || ["true", "false", "none", "time", "off"].contains(&str)
-                || str.starts_with("this.")
-                    && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic())
-                    && str.ends_with(")")
-                || str.starts_with("rgba"))
-            {
+            if !(str.is_empty() || unsafe { Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s\d"']+$"#).unwrap_unchecked() }.is_match(str) || ["true", "false", "none", "time", "off"].contains(&str) || str.starts_with("this.") && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic()) && str.ends_with(")") || str.starts_with("rgba")) || key.is_some_and(|x| x.starts_with("LATIN")){
                 let mut string: String = str.replace('\n', NEW_LINE);
 
                 if romanize {
@@ -519,22 +442,38 @@ pub fn traverse_json(
                 }
 
                 if write {
-                    if let Some(translated) = unsafe { map.unwrap_unchecked() }.get(&string) {
-                        *value = translated.into();
+                    if !unsafe { set.as_ref().unwrap_unchecked() }.contains(&string) {
+                        return;
+                    }
+
+                    if let Some((_, translated)) = unsafe { map.as_mut().unwrap_unchecked().pop_front() } {
+                        *value = (&translated).into();
                     }
                 } else {
-                    unsafe { strings.as_mut().unwrap_unchecked() }.push(string);
+                    let lines = unsafe { lines.as_mut().unwrap_unchecked() };
+
+                    lines.push(string);
+                    let last: &String = unsafe { lines.last().unwrap_unchecked() };
+                    let pos: usize = lines.len() - 1;
+
+                    if processing_mode == ProcessingMode::Append {
+                        let translation_map = unsafe { map.as_mut().unwrap_unchecked() };
+
+                        if translation_map.get(pos).is_some_and(|x| *last != x.0) {
+                            translation_map.insert(pos, (last.to_owned(), String::new()));
+                        }
+                    }
                 }
             }
         }
         sonic_rs::JsonType::Object => {
             for (key, value) in value.as_object_mut().unwrap() {
-                traverse_json(Some(key), value, map, strings, write, romanize);
+                traverse_json(Some(key), value, lines, map, set, write, romanize, processing_mode);
             }
         }
         sonic_rs::JsonType::Array => {
             for value in value.as_array_mut().unwrap() {
-                traverse_json(None, value, map, strings, write, romanize);
+                traverse_json(None, value, lines, map, set, write, romanize, processing_mode);
             }
         }
         _ => {}

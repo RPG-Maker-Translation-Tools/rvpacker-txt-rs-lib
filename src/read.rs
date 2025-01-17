@@ -19,7 +19,8 @@ use crate::{
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
+        Code, EngineType, GameType, IntoSplit, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
+        Variable,
     },
 };
 use flate2::read::ZlibDecoder;
@@ -32,7 +33,7 @@ use std::{
     collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
-    mem::{take, transmute},
+    mem::transmute,
     path::Path,
     str::Chars,
 };
@@ -40,34 +41,6 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
-
-// genius
-pub trait IntoSplit {
-    fn into_split(self, delimiter: char) -> Vec<String>;
-}
-
-impl IntoSplit for String {
-    fn into_split(self, delimiter: char) -> Vec<String> {
-        let mut result: Vec<String> = Vec::new();
-        let mut current: String = String::with_capacity(self.len() / 4);
-
-        for c in self.chars() {
-            if c == delimiter {
-                if !current.is_empty() {
-                    result.push(take(&mut current));
-                }
-            } else {
-                current.push(c);
-            }
-        }
-
-        if !current.is_empty() {
-            result.push(current);
-        }
-
-        result
-    }
-}
 
 fn parse_translation<'a>(
     translation: String,
@@ -1177,9 +1150,6 @@ pub fn read_scripts<P: AsRef<Path>>(
     }
 
     let mut lines: Vec<String> = Vec::new();
-    let lines_ref: &Vec<String> = unsafe { &*(&mut lines as *mut Vec<String>) };
-    let lines_mut_ref: &mut Vec<String> = unsafe { &mut *(&mut lines as *mut Vec<String>) };
-
     let mut translation_map: Vec<(String, String)> = Vec::new();
 
     let translation: String;
@@ -1244,7 +1214,6 @@ pub fn read_scripts<P: AsRef<Path>>(
         ]
     };
 
-    let mut i: usize = 0;
     'extracted: for mut extracted in extracted_strings {
         if extracted.is_empty() {
             continue;
@@ -1260,14 +1229,13 @@ pub fn read_scripts<P: AsRef<Path>>(
             extracted = romanize_string(extracted);
         }
 
-        lines_mut_ref.push(extracted);
-        let last: &String = unsafe { lines_ref.last().unwrap_unchecked() };
+        lines.push(extracted);
+        let last: &String = unsafe { lines.last().unwrap_unchecked() };
+        let pos: usize = lines.len() - 1;
 
-        if processing_mode == ProcessingMode::Append && translation_map.get(i).is_some_and(|x| *last != x.0) {
-            translation_map.insert(lines_ref.len() - 1, (last.to_owned(), String::new()));
+        if processing_mode == ProcessingMode::Append && translation_map.get(pos).is_some_and(|x| *last != x.0) {
+            translation_map.insert(pos, (last.to_owned(), String::new()));
         }
-
-        i += 1;
     }
 
     let mut output_content: String = if processing_mode == ProcessingMode::Append {
@@ -1320,7 +1288,7 @@ pub fn read_plugins<P: AsRef<Path>>(
         return;
     }
 
-    let mut translation_map: Vec<(String, String)> = Vec::new();
+    let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
 
     let translation: String;
 
@@ -1345,9 +1313,30 @@ pub fn read_plugins<P: AsRef<Path>>(
     let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
     let mut lines: Vec<String> = Vec::new();
 
-    traverse_json(None, &mut plugins_json, None, &mut Some(&mut lines), false, romanize);
+    traverse_json(
+        None,
+        &mut plugins_json,
+        &mut Some(&mut lines),
+        &mut Some(&mut translation_map),
+        &None,
+        false,
+        romanize,
+        processing_mode,
+    );
 
-    write(txt_output_path, lines.join("\n")).unwrap_log();
+    let mut output_content: String = if processing_mode == ProcessingMode::Append {
+        String::from_iter(
+            translation_map
+                .into_iter()
+                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+        )
+    } else {
+        String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+    };
+
+    output_content.pop();
+
+    write(txt_output_path, output_content).unwrap_log();
 
     if logging {
         println!("{PARSED_FILE_MSG} {:?}", unsafe {

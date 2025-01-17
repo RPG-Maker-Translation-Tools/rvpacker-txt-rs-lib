@@ -1,5 +1,6 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer};
+use std::mem::take;
 #[cfg(feature = "serde")]
 use std::mem::transmute;
 
@@ -71,6 +72,34 @@ impl TrimReplace for str {
     fn trim_replace(&self) -> String {
         // okay i shouldn't have reinvented the wheel and just do this from the start
         self.trim().to_owned()
+    }
+}
+
+// genius
+pub trait IntoSplit {
+    fn into_split(self, delimiter: char) -> Vec<String>;
+}
+
+impl IntoSplit for String {
+    fn into_split(self, delimiter: char) -> Vec<String> {
+        let mut result: Vec<String> = Vec::new();
+        let mut current: String = String::with_capacity(self.len() / 4);
+
+        for c in self.chars() {
+            if c == delimiter {
+                if !current.is_empty() {
+                    result.push(take(&mut current));
+                }
+            } else {
+                current.push(c);
+            }
+        }
+
+        if !current.is_empty() {
+            result.push(current);
+        }
+
+        result
     }
 }
 

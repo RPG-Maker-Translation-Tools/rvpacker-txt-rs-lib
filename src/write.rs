@@ -11,14 +11,17 @@ use crate::{
         regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
-    types::{Code, EngineType, GameType, MapsProcessingMode, OptionExt, ResultExt, TrimReplace, Variable},
+    types::{
+        Code, EngineType, GameType, IntoSplit, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
+        Variable,
+    },
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsStr,
     fs::{read, read_dir, read_to_string, write},
     io::{Read, Write},
@@ -31,28 +34,34 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 
-fn parse_translation(translation: String, file: &str) -> StringHashMap {
-    HashMap::from_iter(translation.split('\n').enumerate().filter_map(|(i, line)| {
-        if line.starts_with("<!--") {
-            None
-        } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-            #[cfg(not(debug_assertions))]
-            if translated.is_empty() {
-                return None;
-            }
+fn parse_translation<'a>(translation: String, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
+    Box::new(
+        translation
+            .into_split('\n')
+            .into_iter()
+            .enumerate()
+            .filter_map(move |(i, line)| {
+                if line.starts_with("<!--") {
+                    None
+                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                    #[cfg(not(debug_assertions))]
+                    if translated.is_empty() {
+                        return None;
+                    }
 
-            Some((
-                original.replace(NEW_LINE, "\n").trim_replace(),
-                translated.replace(NEW_LINE, "\n").trim_replace(),
-            ))
-        } else {
-            eprintln!(
-                "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
-                i = i + 1
-            );
-            None
-        }
-    }))
+                    Some((
+                        original.replace(NEW_LINE, "\n").trim_replace(),
+                        translated.replace(NEW_LINE, "\n").trim_replace(),
+                    ))
+                } else {
+                    eprintln!(
+                        "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
+                        i = i + 1
+                    );
+                    None
+                }
+            }),
+    )
 }
 
 fn process_parameter(
@@ -756,7 +765,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
             &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
 
         let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
-        let translation_map: StringHashMap = parse_translation(translation, txt_filename);
+        let translation_map: StringHashMap = HashMap::from_iter(parse_translation(translation, txt_filename));
 
         if translation_map.is_empty() {
             return;
@@ -902,7 +911,7 @@ pub fn write_system<P: AsRef<Path>>(
     let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
 
     let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
-    let translation_map: StringHashMap = parse_translation(translation, "system.txt");
+    let translation_map: StringHashMap = HashMap::from_iter(parse_translation(translation, "system.txt"));
 
     if translation_map.is_empty() {
         return;
@@ -1027,7 +1036,10 @@ pub fn write_plugins<P: AsRef<Path>>(
     romanize: bool,
 ) {
     let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-    let translation_map: StringHashMap = parse_translation(translation, "plugins.txt");
+    let mut translation_map: VecDeque<(String, String)> =
+        VecDeque::from_iter(parse_translation(translation, "plugins.txt"));
+    let translation_set: HashSet<String, Xxh3DefaultBuilder> =
+        HashSet::from_iter(translation_map.iter().map(|x| x.0.to_owned()));
 
     let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
 
@@ -1042,10 +1054,12 @@ pub fn write_plugins<P: AsRef<Path>>(
     traverse_json(
         None,
         &mut plugins_json,
-        Some(&translation_map),
         &mut None,
+        &mut Some(&mut translation_map),
+        &Some(&translation_set),
         true,
         romanize,
+        ProcessingMode::Default,
     );
 
     write(
@@ -1078,7 +1092,10 @@ pub fn write_scripts<P: AsRef<Path>>(
     engine_type: EngineType,
 ) {
     let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-    let translation_map: StringHashMap = parse_translation(translation, "scripts.txt");
+    let mut translation_map: VecDeque<(String, String)> =
+        VecDeque::from_iter(parse_translation(translation, "scripts.txt"));
+    let translation_set: HashSet<String, Xxh3DefaultBuilder> =
+        HashSet::from_iter(translation_map.iter().map(|(x, _)| x.to_owned()));
 
     if translation_map.is_empty() {
         return;
@@ -1090,7 +1107,7 @@ pub fn write_scripts<P: AsRef<Path>>(
     script_entries
         .as_array_mut()
         .unwrap_log()
-        .par_iter_mut()
+        .iter_mut()
         .for_each(|script: &mut Value| {
             let data: Vec<u8> = from_value(&script.as_array().unwrap_log()[2]["data"]).unwrap_log();
 
@@ -1111,18 +1128,18 @@ pub fn write_scripts<P: AsRef<Path>>(
             let (strings_array, indices_array) = extract_strings(&code, true);
 
             for (mut string, range) in strings_array.into_iter().zip(indices_array).rev() {
-                if !translation_map.contains_key(&string) {
-                    continue;
-                }
-
                 if romanize {
                     string = romanize_string(string);
                 }
 
-                let translated: Option<&String> = translation_map.get(&string);
+                if !translation_set.contains(&string) {
+                    continue;
+                }
 
-                if let Some(translated) = translated {
-                    code.replace_range(range, translated);
+                let translated: Option<(String, String)> = translation_map.pop_front();
+
+                if let Some((_, translated)) = translated {
+                    code.replace_range(range, &translated);
                 }
             }
 
