@@ -1092,10 +1092,7 @@ pub fn write_scripts<P: AsRef<Path>>(
     engine_type: EngineType,
 ) {
     let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-    let mut translation_map: VecDeque<(String, String)> =
-        VecDeque::from_iter(parse_translation(translation, "scripts.txt"));
-    let translation_set: HashSet<String, Xxh3DefaultBuilder> =
-        HashSet::from_iter(translation_map.iter().map(|(x, _)| x.to_owned()));
+    let translation_map: StringHashMap = StringHashMap::from_iter(parse_translation(translation, "scripts.txt"));
 
     if translation_map.is_empty() {
         return;
@@ -1125,21 +1122,19 @@ pub fn write_scripts<P: AsRef<Path>>(
                 }
             }
 
-            let (strings_array, indices_array) = extract_strings(&code, true);
+            let (extracted_strings, ranges) = extract_strings(&code, true);
 
-            for (mut string, range) in strings_array.into_iter().zip(indices_array).rev() {
-                if romanize {
-                    string = romanize_string(string);
-                }
-
-                if !translation_set.contains(&string) {
+            for (mut extracted, range) in extracted_strings.into_iter().zip(ranges).rev() {
+                if extracted.is_empty() {
                     continue;
                 }
 
-                let translated: Option<(String, String)> = translation_map.pop_front();
+                if romanize {
+                    extracted = romanize_string(extracted);
+                }
 
-                if let Some((_, translated)) = translated {
-                    code.replace_range(range, &translated);
+                if let Some(translated) = translation_map.get(&extracted) {
+                    code.replace_range(range, translated);
                 }
             }
 
