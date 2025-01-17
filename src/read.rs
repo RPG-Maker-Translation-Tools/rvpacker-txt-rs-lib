@@ -1214,15 +1214,19 @@ pub fn read_scripts<P: AsRef<Path>>(
         ]
     };
 
-    'extracted: for mut extracted in extracted_strings {
+    lines.reserve_exact(extracted_strings.len());
+
+    if processing_mode == ProcessingMode::Append {
+        translation_map.reserve_exact(extracted_strings.len());
+    }
+
+    for mut extracted in extracted_strings {
         if extracted.is_empty() {
             continue;
         }
 
-        for re in regexes.iter() {
-            if re.is_match(&extracted) {
-                continue 'extracted;
-            }
+        if regexes.iter().any(|re| re.is_match(&extracted)) {
+            continue;
         }
 
         if romanize {
