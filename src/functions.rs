@@ -16,6 +16,7 @@ use std::{
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
+#[inline]
 pub fn romanize_string(string: String) -> String {
     let mut result: String = String::with_capacity(string.capacity());
 
@@ -85,6 +86,7 @@ pub fn romanize_string(string: String) -> String {
     result
 }
 
+#[inline(always)]
 pub fn get_object_data(object: &Object) -> Vec<u8> {
     let mut vec: Vec<u8> = Vec::new();
 
@@ -97,6 +99,7 @@ pub fn get_object_data(object: &Object) -> Vec<u8> {
     vec
 }
 
+#[inline]
 pub fn extract_strings(
     ruby_code: &str,
     write: bool,
@@ -181,6 +184,7 @@ pub fn extract_strings(
     (strings, ranges)
 }
 
+#[inline(always)]
 pub fn determine_extension(engine_type: EngineType) -> &'static str {
     match engine_type {
         EngineType::New => ".json",
@@ -190,6 +194,7 @@ pub fn determine_extension(engine_type: EngineType) -> &'static str {
     }
 }
 
+#[inline]
 pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineType) -> Option<(String, Value)> {
     if let Ok(entry) = entry {
         if !entry.file_type().unwrap_log().is_file() {
@@ -218,6 +223,7 @@ pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineT
     }
 }
 
+#[inline]
 pub fn filter_other(
     entry: Result<DirEntry, std::io::Error>,
     engine_type: EngineType,
@@ -256,6 +262,7 @@ pub fn filter_other(
     }
 }
 
+#[inline(always)]
 pub fn get_system_labels(
     engine_type: EngineType,
 ) -> (
@@ -291,6 +298,7 @@ pub fn get_system_labels(
     }
 }
 
+#[inline(always)]
 pub fn get_maps_labels(
     engine_type: EngineType,
 ) -> (
@@ -316,6 +324,7 @@ pub fn get_maps_labels(
 }
 
 #[allow(clippy::type_complexity)]
+#[inline(always)]
 pub fn get_other_labels(
     engine_type: EngineType,
 ) -> (
@@ -365,6 +374,7 @@ pub fn get_other_labels(
     }
 }
 
+#[inline]
 pub fn read_to_string_without_bom<P: AsRef<Path>>(file_path: P) -> io::Result<String> {
     const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 

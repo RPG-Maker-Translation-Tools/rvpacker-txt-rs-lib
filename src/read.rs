@@ -38,6 +38,7 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
 
+#[inline]
 fn parse_translation<'a>(
     translation: &'a str,
     maps_processing_mode: Option<MapsProcessingMode>,
@@ -62,6 +63,7 @@ fn parse_translation<'a>(
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
+#[inline]
 fn parse_parameter(
     code: Code,
     mut parameter: &str,
@@ -147,6 +149,7 @@ fn parse_parameter(
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
+#[inline]
 fn parse_variable(
     mut variable_text: String,
     variable_type: &Variable,
@@ -335,6 +338,7 @@ fn parse_variable(
     Some((variable_text, is_continuation_of_description))
 }
 
+#[inline]
 fn parse_list<'a>(
     list: &Array,
     romanize: bool,
@@ -485,6 +489,7 @@ fn parse_list<'a>(
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `generate_json` - whether to generate json representations of older engines' files
+#[inline(always)]
 pub fn read_map<P: AsRef<Path>>(
     original_path: P,
     output_path: P,
@@ -680,6 +685,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `generate_json` - whether to generate json representations of older engines' files
+#[inline(always)]
 pub fn read_other<P: AsRef<Path>>(
     original_path: P,
     output_path: P,
@@ -920,6 +926,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `engine_type` - which engine's files are we processing, essential for the right processing
 /// * `generate_json` - whether to generate json representations of older engines' files
+#[inline(always)]
 pub fn read_system<P: AsRef<Path>>(
     system_file_path: P,
     output_path: P,
@@ -1119,6 +1126,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 /// * `logging` - whether to log
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `generate_json` - whether to generate json representations of older engines' files
+#[inline(always)]
 pub fn read_scripts<P: AsRef<Path>>(
     scripts_file_path: P,
     output_path: P,
@@ -1266,6 +1274,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
+#[inline(always)]
 pub fn read_plugins<P: AsRef<Path>>(
     plugins_file_path: P,
     output_path: P,

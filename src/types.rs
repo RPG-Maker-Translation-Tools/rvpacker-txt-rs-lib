@@ -68,6 +68,7 @@ pub trait TrimReplace {
 }
 
 impl TrimReplace for str {
+    #[inline(always)]
     fn trim_replace(&self) -> String {
         // okay i shouldn't have reinvented the wheel and just do this from the start
         self.trim().to_owned()
@@ -80,6 +81,7 @@ pub trait EachLine {
 
 // Return a Vec of strings splitted by lines (inclusive), akin to each_line in Ruby
 impl EachLine for str {
+    #[inline]
     fn each_line(&self) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
         let mut current_line: String = String::new();
@@ -112,6 +114,7 @@ pub trait ResultExt<T, E> {
 
 impl<T> OptionExt<T> for Option<T> {
     #[track_caller]
+    #[inline(always)]
     fn unwrap_log(self) -> T {
         match self {
             Some(value) => value,
@@ -135,6 +138,7 @@ impl<T> OptionExt<T> for Option<T> {
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
     #[track_caller]
+    #[inline(always)]
     fn unwrap_log(self) -> T
     where
         E: std::fmt::Debug,

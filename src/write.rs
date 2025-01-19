@@ -33,6 +33,7 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 
+#[inline]
 fn parse_translation<'a>(translation: &'a str, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
                 if line.starts_with("<!--") {
@@ -88,6 +89,7 @@ fn process_parameter(
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
+#[inline]
 fn get_translated_parameter(
     code: Code,
     mut parameter: &str,
@@ -182,6 +184,7 @@ fn get_translated_parameter(
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
+#[inline]
 fn get_translated_variable(
     mut variable_text: String,
     note_text: Option<&str>, // note_text is some only when getting description
@@ -335,6 +338,7 @@ fn get_translated_variable(
     translated
 }
 
+#[inline]
 fn write_list(
     list: &mut Array,
     romanize: bool,
@@ -530,6 +534,7 @@ fn write_list(
 /// * `logging` - whether to log or not
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - engine type for right files processing
+#[inline(always)]
 pub fn write_maps<P: AsRef<Path> + Sync>(
     maps_path: P,
     original_path: P,
@@ -705,6 +710,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
 /// * `logging` - whether to log or not
 /// * `game_type` - game type for custom parsing
 /// * `engine_type` - engine type for right files processing
+#[inline(always)]
 pub fn write_other<P: AsRef<Path> + Sync>(
     other_path: P,
     original_path: P,
@@ -887,6 +893,7 @@ let translation_map: StringHashMap = {
 /// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
 /// * `logging` - whether to log or not
 /// * `engine_type` - engine type for right files processing
+#[inline(always)]
 pub fn write_system<P: AsRef<Path>>(
     system_file_path: P,
     other_path: P,
@@ -1020,6 +1027,7 @@ HashMap::from_iter(parse_translation(&translation, "system.txt")),
 /// * `output_path` - path to the output directory
 /// * `logging` - whether to log or not
 /// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
+#[inline(always)]
 pub fn write_plugins<P: AsRef<Path>>(
     plugins_file_path: P,
     plugins_path: P,
