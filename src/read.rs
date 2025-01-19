@@ -3,8 +3,8 @@
 use crate::println;
 use crate::{
     functions::{
-ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
-get_object_data, get_other_labels, get_system_labels, romanize_string, string_is_only_symbols, traverse_json,
+        ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
+        get_object_data, get_other_labels, get_system_labels, romanize_string, string_is_only_symbols, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -45,21 +45,21 @@ fn parse_translation<'a>(
     mut names_deque: Option<&'a mut VecDeque<String>>,
 ) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if maps_processing_mode.is_some_and(|mode| mode != MapsProcessingMode::Default)
-                        && original.starts_with("<!-- Map")
-                        && original.len() > 20
-                    {
-                        unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
-                        None
-                    } else {
-                        Some((original.to_owned(), translated.to_owned()))
-                    }
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-                    None
-                }
-            }))
+        if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+            if maps_processing_mode.is_some_and(|mode| mode != MapsProcessingMode::Default)
+                && original.starts_with("<!-- Map")
+                && original.len() > 20
+            {
+                unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
+                None
+            } else {
+                Some((original.to_owned(), translated.to_owned()))
+            }
+        } else {
+            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
+            None
+        }
+    }))
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
@@ -523,7 +523,7 @@ pub fn read_map<P: AsRef<Path>>(
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-let translation: String = read_to_string(txt_output_path).unwrap_log();
+            let translation: String = read_to_string(txt_output_path).unwrap_log();
 
             let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
                 parse_translation(&translation, Some(maps_processing_mode), Some(&mut names_deque));
@@ -734,7 +734,7 @@ pub fn read_other<P: AsRef<Path>>(
 
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
-let translation: String = read_to_string(txt_output_path).unwrap_log();
+                let translation: String = read_to_string(txt_output_path).unwrap_log();
                 translation_map.extend(parse_translation(&translation, None, None));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -951,7 +951,7 @@ pub fn read_system<P: AsRef<Path>>(
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-let translation: String = read_to_string(txt_output_path).unwrap_log();
+            let translation: String = read_to_string(txt_output_path).unwrap_log();
 
             translation_map.extend(parse_translation(&translation, None, None));
         } else {
@@ -1147,7 +1147,7 @@ pub fn read_scripts<P: AsRef<Path>>(
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-let translation: String = read_to_string(txt_output_path).unwrap_log();
+            let translation: String = read_to_string(txt_output_path).unwrap_log();
             translation_map.extend(parse_translation(&translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -1192,9 +1192,9 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
         [
             Regex::new(r"(Graphics|Data|Audio|Movies|System)\/.*\/?").unwrap_unchecked(),
             Regex::new(r"r[xv]data2?$").unwrap_unchecked(),
-                        Regex::new(r".*\(").unwrap_unchecked(),
+            Regex::new(r".*\(").unwrap_unchecked(),
             Regex::new(r"^([d\d\p{P}+-]*|[d\p{P}+-]&*)$").unwrap_unchecked(),
-                        Regex::new(r"^(Actor<id>|ExtraDropItem|EquipLearnSkill|GameOver|Iconset|Window|true|false|MActor%d|[wr]b|\\f|\\n|\[[A-Z]*\])$")
+            Regex::new(r"^(Actor<id>|ExtraDropItem|EquipLearnSkill|GameOver|Iconset|Window|true|false|MActor%d|[wr]b|\\f|\\n|\[[A-Z]*\])$")
                 .unwrap_unchecked(),
         ]
     };
@@ -1217,7 +1217,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
             || extracted.contains("ALPHAC")
             || extracted.contains("_")
             || regexes.iter().any(|re| re.is_match(&extracted))
-{
+        {
             continue;
         }
 
@@ -1281,7 +1281,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     processing_mode: ProcessingMode,
-    ) {
+) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
     if processing_mode == ProcessingMode::Default && txt_output_path.exists() {

@@ -407,7 +407,7 @@ pub fn traverse_json(
     romanize: bool,
     processing_mode: ProcessingMode,
 ) {
-        let invalid_key = |key: &Option<&str>| -> bool {
+    let invalid_key = |key: &Option<&str>| -> bool {
         if let Some(str) = key {
             if str.starts_with("LATIN") {
                 false

@@ -36,28 +36,29 @@ type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 #[inline]
 fn parse_translation<'a>(translation: &'a str, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
-                if line.starts_with("<!--") {
-                    None
-                } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    #[cfg(not(debug_assertions))]
-                    if translated.is_empty() {
-                        return None;
-                    }
+        if line.starts_with("<!--") {
+            None
+        } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+            #[cfg(not(debug_assertions))]
+            if translated.is_empty() {
+                return None;
+            }
 
-                    Some((
-                        original.replace(NEW_LINE, "\n").trim_replace(),
-                        translated.replace(NEW_LINE, "\n").trim_replace(),
-                    ))
-                } else {
-                    eprintln!(
-                        "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
-                        i = i + 1
-                    );
-                    None
-                }
-            }))
+            Some((
+                original.replace(NEW_LINE, "\n").trim_replace(),
+                translated.replace(NEW_LINE, "\n").trim_replace(),
+            ))
+        } else {
+            eprintln!(
+                "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
+                i = i + 1
+            );
+            None
+        }
+    }))
 }
 
+#[inline]
 fn process_parameter(
     code: Code,
     mut parameter: String,
@@ -98,7 +99,7 @@ fn get_translated_parameter(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
-        // bool indicates insert whether at start or at end
+    // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
     let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
@@ -119,7 +120,7 @@ fn get_translated_parameter(
             GameType::LisaRPG => match code {
                 Code::Dialogue | Code::DialogueStart => {
                     if let Some(i) = find_lisa_prefix_index(parameter) {
-                                                remaining_strings.push((parameter[..i].to_owned(), false));
+                        remaining_strings.push((parameter[..i].to_owned(), false));
                         parameter = &parameter[i..];
                     }
                 }
@@ -131,7 +132,7 @@ fn get_translated_parameter(
 
     if engine_type != EngineType::New {
         if let Some(i) = ends_with_if_index(parameter) {
-                        remaining_strings.push((parameter[..i].to_owned(), true));
+            remaining_strings.push((parameter[..i].to_owned(), true));
             parameter = &parameter[..i];
         }
 
@@ -194,7 +195,7 @@ fn get_translated_variable(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
-        // bool indicates insert whether at start or at end
+    // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
     let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
@@ -349,7 +350,7 @@ fn write_list(
     (code_label, parameters_label): (&str, &str),
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
-        let mut in_sequence: bool = false;
+    let mut in_sequence: bool = false;
     let mut lines: Vec<String> = Vec::with_capacity(4);
     let mut item_indices: Vec<usize> = Vec::with_capacity(4);
 
@@ -755,9 +756,9 @@ pub fn write_other<P: AsRef<Path> + Sync>(
         let txt_filename: &str =
             &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
 
-let translation_map: StringHashMap = {
-        let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
-        HashMap::from_iter(parse_translation(&translation, txt_filename))
+        let translation_map: StringHashMap = {
+            let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
+            HashMap::from_iter(parse_translation(&translation, txt_filename))
         };
 
         if translation_map.is_empty() {
@@ -902,11 +903,11 @@ pub fn write_system<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
-let (translation_map, game_title): (StringHashMap, String) = {
-    let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
-    let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
-    (
-HashMap::from_iter(parse_translation(&translation, "system.txt")),
+    let (translation_map, game_title): (StringHashMap, String) = {
+        let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
+        let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
+        (
+            HashMap::from_iter(parse_translation(&translation, "system.txt")),
             game_title,
         )
     };
@@ -1035,9 +1036,9 @@ pub fn write_plugins<P: AsRef<Path>>(
     logging: bool,
     romanize: bool,
 ) {
-let mut translation_map: VecDeque<(String, String)> = {
-    let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-            VecDeque::from_iter(parse_translation(&translation, "plugins.txt"))
+    let mut translation_map: VecDeque<(String, String)> = {
+        let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
+        VecDeque::from_iter(parse_translation(&translation, "plugins.txt"))
     };
 
     let translation_set: HashSet<String, Xxh3DefaultBuilder> =
@@ -1093,9 +1094,9 @@ pub fn write_scripts<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
-let translation_map: StringHashMap = {
-    let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-    StringHashMap::from_iter(parse_translation(&translation, "scripts.txt"))
+    let translation_map: StringHashMap = {
+        let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
+        StringHashMap::from_iter(parse_translation(&translation, "scripts.txt"))
     };
 
     if translation_map.is_empty() {
