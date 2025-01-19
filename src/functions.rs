@@ -1,6 +1,6 @@
 use crate::{
     statics::{regexes::PLUGINS_REGEXPS, HASHER, NEW_LINE, SYMBOLS},
-    types::{EachLine, EngineType, GameType, ProcessingMode, ResultExt},
+    types::{EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt},
 };
 use indexmap::IndexSet;
 use marshal_rs::{load, StringMode};
@@ -450,12 +450,12 @@ pub fn traverse_json(
             }
         }
         sonic_rs::JsonType::Object => {
-            for (key, value) in value.as_object_mut().unwrap() {
+            for (key, value) in value.as_object_mut().unwrap_log() {
                 traverse_json(Some(key), value, lines, map, set, write, romanize, processing_mode);
             }
         }
         sonic_rs::JsonType::Array => {
-            for value in value.as_array_mut().unwrap() {
+            for value in value.as_array_mut().unwrap_log() {
                 traverse_json(None, value, lines, map, set, write, romanize, processing_mode);
             }
         }

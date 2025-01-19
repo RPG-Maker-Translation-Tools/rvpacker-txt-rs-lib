@@ -158,7 +158,7 @@ fn get_translated_parameter(
             result
         })
     } else {
-        let deque: &mut VecDeque<String> = &mut deque.as_ref().unwrap().lock().unwrap();
+        let deque: &mut VecDeque<String> = &mut deque.as_ref().unwrap_log().lock().unwrap_log();
 
         if code == Code::ChoiceArray {
             deque.front().map(String::to_owned)
@@ -571,8 +571,8 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                         translation_maps.insert(map_number, take(&mut translation_map));
                     }
 
-                    let left: &str = original.split_once('.').unwrap().0;
-                    map_number = left[left.len() - 3..].parse::<u16>().unwrap();
+                    let left: &str = original.split_once('.').unwrap_log().0;
+                    map_number = left[left.len() - 3..].parse::<u16>().unwrap_log();
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
@@ -638,8 +638,8 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
                 unsafe {
                     let filename: &str = filename.split_once('.').unwrap_unchecked().0;
-                    let map_number: u16 = filename[filename.len() - 3..].parse::<u16>().unwrap();
-                    translation_maps.get(&map_number).unwrap()
+                    let map_number: u16 = filename[filename.len() - 3..].parse::<u16>().unwrap_log();
+                    translation_maps.get(&map_number).unwrap_log()
                 }
             } else {
                 unsafe { translation_maps.iter().next().unwrap_unchecked().1 }

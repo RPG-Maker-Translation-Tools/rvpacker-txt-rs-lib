@@ -710,7 +710,7 @@ pub fn read_other<P: AsRef<Path>>(
     ) = get_other_labels(engine_type);
 
     for (filename, obj_arr) in obj_arr_iter {
-        let basename: String = filename.rsplit_once('.').unwrap().0.to_owned().to_lowercase();
+        let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
         let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
 
         if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
