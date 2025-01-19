@@ -1,3 +1,4 @@
+use phf::phf_set;
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 pub mod localization {
