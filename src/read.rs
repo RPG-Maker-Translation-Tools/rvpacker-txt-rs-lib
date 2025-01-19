@@ -474,9 +474,9 @@ fn parse_list<'a>(
     }
 }
 
-/// Reads all Map files of maps_path and parses them into .txt files in `output_path`.
+/// Reads all Map files of original_path and parses them into .txt files in `output_path`.
 /// # Parameters
-/// * `maps_path` - path to directory than contains game files
+/// * `original_path` - path to directory that contains game files
 /// * `output_path` - path to output directory
 /// * `maps_processing_mode` - how to deal with lines duplicates in maps
 /// * `romanize` - whether to romanize text
@@ -672,7 +672,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 
 /// Reads all other files of original_path and parses them into .txt files in `output_path`.
 /// # Parameters
-/// * `original_path` - path to directory than contains game files
+/// * `original_path` - path to directory that contains game files
 /// * `output_path` - path to output directory
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
@@ -913,7 +913,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 
 /// Reads System file of system_file_path and parses it into .txt file of `output_path`.
 /// # Parameters
-/// * `system_file_path` - path to directory than contains game files
+/// * `system_file_path` - path to the system file
 /// * `output_path` - path to output directory
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
@@ -1113,7 +1113,7 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
 
 /// Reads Scripts file of scripts_file_path and parses it into .txt file of `output_path`.
 /// # Parameters
-/// * `scripts_file_path` - path to directory than contains game files
+/// * `scripts_file_path` - path to the scripts file
 /// * `output_path` - path to output directory
 /// * `romanize` - whether to romanize text
 /// * `logging` - whether to log
@@ -1261,6 +1261,11 @@ let translation: String = read_to_string(txt_output_path).unwrap_log();
     }
 }
 
+/// * `plugins_file_path` - path to the plugins.js file
+/// * `output_path` - path to output directory
+/// * `romanize` - whether to romanize text
+/// * `logging` - whether to log
+/// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 pub fn read_plugins<P: AsRef<Path>>(
     plugins_file_path: P,
     output_path: P,

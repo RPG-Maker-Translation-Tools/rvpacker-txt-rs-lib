@@ -1019,6 +1019,7 @@ HashMap::from_iter(parse_translation(&translation, "system.txt")),
 /// * `plugins_path` - path to the plugins directory
 /// * `output_path` - path to the output directory
 /// * `logging` - whether to log or not
+/// * `romanize` - if files were read with romanize, this option will romanize original game text to compare with parsed
 pub fn write_plugins<P: AsRef<Path>>(
     plugins_file_path: P,
     plugins_path: P,
