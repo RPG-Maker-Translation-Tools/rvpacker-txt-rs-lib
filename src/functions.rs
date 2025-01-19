@@ -1,5 +1,5 @@
 use crate::{
-    statics::{regexes::PLUGINS_REGEXPS, HASHER, NEW_LINE},
+    statics::{regexes::PLUGINS_REGEXPS, HASHER, NEW_LINE, SYMBOLS},
     types::{EachLine, EngineType, GameType, ProcessingMode, ResultExt},
 };
 use indexmap::IndexSet;
@@ -460,5 +460,74 @@ pub fn traverse_json(
             }
         }
         _ => {}
+    }
+}
+
+#[inline(always)]
+pub fn string_is_only_symbols(string: &str) -> bool {
+    !string.chars().any(|c| !SYMBOLS.contains(&c))
+}
+
+#[inline]
+pub fn ends_with_if_index(string: &str) -> Option<usize> {
+    if string.ends_with(')') {
+        let mut step: u8 = 0;
+        let chars = string.char_indices().rev().skip(1);
+
+        for (i, char) in chars {
+            match step {
+                0 => {
+                    if char == '(' {
+                        step = 1;
+                    }
+                }
+                1 => {
+                    if char == 'f' {
+                        step = 2;
+                    } else {
+                        return None;
+                    }
+                }
+                2 => {
+                    if char == 'i' {
+                        step = 3;
+                    } else {
+                        return None;
+                    }
+                }
+                3 => {
+                    if char == ' ' {
+                        return Some(i);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    None
+}
+
+#[inline]
+pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
+    if string.starts_with(r"\et[") {
+        let chars = string.char_indices().skip(5);
+        let mut encountered_number: bool = false;
+
+        for (i, char) in chars.take(4) {
+            if char.is_numeric() {
+                encountered_number = true;
+            } else if encountered_number && char == ']' {
+                return Some(i + 1);
+            } else {
+                return None;
+            }
+        }
+
+        None
+    } else if string.starts_with(r"\nbt") {
+        Some(4)
+    } else {
+        None
     }
 }

@@ -19,12 +19,6 @@ pub mod regexes {
     use once_cell::sync::Lazy;
     use regex::Regex;
 
-    pub static STRING_IS_ONLY_SYMBOLS_RE: Lazy<Regex> = Lazy::new(|| unsafe {
-        Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s]+$"#).unwrap_unchecked()
-    });
-    pub static ENDS_WITH_IF_RE: Lazy<Regex> = Lazy::new(|| unsafe { Regex::new(r" if\(.*\)$").unwrap_unchecked() });
-    pub static LISA_PREFIX_RE: Lazy<Regex> =
-        Lazy::new(|| unsafe { Regex::new(r"^(\\et\[\d+\]|\\nbt)").unwrap_unchecked() });
     pub static INVALID_MULTILINE_VARIABLE_RE: Lazy<Regex> =
         Lazy::new(|| unsafe { Regex::new(r"^#? ?<.*>.?$|^[a-z]\d$").unwrap_unchecked() });
     pub static INVALID_VARIABLE_RE: Lazy<Regex> =
@@ -64,6 +58,10 @@ pub static PLUGINS_REGEXPS: Lazy<[Regex; 11]> = Lazy::new(|| unsafe {
 pub const ALLOWED_CODES: [u16; 9] = [101, 102, 320, 324, 356, 401, 402, 405, 655];
 pub const NEW_LINE: &str = r"\#";
 pub const LINES_SEPARATOR: &str = "<#>";
+
+pub const SYMBOLS: phf::Set<char> = phf_set! {
+    ',', '.', '(', ')', '+', '-', ':', ';', '[', ']', '^', '~', '%', '&', '!', '№', '$', '@', '`', '*', '/', '→', '×', '？', '?', 'ｘ', '％', '▼', '|', '♥', '♪', '！', '：', '〜', '『', '』', '「', '」', '〽', '。', '…', '‥', '＝', '゠', '、', '，', '【', '】', '［', '］', '｛', '｝', '（', '）', '〔', '〕', '｟', '｠', '〘', '〙', '〈', '〉', '《', '》', '・', '\\', '#', '<', '>', '=', '_', 'ー', '※', '▶', 'Ⅰ', 'ⅰ', 'Ⅱ', 'ⅱ', 'Ⅲ', 'ⅲ', 'Ⅳ', 'ⅳ', 'Ⅴ', 'ⅴ', 'Ⅵ', 'ⅵ', 'Ⅶ', 'ⅶ', 'Ⅷ', 'ⅷ', 'Ⅸ', 'ⅸ', 'Ⅹ', 'ⅹ', 'Ⅺ', 'ⅺ', 'Ⅻ', 'ⅻ', 'Ⅼ', 'ⅼ', 'Ⅽ', 'ⅽ', 'Ⅾ', 'ⅾ', 'Ⅿ', 'ⅿ', ' ', '\t', '\r', '\n'
+};
 
 pub static ENCODINGS: [&encoding_rs::Encoding; 5] = [
     encoding_rs::UTF_8,

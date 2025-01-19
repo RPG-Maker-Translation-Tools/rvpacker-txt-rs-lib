@@ -3,8 +3,8 @@
 use crate::println;
 use crate::{
     functions::{
-        extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, romanize_string, traverse_json,
+ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
+get_object_data, get_other_labels, get_system_labels, romanize_string, string_is_only_symbols, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -12,10 +12,7 @@ use crate::{
             AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG,
             PARSED_FILE_MSG,
         },
-        regexes::{
-            ENDS_WITH_IF_RE, INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, LISA_PREFIX_RE,
-            STRING_IS_ONLY_SYMBOLS_RE,
-        },
+        regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE},
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
@@ -79,7 +76,7 @@ fn parse_parameter(
     engine_type: EngineType,
     romanize: bool,
 ) -> Option<String> {
-    if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
+    if string_is_only_symbols(parameter) {
         return None;
     }
 
@@ -107,11 +104,11 @@ fn parse_parameter(
             GameType::LisaRPG => {
                 match code {
                     Code::Dialogue | Code::DialogueStart => {
-                        if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
-                            parameter = &parameter[re_match.end()..]
+                        if let Some(i) = find_lisa_prefix_index(parameter) {
+                            parameter = &parameter[i..]
                         }
 
-                        if STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
+                        if string_is_only_symbols(parameter) {
                             return None;
                         }
                     }
@@ -122,8 +119,8 @@ fn parse_parameter(
     }
 
     if engine_type != EngineType::New {
-        if let Some(re_match) = ENDS_WITH_IF_RE.find(parameter) {
-            parameter = &parameter[re_match.start()..]
+        if let Some(i) = ends_with_if_index(parameter) {
+            parameter = &parameter[..i]
         }
 
         match code {
@@ -139,7 +136,7 @@ fn parse_parameter(
                 // removing the quotes
                 parameter = &actual_string[1..actual_string.len() - 1];
 
-                if parameter.is_empty() || STRING_IS_ONLY_SYMBOLS_RE.is_match(parameter) {
+                if parameter.is_empty() || string_is_only_symbols(parameter) {
                     return None;
                 }
             }
@@ -165,7 +162,7 @@ fn parse_variable(
     engine_type: EngineType,
     romanize: bool,
 ) -> Option<(String, bool)> {
-    if STRING_IS_ONLY_SYMBOLS_RE.is_match(&variable_text) {
+    if string_is_only_symbols(&variable_text) {
         return None;
     }
 
@@ -1197,19 +1194,13 @@ pub fn read_scripts<P: AsRef<Path>>(
     let codes_text: String = codes_content.join("");
     let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
 
-    let regexes: [Regex; 11] = unsafe {
+    let regexes: [Regex; 5] = unsafe {
         [
             Regex::new(r"(Graphics|Data|Audio|Movies|System)\/.*\/?").unwrap_unchecked(),
             Regex::new(r"r[xv]data2?$").unwrap_unchecked(),
-            STRING_IS_ONLY_SYMBOLS_RE.to_owned(),
-            Regex::new(r"@window").unwrap_unchecked(),
-            Regex::new(r"\$game").unwrap_unchecked(),
-            Regex::new(r"_").unwrap_unchecked(),
-            Regex::new(r"^\\e").unwrap_unchecked(),
-            Regex::new(r".*\(").unwrap_unchecked(),
+                        Regex::new(r".*\(").unwrap_unchecked(),
             Regex::new(r"^([d\d\p{P}+-]*|[d\p{P}+-]&*)$").unwrap_unchecked(),
-            Regex::new(r"ALPHAC").unwrap_unchecked(),
-            Regex::new(r"^(Actor<id>|ExtraDropItem|EquipLearnSkill|GameOver|Iconset|Window|true|false|MActor%d|[wr]b|\\f|\\n|\[[A-Z]*\])$")
+                        Regex::new(r"^(Actor<id>|ExtraDropItem|EquipLearnSkill|GameOver|Iconset|Window|true|false|MActor%d|[wr]b|\\f|\\n|\[[A-Z]*\])$")
                 .unwrap_unchecked(),
         ]
     };
@@ -1225,7 +1216,14 @@ pub fn read_scripts<P: AsRef<Path>>(
             continue;
         }
 
-        if regexes.iter().any(|re| re.is_match(&extracted)) {
+        if string_is_only_symbols(&extracted)
+            || extracted.contains("@window")
+            || extracted.contains(r"\$game")
+            || extracted.starts_with(r"\\e")
+            || extracted.contains("ALPHAC")
+            || extracted.contains("_")
+            || regexes.iter().any(|re| re.is_match(&extracted))
+{
             continue;
         }
 

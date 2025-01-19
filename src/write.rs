@@ -3,12 +3,12 @@
 use crate::{eprintln, println};
 use crate::{
     functions::{
-        determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
-        get_other_labels, get_system_labels, read_to_string_without_bom, romanize_string, traverse_json,
+        determine_extension, ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index,
+        get_maps_labels, get_object_data, get_other_labels, get_system_labels, read_to_string_without_bom,
+        romanize_string, string_is_only_symbols, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
-        regexes::{ENDS_WITH_IF_RE, LISA_PREFIX_RE, STRING_IS_ONLY_SYMBOLS_RE},
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
@@ -103,12 +103,10 @@ fn get_translated_parameter(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
-    let mut remaining_strings: Vec<String> = Vec::with_capacity(4);
-
-    // bool indicates insert whether at start or at end
+        // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
-    let mut insert_positions: Vec<bool> = Vec::with_capacity(4);
+    let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
 
     #[allow(unreachable_patterns)]
     if let Some(game_type) = game_type {
@@ -125,10 +123,9 @@ fn get_translated_parameter(
             },
             GameType::LisaRPG => match code {
                 Code::Dialogue | Code::DialogueStart => {
-                    if let Some(re_match) = LISA_PREFIX_RE.find(parameter) {
-                        parameter = &parameter[re_match.end()..];
-                        remaining_strings.push(re_match.as_str().to_owned());
-                        insert_positions.push(false);
+                    if let Some(i) = find_lisa_prefix_index(parameter) {
+                                                remaining_strings.push((parameter[..i].to_owned(), false));
+                        parameter = &parameter[i..];
                     }
                 }
                 _ => {}
@@ -138,10 +135,9 @@ fn get_translated_parameter(
     }
 
     if engine_type != EngineType::New {
-        if let Some(re_match) = ENDS_WITH_IF_RE.find(parameter) {
-            parameter = &parameter[re_match.start()..];
-            remaining_strings.push(re_match.as_str().to_owned());
-            insert_positions.push(true);
+        if let Some(i) = ends_with_if_index(parameter) {
+                        remaining_strings.push((parameter[..i].to_owned(), true));
+            parameter = &parameter[..i];
         }
 
         match code {
@@ -153,7 +149,7 @@ fn get_translated_parameter(
                 let actual_string: &str = unsafe { parameter.split_once('=').unwrap_unchecked().1 }.trim();
                 let without_quotes: &str = &actual_string[1..actual_string.len() - 1];
 
-                if STRING_IS_ONLY_SYMBOLS_RE.is_match(without_quotes) {
+                if string_is_only_symbols(without_quotes) {
                     return None;
                 }
 
@@ -179,7 +175,7 @@ fn get_translated_parameter(
     };
 
     if let Some(mut translated) = translated {
-        for (string, position) in remaining_strings.into_iter().zip(insert_positions) {
+        for (string, position) in remaining_strings.into_iter() {
             match position {
                 false => translated = string + &translated,
                 true => translated += &string,
@@ -202,12 +198,10 @@ fn get_translated_variable(
     game_type: Option<GameType>,
     engine_type: EngineType,
 ) -> Option<String> {
-    let mut remaining_strings: Vec<String> = Vec::with_capacity(4);
-
-    // bool indicates insert whether at start or at end
+        // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
-    let mut insert_positions: Vec<bool> = Vec::with_capacity(4);
+    let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
 
     if engine_type != EngineType::New {
         variable_text = variable_text.replace("\r\n", "\n");
@@ -311,9 +305,9 @@ fn get_translated_variable(
     let translated: Option<String> = hashmap.get(&variable_text).map(|translated: &String| {
         let mut result: String = translated.to_owned();
 
-        for (string, position) in remaining_strings.into_iter().zip(insert_positions) {
+        for (string, position) in remaining_strings.into_iter() {
             match position {
-                true => result.push_str(&string),
+                true => result += &string,
                 false => result = string + &result,
             }
         }
