@@ -345,13 +345,11 @@ fn write_list(
     (code_label, parameters_label): (&str, &str),
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
-    let list_length: usize = list.len();
-
-    let mut in_sequence: bool = false;
+        let mut in_sequence: bool = false;
     let mut lines: Vec<String> = Vec::with_capacity(4);
     let mut item_indices: Vec<usize> = Vec::with_capacity(4);
 
-    for it in 0..list_length {
+    for it in 0..list.len() {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
         let code: Code = if !ALLOWED_CODES.contains(&code) {
