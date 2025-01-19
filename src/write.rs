@@ -12,8 +12,7 @@ use crate::{
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, IntoSplit, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
-        Variable,
+        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
@@ -34,13 +33,8 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
 
-fn parse_translation<'a>(translation: String, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
-    Box::new(
-        translation
-            .into_split('\n')
-            .into_iter()
-            .enumerate()
-            .filter_map(move |(i, line)| {
+fn parse_translation<'a>(translation: &'a str, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
+    Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
                 if line.starts_with("<!--") {
                     None
                 } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
@@ -60,8 +54,7 @@ fn parse_translation<'a>(translation: String, file: &'a str) -> Box<dyn Iterator
                     );
                     None
                 }
-            }),
-    )
+            }))
 }
 
 fn process_parameter(
@@ -758,8 +751,10 @@ pub fn write_other<P: AsRef<Path> + Sync>(
         let txt_filename: &str =
             &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
 
+let translation_map: StringHashMap = {
         let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
-        let translation_map: StringHashMap = HashMap::from_iter(parse_translation(translation, txt_filename));
+        HashMap::from_iter(parse_translation(&translation, txt_filename))
+        };
 
         if translation_map.is_empty() {
             return;
@@ -902,10 +897,14 @@ pub fn write_system<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
+let (translation_map, game_title): (StringHashMap, String) = {
     let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
-
     let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
-    let translation_map: StringHashMap = HashMap::from_iter(parse_translation(translation, "system.txt"));
+    (
+HashMap::from_iter(parse_translation(&translation, "system.txt")),
+            game_title,
+        )
+    };
 
     if translation_map.is_empty() {
         return;
@@ -1029,9 +1028,11 @@ pub fn write_plugins<P: AsRef<Path>>(
     logging: bool,
     romanize: bool,
 ) {
+let mut translation_map: VecDeque<(String, String)> = {
     let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-    let mut translation_map: VecDeque<(String, String)> =
-        VecDeque::from_iter(parse_translation(translation, "plugins.txt"));
+            VecDeque::from_iter(parse_translation(&translation, "plugins.txt"))
+    };
+
     let translation_set: HashSet<String, Xxh3DefaultBuilder> =
         HashSet::from_iter(translation_map.iter().map(|x| x.0.to_owned()));
 
@@ -1085,8 +1086,10 @@ pub fn write_scripts<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
+let translation_map: StringHashMap = {
     let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-    let translation_map: StringHashMap = StringHashMap::from_iter(parse_translation(translation, "scripts.txt"));
+    StringHashMap::from_iter(parse_translation(&translation, "scripts.txt"))
+    };
 
     if translation_map.is_empty() {
         return;

@@ -16,8 +16,7 @@ get_object_data, get_other_labels, get_system_labels, romanize_string, string_is
         ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, IntoSplit, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
-        Variable,
+        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
 use flate2::read::ZlibDecoder;
@@ -40,16 +39,11 @@ type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
 
 fn parse_translation<'a>(
-    translation: String,
+    translation: &'a str,
     maps_processing_mode: Option<MapsProcessingMode>,
     mut names_deque: Option<&'a mut VecDeque<String>>,
 ) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
-    Box::new(
-        translation
-            .into_split('\n')
-            .into_iter()
-            .enumerate()
-            .filter_map(move |(i, line)| {
+    Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     if maps_processing_mode.is_some_and(|mode| mode != MapsProcessingMode::Default)
                         && original.starts_with("<!-- Map")
@@ -64,8 +58,7 @@ fn parse_translation<'a>(
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
                     None
                 }
-            }),
-    )
+            }))
 }
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
@@ -523,14 +516,12 @@ pub fn read_map<P: AsRef<Path>>(
     // Used when maps processing mode is PRESERVE.
     let mut translation_map_vec_pos: usize = 0;
 
-    let translation: String;
-
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-            translation = read_to_string(txt_output_path).unwrap_log();
+let translation: String = read_to_string(txt_output_path).unwrap_log();
 
             let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
-                parse_translation(translation, Some(maps_processing_mode), Some(&mut names_deque));
+                parse_translation(&translation, Some(maps_processing_mode), Some(&mut names_deque));
 
             if maps_processing_mode == MapsProcessingMode::Preserve {
                 translation_map_vec.extend(parsed_translation);
@@ -733,14 +724,12 @@ pub fn read_other<P: AsRef<Path>>(
         let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
         let lines_ref: &IndexSetXxh3 = unsafe { &*(&mut lines as *mut IndexSetXxh3) };
 
-        let translation: String;
-
-        let mut lines_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+        let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
-                translation = read_to_string(txt_output_path).unwrap_log();
-                lines_map.extend(parse_translation(translation, None, None));
+let translation: String = read_to_string(txt_output_path).unwrap_log();
+                translation_map.extend(parse_translation(&translation, None, None));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 continue;
@@ -817,8 +806,9 @@ pub fn read_other<P: AsRef<Path>>(
                                     // TODO: this shit rewrites the translation line but inserts RIGHT original line
                                     // uhhh... so what i actually need to do? i forgot...
                                     if processing_mode == ProcessingMode::Append {
-                                        let (idx, _, value) = lines_map.shift_remove_full(last.as_str()).unwrap_log();
-                                        lines_map.shift_insert(idx, string_ref.to_owned(), value);
+                                        let (idx, _, value) =
+                                            translation_map.shift_remove_full(last.as_str()).unwrap_log();
+                                        translation_map.shift_insert(idx, string_ref.to_owned(), value);
                                     }
                                 }
                                 continue;
@@ -836,8 +826,8 @@ pub fn read_other<P: AsRef<Path>>(
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-                            if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-                                lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+                            if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
+                                translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
                             }
                         } else if variable_type == Variable::Name {
                             continue 'obj;
@@ -875,8 +865,8 @@ pub fn read_other<P: AsRef<Path>>(
                         engine_type,
                         processing_mode,
                         (code_label, parameters_label),
-                        unsafe { &mut *(&mut lines_map as *mut IndexMapXxh3) },
-                        unsafe { &*(&mut lines_map as *mut IndexMapXxh3) },
+                        unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) },
+                        unsafe { &*(&mut translation_map as *mut IndexMapXxh3) },
                         lines_mut_ref,
                         lines_ref,
                         None,
@@ -889,7 +879,7 @@ pub fn read_other<P: AsRef<Path>>(
 
         let mut output_content: String = if processing_mode == ProcessingMode::Append {
             String::from_iter(
-                lines_map
+                translation_map
                     .into_iter()
                     .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
             )
@@ -950,15 +940,13 @@ pub fn read_system<P: AsRef<Path>>(
     let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
     let lines_ref: &IndexSetXxh3 = unsafe { &*lines.get() };
 
-    let mut lines_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
-
-    let translation: String;
+    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-            translation = read_to_string(txt_output_path).unwrap_log();
+let translation: String = read_to_string(txt_output_path).unwrap_log();
 
-            lines_map.extend(parse_translation(translation, None, None));
+            translation_map.extend(parse_translation(&translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -994,8 +982,8 @@ pub fn read_system<P: AsRef<Path>>(
         lines_mut_ref.insert(string);
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-        if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-            lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+        if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
+            translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
         }
     };
 
@@ -1078,14 +1066,14 @@ pub fn read_system<P: AsRef<Path>>(
         lines_mut_ref.insert(game_title_string);
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-        if processing_mode == ProcessingMode::Append && !lines_map.contains_key(string_ref) {
-            lines_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+        if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
+            translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
         }
     }
 
     let mut output_content: String = if processing_mode == ProcessingMode::Append {
         String::from_iter(
-            lines_map
+            translation_map
                 .into_iter()
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )
@@ -1149,12 +1137,10 @@ pub fn read_scripts<P: AsRef<Path>>(
     let mut lines: Vec<String> = Vec::new();
     let mut translation_map: Vec<(String, String)> = Vec::new();
 
-    let translation: String;
-
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
-            translation = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(translation, None, None));
+let translation: String = read_to_string(txt_output_path).unwrap_log();
+            translation_map.extend(parse_translation(&translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1297,7 +1283,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(translation, None, None));
+            translation_map.extend(parse_translation(&translation, None, None));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
