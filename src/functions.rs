@@ -1,5 +1,5 @@
 use crate::{
-    statics::{HASHER, NEW_LINE},
+    statics::{regexes::PLUGINS_REGEXPS, HASHER, NEW_LINE},
     types::{EachLine, EngineType, GameType, ProcessingMode, ResultExt},
 };
 use indexmap::IndexSet;
@@ -397,29 +397,12 @@ pub fn traverse_json(
     romanize: bool,
     processing_mode: ProcessingMode,
 ) {
-    let regexes = unsafe {
-        [
-        Regex::new(r"^(name|description|Window Width|Window Height|ATTENTION!!!|Shown Elements|Width|Outline Color|Command Alignment|Command Position|Command Rows|Chinese Font|Korean Font|Default Font|Text Align|Scenes To Draw|displacementImage|Turn Alignment|Buff Formula|Counter Alignment|Default Width|Face Indent|Fast Forward Key|Font Name|Font Name CH|Font Name KR|Name Box Padding|Name Box Added Text|Critical Rate Formula|Critical Multplier Formula|Flat Critical Formula|Default SE|---List---|Button Events List|Kill Switch|Ex Turn Image|Ex Turn Name Color|Non Ex Turn Name Color|Option menu entry|Add to options|Default Ambient Light|Reset Lights|Gab Font Name|Escape Ratio|Translated Format|Default Sound|Action Speed|Default System|Untranslated Format|Default Format|Victory Screen Level Sound|Warning Side Battle UI|Weapon Swap Text Hit|Weapon Swap Text Critical|Weapon Swap Command|Weapon Swap Text Evasion|alwaysDash|renderingMode|Attributes Command|Attributes Column 1|Attributes Column 2|Attributes Column 3|Warning OTB|</span> Minimum Damage</span></td>|Present Settings)$").unwrap_unchecked(),
-        Regex::new(r"^Folder.*\w$").unwrap_unchecked(),
-        Regex::new(r"[XY]$").unwrap_unchecked(),
-        Regex::new(r"BGM").unwrap_unchecked(),
-        Regex::new(r"Label").unwrap_unchecked(),
-        Regex::new(r"^Custom \w").unwrap_unchecked(),
-        Regex::new(r"^outlineColor").unwrap_unchecked(),
-        Regex::new(r"^(Menu|Item|Skill|Equip|Status|Save|Options|End).*(Background|Motion)$").unwrap_unchecked(),
-        Regex::new(r"^Menu \w").unwrap_unchecked(),
-        Regex::new(r"^(MHP|MMP|ATK|DEF|MAT|MDF|AGI|LUK).*(Formula|Maximum|Minimum|Effect|Color)$").unwrap_unchecked(),
-        Regex::new(r"^Damage\w*$").unwrap_unchecked(),
-    ]
-    };
-
-    // TODO: Extremely slow. Regexes aren't an answer I guess.
-    let invalid_key = |key: &Option<&str>| -> bool {
+        let invalid_key = |key: &Option<&str>| -> bool {
         if let Some(str) = key {
             if str.starts_with("LATIN") {
                 false
             } else {
-                regexes.iter().any(|re| re.is_match(str))
+                PLUGINS_REGEXPS.iter().any(|re| re.is_match(str))
             }
         } else {
             false

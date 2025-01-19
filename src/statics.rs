@@ -29,6 +29,21 @@ pub mod regexes {
         Lazy::new(|| unsafe { Regex::new(r"^#? ?<.*>.?$|^[a-z]\d$").unwrap_unchecked() });
     pub static INVALID_VARIABLE_RE: Lazy<Regex> =
         Lazy::new(|| unsafe { Regex::new(r"^[+-]?$|^///|---|restrict eval").unwrap_unchecked() });
+pub static PLUGINS_REGEXPS: Lazy<[Regex; 11]> = Lazy::new(|| unsafe {
+        [
+            Regex::new(r"^(name|description|Window Width|Window Height|ATTENTION!!!|Shown Elements|Width|Outline Color|Command Alignment|Command Position|Command Rows|Chinese Font|Korean Font|Default Font|Text Align|Scenes To Draw|displacementImage|Turn Alignment|Buff Formula|Counter Alignment|Default Width|Face Indent|Fast Forward Key|Font Name|Font Name CH|Font Name KR|Name Box Padding|Name Box Added Text|Critical Rate Formula|Critical Multplier Formula|Flat Critical Formula|Default SE|---List---|Button Events List|Kill Switch|Ex Turn Image|Ex Turn Name Color|Non Ex Turn Name Color|Option menu entry|Add to options|Default Ambient Light|Reset Lights|Gab Font Name|Escape Ratio|Translated Format|Default Sound|Action Speed|Default System|Untranslated Format|Default Format|Victory Screen Level Sound|Warning Side Battle UI|Weapon Swap Text Hit|Weapon Swap Text Critical|Weapon Swap Command|Weapon Swap Text Evasion|alwaysDash|renderingMode|Attributes Command|Attributes Column 1|Attributes Column 2|Attributes Column 3|Warning OTB|</span> Minimum Damage</span></td>|Present Settings)$").unwrap_unchecked(),
+            Regex::new(r"^Folder.*\w$").unwrap_unchecked(),
+            Regex::new(r"[XY]$").unwrap_unchecked(),
+            Regex::new(r"BGM").unwrap_unchecked(),
+            Regex::new(r"Label").unwrap_unchecked(),
+            Regex::new(r"^Custom \w").unwrap_unchecked(),
+            Regex::new(r"^outlineColor").unwrap_unchecked(),
+            Regex::new(r"^(Menu|Item|Skill|Equip|Status|Save|Options|End).*(Background|Motion)$").unwrap_unchecked(),
+            Regex::new(r"^Menu \w").unwrap_unchecked(),
+            Regex::new(r"^(MHP|MMP|ATK|DEF|MAT|MDF|AGI|LUK).*(Formula|Maximum|Minimum|Effect|Color)$").unwrap_unchecked(),
+            Regex::new(r"^Damage\w*$").unwrap_unchecked(),
+        ]
+    });
 }
 
 /// 401 - Dialogue line.
