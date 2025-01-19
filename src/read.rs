@@ -1272,8 +1272,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     processing_mode: ProcessingMode,
-    generate_json: bool,
-) {
+    ) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
     if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
@@ -1335,19 +1334,5 @@ pub fn read_plugins<P: AsRef<Path>>(
         println!("{PARSED_FILE_MSG} {:?}", unsafe {
             plugins_file_path.as_ref().file_name().unwrap_unchecked()
         });
-    }
-
-    if generate_json {
-        write(
-            unsafe {
-                output_path
-                    .as_ref()
-                    .parent()
-                    .unwrap_unchecked()
-                    .join("json/Scripts.txt")
-            },
-            plugins_object,
-        )
-        .unwrap_log();
     }
 }
