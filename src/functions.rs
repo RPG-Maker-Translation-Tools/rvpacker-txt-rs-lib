@@ -521,7 +521,7 @@ pub fn ends_with_if_index(string: &str) -> Option<usize> {
 #[inline]
 pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
     if string.starts_with(r"\et[") {
-        let chars = string.char_indices().skip(5);
+        let chars = string.char_indices().skip(4);
         let mut encountered_number: bool = false;
 
         for (i, char) in chars.take(4) {
