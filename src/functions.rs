@@ -524,7 +524,7 @@ pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
         let chars = string.char_indices().skip(4);
         let mut encountered_number: bool = false;
 
-        for (i, char) in chars.take(4) {
+        for (i, char) in chars.take(5) {
             if char.is_numeric() {
                 encountered_number = true;
             } else if encountered_number && char == ']' {
