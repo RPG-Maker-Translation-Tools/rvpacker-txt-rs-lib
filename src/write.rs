@@ -775,15 +775,8 @@ pub fn write_other<P: AsRef<Path> + Sync>(
                 .skip(1) // Skipping first element in array as it is null
                 .for_each(|obj: &mut Value| {
                     for (variable_label, variable_type) in variable_tuples.into_iter() {
-                        if let Some(mut variable_str) = obj[variable_label].as_str() {
+                        if let Some(variable_str) = obj[variable_label].as_str() {
                             let mut variable_string: String = if variable_type == Variable::Note {
-                                // TODO: that's to remove
-                                if let Some(game_type) = game_type {
-                                    if game_type == GameType::LisaRPG {
-                                        variable_str = variable_str.trim()
-                                    }
-                                }
-
                                 variable_str
                             } else {
                                 variable_str.trim()
