@@ -4,12 +4,12 @@ use crate::{eprintln, println};
 use crate::{
     functions::{
         determine_extension, ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index,
-        get_maps_labels, get_object_data, get_other_labels, get_system_labels, read_to_string_without_bom,
-        romanize_string, string_is_only_symbols, traverse_json,
+        get_maps_labels, get_object_data, get_other_labels, get_system_labels, is_allowed_code,
+        read_to_string_without_bom, romanize_string, string_is_only_symbols, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
-        ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
+        ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
         Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
@@ -222,7 +222,7 @@ fn get_translated_variable(
                                         || (first_char.is_ascii_alphabetic()
                                             || first_char == '"'
                                             || note.starts_with("4 sticks")))
-                                        && !['.', '!', '/', '?'].contains(&first_char)
+                                        && !matches!(first_char, '.' | '!' | '/' | '?')
                                     {
                                         is_continuation_of_description = true;
                                     }
@@ -275,7 +275,7 @@ fn get_translated_variable(
                                     || (first_char.is_ascii_alphabetic()
                                         || first_char == '"'
                                         || variable_text.starts_with("4 sticks")))
-                                    && !['.', '!', '/', '?'].contains(&first_char)
+                                    && !matches!(first_char, '.' | '!' | '/' | '?')
                                 {
                                     is_continuation_of_description = true;
                                 }
@@ -312,7 +312,8 @@ fn get_translated_variable(
         if matches!(
             variable_type,
             Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
-        ) {
+        ) && (filename.starts_with("Sk") && variable_type != Variable::Message2)
+        {
             result = String::from(" ") + &result;
         }
 
@@ -357,7 +358,7 @@ fn write_list(
     for it in 0..list.len() {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !ALLOWED_CODES.contains(&code) {
+        let code: Code = if !is_allowed_code(code) {
             Code::Bad
         } else {
             let code: Code = unsafe { transmute::<u16, Code>(code) };
@@ -379,7 +380,7 @@ fn write_list(
         };
 
         if in_sequence
-            && (![Code::Dialogue, Code::DialogueStart].contains(&code)
+            && (!matches!(code, Code::Dialogue | Code::DialogueStart)
                 || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
         {
             if !lines.is_empty() {
@@ -504,7 +505,7 @@ fn write_list(
                     parameter_string.to_owned()
                 };
 
-                if [Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code) {
+                if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
                     lines.push(parameter_string);
                     item_indices.push(it);
                     in_sequence = true;

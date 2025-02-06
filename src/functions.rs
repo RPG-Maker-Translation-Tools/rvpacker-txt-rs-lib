@@ -185,7 +185,7 @@ pub fn extract_strings(
 }
 
 #[inline(always)]
-pub fn determine_extension(engine_type: EngineType) -> &'static str {
+pub const fn determine_extension(engine_type: EngineType) -> &'static str {
     match engine_type {
         EngineType::New => ".json",
         EngineType::VXAce => ".rvdata2",
@@ -263,7 +263,7 @@ pub fn filter_other(
 }
 
 #[inline(always)]
-pub fn get_system_labels(
+pub const fn get_system_labels(
     engine_type: EngineType,
 ) -> (
     &'static str,
@@ -273,33 +273,36 @@ pub fn get_system_labels(
     &'static str,
     &'static str,
 ) {
-    if engine_type == EngineType::New {
-        (
+    match engine_type {
+        EngineType::New => (
             "armorTypes",
             "elements",
             "skillTypes",
             "terms",
             "weaponTypes",
             "gameTitle",
-        )
-    } else {
-        (
+        ),
+        EngineType::XP => (
             "__symbol__armor_types",
             "__symbol__elements",
             "__symbol__skill_types",
-            if engine_type == EngineType::XP {
-                "__symbol__words"
-            } else {
-                "__symbol__terms"
-            },
+            "__symbol__words",
             "__symbol__weapon_types",
             "__symbol__game_title",
-        )
+        ),
+        _ => (
+            "__symbol__armor_types",
+            "__symbol__elements",
+            "__symbol__skill_types",
+            "__symbol__terms",
+            "__symbol__weapon_types",
+            "__symbol__game_title",
+        ),
     }
 }
 
 #[inline(always)]
-pub fn get_maps_labels(
+pub const fn get_maps_labels(
     engine_type: EngineType,
 ) -> (
     &'static str,
@@ -309,23 +312,22 @@ pub fn get_maps_labels(
     &'static str,
     &'static str,
 ) {
-    if engine_type == EngineType::New {
-        ("displayName", "events", "pages", "list", "code", "parameters")
-    } else {
-        (
+    match engine_type {
+        EngineType::New => ("displayName", "events", "pages", "list", "code", "parameters"),
+        _ => (
             "__symbol__display_name",
             "__symbol__events",
             "__symbol__pages",
             "__symbol__list",
             "__symbol__code",
             "__symbol__parameters",
-        )
+        ),
     }
 }
 
 #[allow(clippy::type_complexity)]
 #[inline(always)]
-pub fn get_other_labels(
+pub const fn get_other_labels(
     engine_type: EngineType,
 ) -> (
     &'static str,
@@ -341,8 +343,8 @@ pub fn get_other_labels(
     &'static str,
     &'static str,
 ) {
-    if engine_type == EngineType::New {
-        (
+    match engine_type {
+        EngineType::New => (
             "name",
             "nickname",
             "description",
@@ -355,9 +357,8 @@ pub fn get_other_labels(
             "list",
             "code",
             "parameters",
-        )
-    } else {
-        (
+        ),
+        _ => (
             "__symbol__name",
             "__symbol__nickname",
             "__symbol__description",
@@ -370,7 +371,7 @@ pub fn get_other_labels(
             "__symbol__list",
             "__symbol__code",
             "__symbol__parameters",
-        )
+        ),
     }
 }
 
@@ -540,4 +541,24 @@ pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// 401 - Dialogue line.
+///
+/// 101 - Start of the dialogue line. (**XP ENGINE ONLY!**)
+///
+/// 102 - Dialogue choices array.
+///
+/// 402 - One of the dialogue choices from the array. (**WRITE ONLY!**)
+///
+/// 405 - Credits lines. (**probably NEWER ENGINES ONLY!**)
+///
+/// 356 - System line, special text. (that one needs clarification)
+///
+/// 655 - Line displayed in shop - from an external script. (**OLDER ENGINES ONLY!**)
+///
+/// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
+#[inline(always)]
+pub const fn is_allowed_code(code: u16) -> bool {
+    matches!(code, 101 | 102 | 320 | 324 | 356 | 401 | 402 | 405 | 655)
 }

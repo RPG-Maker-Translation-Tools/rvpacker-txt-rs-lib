@@ -4,7 +4,8 @@ use crate::println;
 use crate::{
     functions::{
         ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
-        get_object_data, get_other_labels, get_system_labels, romanize_string, string_is_only_symbols, traverse_json,
+        get_object_data, get_other_labels, get_system_labels, is_allowed_code, romanize_string, string_is_only_symbols,
+        traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -13,7 +14,7 @@ use crate::{
             PARSED_FILE_MSG,
         },
         regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE},
-        ALLOWED_CODES, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
+        ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
         Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
@@ -295,7 +296,7 @@ fn parse_variable(
                                             || (first_char.is_ascii_alphabetic()
                                                 || first_char == '"'
                                                 || variable_text.starts_with("4 sticks")))
-                                            && !['.', '!', '/', '?'].contains(&first_char)
+                                            && !matches!(first_char, '.' | '!' | '/' | '?')
                                         {
                                             is_continuation_of_description = true;
                                         }
@@ -392,7 +393,7 @@ fn parse_list<'a>(
     for item in list {
         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !ALLOWED_CODES.contains(&code) {
+        let code: Code = if !is_allowed_code(code) {
             Code::Bad
         } else {
             let code: Code = unsafe { transmute::<u16, Code>(code) };
@@ -404,7 +405,7 @@ fn parse_list<'a>(
         };
 
         if in_sequence
-            && (![Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code)
+            && (!matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit)
                 || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
         {
             if !lines.is_empty() {
@@ -468,7 +469,7 @@ fn parse_list<'a>(
                 continue;
             }
 
-            if [Code::Dialogue, Code::DialogueStart, Code::Credit].contains(&code) {
+            if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
                 lines.push(parameter_string);
                 in_sequence = true;
             } else {
@@ -809,12 +810,11 @@ pub fn read_other<P: AsRef<Path>>(
                                     lines_mut_ref.insert(last.trim_replace() + &parsed);
                                     let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() };
 
-                                    // TODO: this shit rewrites the translation line but inserts RIGHT original line
-                                    // uhhh... so what i actually need to do? i forgot...
+                                    //? I don't know what this code does, but apparently everything works
                                     if processing_mode == ProcessingMode::Append {
-                                        let (idx, _, value) =
+                                        let (index, _, translated) =
                                             translation_map.shift_remove_full(last.as_str()).unwrap_log();
-                                        translation_map.shift_insert(idx, string_ref.to_owned(), value);
+                                        translation_map.shift_insert(index, string_ref.to_owned(), translated);
                                     }
                                 }
                                 continue;
@@ -822,12 +822,11 @@ pub fn read_other<P: AsRef<Path>>(
 
                             prev_variable_type = Some(variable_type);
 
-                            let replaced: String = parsed
-                                .split('\n')
-                                .map(str::trim)
-                                .collect::<Vec<_>>()
-                                .join(NEW_LINE)
-                                .trim_replace();
+                            let mut replaced: String =
+                                String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
+
+                            replaced.pop();
+                            replaced = replaced.trim_replace();
 
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
