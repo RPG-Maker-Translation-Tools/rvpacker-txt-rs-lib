@@ -358,15 +358,16 @@ fn write_list(
     for it in 0..list.len() {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !is_allowed_code(code) {
-            Code::Bad
-        } else {
-            let code: Code = unsafe { transmute::<u16, Code>(code) };
+        let code: Code = if is_allowed_code(code) {
+            let code: Code = unsafe { transmute(code) };
+
             if code == Code::DialogueStart && engine_type != EngineType::XP {
                 Code::Bad
             } else {
                 code
             }
+        } else {
+            Code::Bad
         };
 
         let write_string_literally: bool = if engine_type == EngineType::New {
@@ -558,7 +559,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         // DEFAULT, only ever holds one hashmap with all the translation lines.
         // If maps processing mode is SEPARATE, holds multiple hashmap, each
         // respective to a single map file.
-        let mut translation_maps: HashMap<u16, StringHashMap> = HashMap::new();
+        let mut translation_maps: HashMap<u16, StringHashMap, Xxh3DefaultBuilder> = HashMap::with_hasher(HASHER);
         // Always allocated.
         let mut names_map: StringHashMap = HashMap::with_hasher(HASHER);
 
@@ -623,15 +624,15 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         .filter_map(|entry| filter_maps(entry, engine_type));
 
     maps_obj_iter.for_each(|(filename, mut obj)| {
-        if let Some(display_name) = obj[display_name_label].as_str() {
-            let mut display_name: String = display_name.to_owned();
+        if let Some(mut display_name) = obj[display_name_label].as_str().map(str::to_owned) {
+            if !display_name.is_empty() {
+                if romanize {
+                    display_name = romanize_string(display_name)
+                }
 
-            if romanize {
-                display_name = romanize_string(display_name)
-            }
-
-            if let Some(location_name) = names_map.get(&display_name) {
-                obj[display_name_label] = Value::from(location_name);
+                if let Some(location_name) = names_map.get(&display_name) {
+                    obj[display_name_label] = Value::from(location_name);
+                }
             }
         }
 
@@ -647,7 +648,8 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                     translation_maps.get(&map_number).unwrap_log()
                 }
             } else {
-                unsafe { translation_maps.iter().next().unwrap_unchecked().1 }
+                // translation_maps always have only one entry in this case
+                unsafe { translation_maps.values().next().unwrap_unchecked() }
             };
 
             if hashmap.is_empty() {
