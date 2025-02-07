@@ -40,22 +40,10 @@ type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
 
 #[inline]
-fn parse_translation<'a>(
-    translation: &'a str,
-    maps_processing_mode: Option<MapsProcessingMode>,
-    mut names_deque: Option<&'a mut VecDeque<String>>,
-) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
+fn parse_translation<'a>(translation: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
         if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-            if maps_processing_mode.is_some_and(|mode| mode != MapsProcessingMode::Default)
-                && original.starts_with("<!-- Map")
-                && original.len() > 20
-            {
-                unsafe { names_deque.as_mut().unwrap_unchecked() }.push_back(translated.to_owned());
-                None
-            } else {
-                Some((original.to_owned(), translated.to_owned()))
-            }
+            Some((original.to_owned(), translated.to_owned()))
         } else {
             eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
             None
@@ -101,11 +89,13 @@ fn parse_parameter(
                 match code {
                     Code::Dialogue | Code::DialogueStart => {
                         if let Some(i) = find_lisa_prefix_index(parameter) {
-                            parameter = &parameter[i..]
-                        }
+                            if string_is_only_symbols(&parameter[i..]) {
+                                return None;
+                            }
 
-                        if string_is_only_symbols(parameter) {
-                            return None;
+                            if !parameter.starts_with(r"\et") {
+                                parameter = &parameter[i..];
+                            }
                         }
                     }
                     _ => {}
@@ -393,15 +383,16 @@ fn parse_list<'a>(
     for item in list {
         let code: u16 = item[code_label].as_u64().unwrap_log() as u16;
 
-        let code: Code = if !is_allowed_code(code) {
-            Code::Bad
-        } else {
-            let code: Code = unsafe { transmute::<u16, Code>(code) };
+        let code: Code = if is_allowed_code(code) {
+            let code: Code = unsafe { transmute(code) };
+
             if code == Code::DialogueStart && engine_type != EngineType::XP {
                 Code::Bad
             } else {
                 code
             }
+        } else {
+            Code::Bad
         };
 
         if in_sequence
@@ -516,7 +507,6 @@ pub fn read_map<P: AsRef<Path>>(
     // Reads the translation from existing .txt file and then appends new lines.
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
-    let mut names_deque: VecDeque<String> = VecDeque::new();
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
 
     // Used when maps processing mode is PRESERVE.
@@ -526,13 +516,11 @@ pub fn read_map<P: AsRef<Path>>(
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
 
-            let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
-                parse_translation(&translation, Some(maps_processing_mode), Some(&mut names_deque));
+            let parsed_translation: Box<dyn Iterator<Item = (String, String)>> = parse_translation(&translation);
 
-            if maps_processing_mode == MapsProcessingMode::Preserve {
-                translation_map_vec.extend(parsed_translation);
-            } else {
-                translation_map.extend(parsed_translation);
+            match maps_processing_mode {
+                MapsProcessingMode::Default => translation_map.extend(parsed_translation),
+                _ => translation_map_vec.extend(parsed_translation),
             }
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -546,6 +534,8 @@ pub fn read_map<P: AsRef<Path>>(
     let obj_vec_iter = read_dir(original_path)
         .unwrap_log()
         .filter_map(|entry| filter_maps(entry, engine_type));
+
+    let mut new_translation_map_vec: Vec<(String, String)> = Vec::new();
 
     for (filename, obj) in obj_vec_iter {
         let mut filename_comment: String = format!("<!-- {filename} -->");
@@ -576,25 +566,27 @@ pub fn read_map<P: AsRef<Path>>(
                 }
             }
             MapsProcessingMode::Separate => {
-                translation_map_vec.extend(translation_map.drain(..lines_set.len() - 1));
+                new_translation_map_vec.extend(translation_map.drain(..));
+
+                if processing_mode == ProcessingMode::Append {
+                    let comment: (String, String) = translation_map_vec.remove(0);
+                    translation_map.shift_insert(0, comment.0, comment.1);
+
+                    let next_comment_index: Option<usize> =
+                        translation_map_vec.iter().position(|x| x.0.starts_with("<!-- Map"));
+
+                    if let Some(index) = next_comment_index {
+                        translation_map.extend(translation_map_vec.drain(..index));
+                    } else {
+                        translation_map.extend(translation_map_vec.drain(..));
+                    }
+                } else {
+                    new_translation_map_vec.push((filename_comment, String::new()));
+                }
+
                 lines_set.clear();
-                translation_map_vec.push((filename_comment, String::new()));
             }
             MapsProcessingMode::Preserve => {
-                let filename_comment_len: usize = filename_comment.len();
-
-                translation_map_vec.insert(
-                    translation_map_vec_pos,
-                    (
-                        filename_comment,
-                        if filename_comment_len > 20 && names_deque.front().is_some() {
-                            unsafe { names_deque.pop_front().unwrap_unchecked() }
-                        } else {
-                            String::new()
-                        },
-                    ),
-                );
-
                 translation_map_vec_pos += 1;
             }
         }
@@ -652,10 +644,8 @@ pub fn read_map<P: AsRef<Path>>(
             )
             .unwrap_log();
         }
-    }
 
-    if maps_processing_mode == MapsProcessingMode::Separate {
-        translation_map_vec.extend(translation_map.drain(..));
+        new_translation_map_vec.extend(translation_map.drain(..));
     }
 
     let mut output_content: String = if maps_processing_mode == MapsProcessingMode::Default {
@@ -665,6 +655,10 @@ pub fn read_map<P: AsRef<Path>>(
                 .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         )
     } else {
+        if maps_processing_mode == MapsProcessingMode::Separate {
+            translation_map_vec = new_translation_map_vec;
+        }
+
         String::from_iter(
             translation_map_vec
                 .into_iter()
@@ -736,7 +730,7 @@ pub fn read_other<P: AsRef<Path>>(
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
-                translation_map.extend(parse_translation(&translation, None, None));
+                translation_map.extend(parse_translation(&translation));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 continue;
@@ -825,7 +819,7 @@ pub fn read_other<P: AsRef<Path>>(
                             let mut replaced: String =
                                 String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
 
-                            replaced.pop();
+                            replaced.drain(replaced.len() - 2..);
                             replaced = replaced.trim_replace();
 
                             lines_mut_ref.insert(replaced);
@@ -952,7 +946,7 @@ pub fn read_system<P: AsRef<Path>>(
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
 
-            translation_map.extend(parse_translation(&translation, None, None));
+            translation_map.extend(parse_translation(&translation));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1147,7 +1141,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation, None, None));
+            translation_map.extend(parse_translation(&translation));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1295,7 +1289,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation, None, None));
+            translation_map.extend(parse_translation(&translation));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
