@@ -102,7 +102,7 @@ fn get_translated_parameter(
     // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
-    let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
+    let mut remaining_strings: Vec<(&str, bool)> = Vec::with_capacity(4);
 
     #[allow(unreachable_patterns)]
     if let Some(game_type) = game_type {
@@ -120,8 +120,15 @@ fn get_translated_parameter(
             GameType::LisaRPG => match code {
                 Code::Dialogue | Code::DialogueStart => {
                     if let Some(i) = find_lisa_prefix_index(parameter) {
-                        remaining_strings.push((parameter[..i].to_owned(), false));
-                        parameter = &parameter[i..];
+                        if string_is_only_symbols(&parameter[i..]) {
+                            return None;
+                        }
+
+                        remaining_strings.push((&parameter[..i], false));
+
+                        if !parameter.starts_with(r"\et") {
+                            parameter = &parameter[i..];
+                        }
                     }
                 }
                 _ => {}
@@ -132,7 +139,7 @@ fn get_translated_parameter(
 
     if engine_type != EngineType::New {
         if let Some(i) = ends_with_if_index(parameter) {
-            remaining_strings.push((parameter[..i].to_owned(), true));
+            remaining_strings.push((&parameter[..i], true));
             parameter = &parameter[..i];
         }
 
@@ -173,8 +180,8 @@ fn get_translated_parameter(
     if let Some(mut translated) = translated {
         for (string, position) in remaining_strings.into_iter() {
             match position {
-                false => translated = string + &translated,
-                true => translated += &string,
+                false => translated = string.to_owned() + &translated,
+                true => translated += string,
             }
         }
 
