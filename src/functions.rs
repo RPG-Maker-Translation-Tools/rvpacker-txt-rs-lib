@@ -521,21 +521,22 @@ pub fn ends_with_if_index(string: &str) -> Option<usize> {
 
 #[inline]
 pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
-    if string.starts_with(r"\et[") {
-        let chars = string.char_indices().skip(4);
-        let mut encountered_number: bool = false;
+    if string.starts_with(r"\et") {
+        let mut index: usize = 5;
 
-        for (i, char) in chars.take(5) {
-            if char.is_numeric() {
-                encountered_number = true;
-            } else if encountered_number && char == ']' {
-                return Some(i + 1);
+        loop {
+            let char: &str = unsafe { string.get(index..index + 1).unwrap_unchecked() };
+
+            if char != "]" {
+                index += 1;
             } else {
+                return Some(index + 1);
+            }
+
+            if index == 10 {
                 return None;
             }
         }
-
-        None
     } else if string.starts_with(r"\nbt") {
         Some(4)
     } else {
