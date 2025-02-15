@@ -652,18 +652,22 @@ pub fn read_map<P: AsRef<Path>>(
         if maps_processing_mode == MapsProcessingMode::Separate {
             let mut_ref = unsafe { &mut *(&mut translation_maps as *mut Vec<IndexMapXxh3>) };
 
-            if translation_maps.get(i).is_some() {
-                translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
+            if processing_mode == ProcessingMode::Append {
+                if translation_maps.get(i).is_some() {
+                    translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
+                } else {
+                    mut_ref.push(std::mem::take(translation_map));
+                    translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
+                }
+
+                if !translation_map
+                    .get_index(1)
+                    .is_some_and(|x| x.0.starts_with("<!-- Order"))
+                {
+                    translation_map.shift_insert(1, order, String::new());
+                }
             } else {
                 mut_ref.push(std::mem::take(translation_map));
-                translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
-            }
-
-            if !translation_map
-                .get_index(1)
-                .is_some_and(|x| x.0.starts_with("<!-- Order"))
-            {
-                translation_map.shift_insert(1, order, String::new());
             }
 
             lines_set.clear();
@@ -722,6 +726,10 @@ pub fn read_map<P: AsRef<Path>>(
             )
             .unwrap_log();
         }
+    }
+
+    if maps_processing_mode == MapsProcessingMode::Separate {
+        translation_maps.push(std::mem::take(translation_map));
     }
 
     let mut output_content: String = match maps_processing_mode {
