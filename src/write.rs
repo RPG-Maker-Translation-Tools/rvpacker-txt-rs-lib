@@ -319,7 +319,7 @@ fn get_translated_variable(
         if matches!(
             variable_type,
             Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
-        ) && (filename.starts_with("Sk") && variable_type != Variable::Message2)
+        ) && !(variable_type == Variable::Message2 && filename.starts_with("Sk"))
         {
             result = String::from(" ") + &result;
         }
