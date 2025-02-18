@@ -5,8 +5,8 @@ use crate::{
     determine_extension,
     functions::{
         ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
-        get_object_data, get_other_labels, get_system_labels, is_allowed_code, romanize_string, string_is_only_symbols,
-        traverse_json,
+        get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number, romanize_string,
+        string_is_only_symbols, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
@@ -31,8 +31,9 @@ use std::{
     collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
+    mem::take,
     mem::transmute,
-    path::Path,
+    path::{Path, PathBuf},
     str::Chars,
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
@@ -509,7 +510,7 @@ pub fn read_map<P: AsRef<Path>>(
     let mut translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
 
     // Allocated when maps processing mode is SEPARATE.
-    let mut translation_maps: Vec<IndexMapXxh3> = Vec::new();
+    let mut translation_maps: IndexMap<u16, IndexMapXxh3> = IndexMap::new();
 
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
@@ -526,25 +527,34 @@ pub fn read_map<P: AsRef<Path>>(
             match maps_processing_mode {
                 MapsProcessingMode::Default => translation_map.extend(parsed_translation),
                 MapsProcessingMode::Separate => {
-                    translation_maps.reserve_exact(512);
+                    translation_maps.reserve(512);
 
                     let mut map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+                    let mut map_number: u16 = u16::MAX;
+                    let mut prev_map: String = String::new();
 
                     for (original, translation) in parsed_translation {
                         if original.starts_with("<!-- Map") {
                             if map.is_empty() {
-                                map.insert(original, translation);
+                                if original != prev_map {
+                                    translation_maps.insert(map_number, take(&mut map));
+                                }
+
+                                map.insert(original.clone(), translation);
                             } else {
-                                translation_maps.push(std::mem::take(&mut map));
-                                map.insert(original, translation);
+                                translation_maps.insert(map_number, take(&mut map));
+                                map.insert(original.clone(), translation);
                             }
+
+                            map_number = parse_map_number(&original);
+                            prev_map = original;
                         } else {
                             map.insert(original, translation);
                         }
                     }
 
                     if !map.is_empty() {
-                        translation_maps.push(map);
+                        translation_maps.insert(map_number, map);
                     }
                 }
                 MapsProcessingMode::Preserve => translation_map_vec.extend(parsed_translation),
@@ -558,7 +568,7 @@ pub fn read_map<P: AsRef<Path>>(
     let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
         get_maps_labels(engine_type);
 
-    let mapinfos_path = original_path
+    let mapinfos_path: PathBuf = original_path
         .as_ref()
         .join("MapInfos".to_owned() + determine_extension(engine_type));
     let mapinfos: Value = if engine_type == EngineType::New {
@@ -571,7 +581,11 @@ pub fn read_map<P: AsRef<Path>>(
         .unwrap_log()
         .filter_map(|entry| filter_maps(entry, engine_type));
 
-    for (i, (filename, obj)) in obj_vec_iter.enumerate() {
+    let mut map_number: u16 = 0;
+
+    for (filename, obj) in obj_vec_iter {
+        map_number = parse_map_number(&filename);
+
         let mut filename_comment: String = format!("<!-- {filename} -->");
 
         if let Some(display_name) = obj[display_name_label].as_str() {
@@ -587,20 +601,21 @@ pub fn read_map<P: AsRef<Path>>(
             }
         }
 
-        let entry: String = format!(
-            "__integer__{i}",
-            i = filename
-                .trim_end_matches(|c: char| c.is_numeric())
-                .as_bytes()
-                .iter()
-                .filter(|&&x| (x as char).is_numeric())
-                .map(|&x| (x as char).to_string())
-                .collect::<String>()
-                .trim_start_matches('0')
-        );
+        let map_number_string: String = {
+            let mut string: String = map_number.to_string();
+
+            if map_number < 10 {
+                string = "00".to_owned() + &string;
+            } else if map_number < 100 {
+                string = "0".to_owned() + &string;
+            }
+
+            string
+        };
+        let entry: String = format!("__integer__{map_number_string}");
 
         let order: String = if engine_type == EngineType::New {
-            &mapinfos[i + 1]["order"]
+            &mapinfos[map_number as usize]["order"]
         } else {
             &mapinfos[&entry]["__symbol__@order"]
         }
@@ -650,24 +665,29 @@ pub fn read_map<P: AsRef<Path>>(
         }
 
         if maps_processing_mode == MapsProcessingMode::Separate {
-            let mut_ref = unsafe { &mut *(&mut translation_maps as *mut Vec<IndexMapXxh3>) };
+            let translation_maps_mut = unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) };
 
             if processing_mode == ProcessingMode::Append {
-                if translation_maps.get(i).is_some() {
-                    translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
+                if translation_maps_mut.get(&map_number).is_some() {
+                    translation_map = unsafe { translation_maps_mut.get_mut(&map_number).unwrap_unchecked() };
                 } else {
-                    mut_ref.push(std::mem::take(translation_map));
-                    translation_map = unsafe { mut_ref.get_unchecked_mut(i) };
+                    translation_maps_mut.insert(map_number, take(translation_map));
+                    translation_map = unsafe { translation_maps_mut.get_mut(&map_number).unwrap_unchecked() };
                 }
 
-                if !translation_map
-                    .get_index(1)
-                    .is_some_and(|x| x.0.starts_with("<!-- Order"))
-                {
+                if translation_map.get_index(1).is_none() {
+                    translation_map.insert(order, String::new());
+                } else if !unsafe {
+                    translation_map
+                        .get_index(1)
+                        .unwrap_unchecked()
+                        .0
+                        .starts_with("<!-- Order")
+                } {
                     translation_map.shift_insert(1, order, String::new());
                 }
             } else {
-                mut_ref.push(std::mem::take(translation_map));
+                translation_maps_mut.insert(map_number, take(translation_map));
             }
 
             lines_set.clear();
@@ -729,7 +749,7 @@ pub fn read_map<P: AsRef<Path>>(
     }
 
     if maps_processing_mode == MapsProcessingMode::Separate {
-        translation_maps.push(std::mem::take(translation_map));
+        translation_maps.insert(map_number, take(translation_map));
     }
 
     let mut output_content: String = match maps_processing_mode {
@@ -738,12 +758,16 @@ pub fn read_map<P: AsRef<Path>>(
                 .into_iter()
                 .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         ),
-        MapsProcessingMode::Separate => String::from_iter(
-            translation_maps
-                .into_iter()
-                .flat_map(|hashmap| hashmap.into_iter())
-                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-        ),
+        MapsProcessingMode::Separate => {
+            translation_maps.sort_unstable_keys();
+
+            String::from_iter(
+                translation_maps
+                    .into_iter()
+                    .flat_map(|hashmap| hashmap.1.into_iter())
+                    .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+            )
+        }
         MapsProcessingMode::Preserve => String::from_iter(
             translation_map_vec
                 .into_iter()

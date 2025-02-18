@@ -1,10 +1,12 @@
 use crate::{
-    statics::{regexes::PLUGINS_REGEXPS, HASHER, NEW_LINE, SYMBOLS},
+    statics::{
+        regexes::{IS_ONLY_SYMBOLS_RE, PLUGINS_REGEXPS},
+        HASHER, NEW_LINE, SYMBOLS,
+    },
     types::{EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt},
 };
 use indexmap::IndexSet;
 use marshal_rs::{load, StringMode};
-use regex::Regex;
 use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
     collections::{HashSet, VecDeque},
@@ -428,7 +430,15 @@ pub fn traverse_json(
 
             let str: &str = unsafe { value.as_str().unwrap_unchecked() }.trim();
 
-            if !(str.is_empty() || unsafe { Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s\d"']+$"#).unwrap_unchecked() }.is_match(str) || ["true", "false", "none", "time", "off"].contains(&str) || str.starts_with("this.") && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic()) && str.ends_with(")") || str.starts_with("rgba")) || key.is_some_and(|x| x.starts_with("LATIN")){
+            if !(str.is_empty()
+                || IS_ONLY_SYMBOLS_RE.is_match(str)
+                || ["true", "false", "none", "time", "off"].contains(&str)
+                || str.starts_with("this.")
+                    && str.chars().nth(5).is_some_and(|c: char| c.is_alphabetic())
+                    && str.ends_with(")")
+                || str.starts_with("rgba"))
+                || key.is_some_and(|x| x.starts_with("LATIN"))
+            {
                 let mut string: String = str.replace('\n', NEW_LINE);
 
                 if romanize {
@@ -562,4 +572,21 @@ pub fn find_lisa_prefix_index(string: &str) -> Option<usize> {
 #[inline(always)]
 pub const fn is_allowed_code(code: u16) -> bool {
     matches!(code, 101 | 102 | 320 | 324 | 356 | 401 | 402 | 405 | 655)
+}
+
+#[inline(always)]
+pub fn parse_map_number(string: &str) -> u16 {
+    unsafe {
+        String::from_utf8_unchecked(
+            string
+                .as_bytes()
+                .iter()
+                .filter(|c| c.is_ascii_digit())
+                .take(3)
+                .copied()
+                .collect(),
+        )
+        .parse::<u16>()
+        .unwrap_unchecked()
+    }
 }

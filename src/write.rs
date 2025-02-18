@@ -4,7 +4,7 @@ use crate::{eprintln, println};
 use crate::{
     functions::{
         determine_extension, ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index,
-        get_maps_labels, get_object_data, get_other_labels, get_system_labels, is_allowed_code,
+        get_maps_labels, get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number,
         read_to_string_without_bom, romanize_string, string_is_only_symbols, traverse_json,
     },
     statics::{
@@ -584,8 +584,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                         translation_maps.insert(map_number, take(&mut translation_map));
                     }
 
-                    let left: &str = original.split_once('.').unwrap_log().0;
-                    map_number = left[left.len() - 3..].parse::<u16>().unwrap_log();
+                    map_number = parse_map_number(original);
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
@@ -651,7 +650,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
                 unsafe {
                     let filename: &str = filename.split_once('.').unwrap_unchecked().0;
-                    let map_number: u16 = filename[filename.len() - 3..].parse::<u16>().unwrap_log();
+                    let map_number: u16 = parse_map_number(filename);
                     translation_maps.get(&map_number).unwrap_log()
                 }
             } else {

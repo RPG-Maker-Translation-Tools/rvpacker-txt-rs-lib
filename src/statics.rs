@@ -39,6 +39,10 @@ pub mod regexes {
             Regex::new(r"^Damage\w*$").unwrap_unchecked(),
         ]
     });
+
+    pub static IS_ONLY_SYMBOLS_RE: Lazy<Regex> = Lazy::new(|| unsafe {
+        Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s\d"']+$"#).unwrap_unchecked()
+    });
 }
 
 pub const NEW_LINE: &str = r"\#";
