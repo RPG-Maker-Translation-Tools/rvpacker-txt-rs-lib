@@ -3,6 +3,8 @@
 mod functions;
 pub use functions::{determine_extension, read_to_string_without_bom};
 
+pub mod json;
+pub mod purge;
 pub mod read;
 pub mod statics;
 pub mod types;

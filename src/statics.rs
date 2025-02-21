@@ -8,6 +8,11 @@ pub mod localization {
     pub const FILE_ALREADY_EXISTS_MSG: &str = "file already exists. If you want to forcefully re-read files or append \
                                                new text, use --mode force or --mode append arguments.";
 
+    pub const JSON_ALREADY_EXIST: &str = "Directory containing json files already exists. If you want to forcefully regenerate .json files, use --mode force.";
+    pub const CANNOT_GENERATE_JSON: &str = "Can't generate json for MV/MZ engines, they're already json.";
+
+    pub const PURGED_FILE_MSG: &str = "Purged unused lines from file";
+
     // write messages
     pub const WROTE_FILE_MSG: &str = "Wrote file";
     pub const COULD_NOT_SPLIT_LINE_MSG: &str =

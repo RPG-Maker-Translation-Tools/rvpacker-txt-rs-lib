@@ -575,8 +575,15 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         for (i, line) in translation.split('\n').enumerate() {
             if line.starts_with("<!-- Map") {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-                    if !original.ends_with(&(determine_extension(engine_type).to_owned() + " -->")) {
-                        let map_display_name: &str = &original[17..original.len() - 4];
+                    if original.starts_with("<!-- In-game Displayed Name:") {
+                        let map_display_name: &str = unsafe {
+                            original
+                                .strip_prefix("<!-- In-game Displayed Name: ")
+                                .unwrap_unchecked()
+                                .strip_suffix(" -->")
+                                .unwrap_unchecked()
+                        };
+
                         names_map.insert(map_display_name.trim_replace(), translated.trim_replace());
                     }
 
@@ -584,7 +591,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                         translation_maps.insert(map_number, take(&mut translation_map));
                     }
 
-                    map_number = parse_map_number(original);
+                    map_number = parse_map_number(translated);
                 } else {
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
