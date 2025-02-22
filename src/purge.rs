@@ -333,11 +333,9 @@ fn parse_list(
     romanize: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
-    processing_mode: ProcessingMode,
     (code_label, parameters_label): (&str, &str),
     set_mut_ref: &mut IndexSetXxh3,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
-    mut translation_map_vec_pos: Option<&mut usize>,
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
@@ -349,17 +347,7 @@ fn parse_list(
         if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
             if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
-                let pos: usize = **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() };
-
-                if processing_mode == ProcessingMode::Append {
-                    if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
-                        vec.insert(pos, (parsed, String::new()));
-                    }
-                } else {
-                    vec.push((parsed, String::new()))
-                }
-
-                **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() } += 1;
+                vec.push((parsed, String::new()));
             } else {
                 set_mut_ref.insert(parsed);
             }
@@ -493,8 +481,7 @@ pub fn purge_map<P: AsRef<Path>>(
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
 
-    // Used when maps processing mode is PRESERVE.
-    let mut translation_map_vec_pos: usize = 0;
+    let mut new_translation_map_vec: Vec<(String, String)> = Vec::new();
 
     let translation: String = read_to_string(translation_path).unwrap_log();
     let parsed_translation: Box<dyn Iterator<Item = (String, String)>> = parse_translation(&translation);
@@ -542,7 +529,10 @@ pub fn purge_map<P: AsRef<Path>>(
 
     for (filename, obj) in obj_vec_iter {
         let map_number: u16 = parse_map_number(&filename);
-        translation_map = translation_maps.get_mut(&map_number).unwrap_log();
+
+        if maps_processing_mode != MapsProcessingMode::Preserve {
+            translation_map = translation_maps.get_mut(&map_number).unwrap_log();
+        }
 
         let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
             Box::new(obj[events_label].as_array().unwrap_log().iter().skip(1))
@@ -569,11 +559,9 @@ pub fn purge_map<P: AsRef<Path>>(
                     romanize,
                     game_type,
                     engine_type,
-                    ProcessingMode::Default,
                     (code_label, parameters_label),
                     unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
-                    Some(&mut translation_map_vec),
-                    Some(&mut translation_map_vec_pos),
+                    Some(&mut new_translation_map_vec),
                     Some(maps_processing_mode),
                 );
             }
@@ -588,27 +576,23 @@ pub fn purge_map<P: AsRef<Path>>(
         }
     }
 
-    if maps_processing_mode == MapsProcessingMode::Preserve {
-        todo!()
-    }
-
     let mut output_content: String = match maps_processing_mode {
-        MapsProcessingMode::Default => String::from_iter(
-            translation_map
-                .into_iter()
-                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-        ),
-        MapsProcessingMode::Separate => String::from_iter(
+        MapsProcessingMode::Default | MapsProcessingMode::Separate => String::from_iter(
             translation_maps
                 .into_iter()
                 .flat_map(|hashmap| hashmap.1.into_iter())
                 .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
         ),
-        MapsProcessingMode::Preserve => String::from_iter(
+        MapsProcessingMode::Preserve => {
             translation_map_vec
-                .into_iter()
-                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-        ),
+                .retain(|x| x.0.starts_with("<!--") || new_translation_map_vec.iter().any(|y| x.0 == y.0));
+
+            String::from_iter(
+                translation_map_vec
+                    .into_iter()
+                    .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+            )
+        }
     };
 
     output_content.pop();
@@ -780,10 +764,8 @@ pub fn purge_other<P: AsRef<Path>>(
                         romanize,
                         game_type,
                         engine_type,
-                        ProcessingMode::Default,
                         (code_label, parameters_label),
                         lines_mut_ref,
-                        None,
                         None,
                         None,
                     );
