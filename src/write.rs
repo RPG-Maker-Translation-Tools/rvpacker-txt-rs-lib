@@ -573,7 +573,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         let mut map_number: u16 = 0;
 
         for (i, line) in translation.split('\n').enumerate() {
-            if line.starts_with("<!-- Map") {
+            if line == "<!-- Map -->" {
                 if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
                     if original.starts_with("<!-- In-game Displayed Name:") {
                         let map_display_name: &str = unsafe {

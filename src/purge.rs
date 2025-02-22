@@ -494,7 +494,7 @@ pub fn purge_map<P: AsRef<Path>>(
             let mut prev_map: String = String::new();
 
             for (original, translation) in parsed_translation {
-                if original.starts_with("<!-- Map") {
+                if original == "<!-- Map -->" {
                     if map.is_empty() {
                         if translation != prev_map {
                             translation_maps.insert(map_number, take(&mut map));
