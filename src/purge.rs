@@ -444,7 +444,6 @@ fn parse_list(
     }
 }
 
-// TODO: Implement purge with `preserve` mode
 /// Reads all Map files of original_path and parses them into .txt files in `output_path`.
 /// # Parameters
 /// * `original_path` - path to directory that contains game files
