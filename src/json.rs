@@ -42,13 +42,9 @@ pub fn generate_json<P: AsRef<Path>>(
         create_dir_all(output_path.as_ref().join("json")).unwrap();
 
         write(
-            unsafe {
-                output_path
-                    .as_ref()
-                    .parent()
-                    .unwrap_unchecked()
-                    .join(format!("json/{}.json", &filename.rsplit_once('.').unwrap_log().0))
-            },
+            output_path
+                .as_ref()
+                .join(format!("json/{}.json", &filename.rsplit_once('.').unwrap_log().0)),
             unsafe { to_string(&obj).unwrap_unchecked() },
         )
         .unwrap_log();
