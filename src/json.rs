@@ -18,10 +18,12 @@ pub fn generate_json<P: AsRef<Path>>(
 ) {
     if output_path.as_ref().join("json").exists() && processing_mode != ProcessingMode::Force {
         println!("{JSON_ALREADY_EXIST}");
+        return;
     }
 
     if original_path.as_ref().join("System.json").exists() {
         println!("{CANNOT_GENERATE_JSON}");
+        return;
     }
 
     for entry in read_dir(original_path).unwrap_log().flatten() {
