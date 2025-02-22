@@ -339,12 +339,10 @@ fn parse_list<'a>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
     (code_label, parameters_label): (&str, &str),
-    map_mut_ref: &'a mut IndexMapXxh3,
-    map_ref: &'a IndexMapXxh3,
-    set_mut_ref: &'a mut IndexSetXxh3,
-    set_ref: &'a IndexSetXxh3,
+    map: &'a mut IndexMapXxh3,
+    set: &'a mut IndexSetXxh3,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
-    mut translation_map_vec_pos: Option<&mut usize>,
+    lines_pos: &mut usize,
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
@@ -356,7 +354,7 @@ fn parse_list<'a>(
         if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
             if maps_processing_mode == Some(MapsProcessingMode::Preserve) {
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
-                let pos: usize = **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() };
+                let pos: usize = *lines_pos;
 
                 if processing_mode == ProcessingMode::Append {
                     if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
@@ -366,21 +364,32 @@ fn parse_list<'a>(
                     vec.push((parsed, String::new()))
                 }
 
-                **unsafe { translation_map_vec_pos.as_mut().unwrap_unchecked() } += 1;
+                *lines_pos += 1;
             } else {
-                let absent = set_mut_ref.insert(parsed.clone());
-                let pos: usize = set_ref.len() - 1;
+                let absent: bool = set.insert(parsed.clone());
+                let pos: usize = if maps_processing_mode == Some(MapsProcessingMode::Default) {
+                    if absent {
+                        *lines_pos += 1;
+                    }
+
+                    *lines_pos
+                } else {
+                    set.len() - 1
+                };
 
                 if processing_mode == ProcessingMode::Append {
-                    if !map_ref.contains_key(&parsed) {
-                        map_mut_ref.shift_insert(pos, parsed, String::new());
+                    if !map.contains_key(&parsed)
+                        && (matches!(maps_processing_mode, None | Some(MapsProcessingMode::Separate))
+                            || !set.contains(&parsed))
+                    {
+                        map.shift_insert(pos, parsed, String::new());
                     }
                 } else if maps_processing_mode == Some(MapsProcessingMode::Default) {
                     if absent {
-                        map_mut_ref.insert(parsed, String::new());
+                        map.insert(parsed, String::new());
                     }
                 } else {
-                    map_mut_ref.insert(parsed, String::new());
+                    map.insert(parsed, String::new());
                 }
             }
         }
@@ -509,7 +518,7 @@ pub fn read_map<P: AsRef<Path>>(
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
     // Reads the translation from existing .txt file and then appends new lines.
-    let mut translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
+    let translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
 
     // Allocated when maps processing mode is SEPARATE.
     let mut translation_maps: IndexMap<u16, IndexMapXxh3> = IndexMap::new();
@@ -518,7 +527,7 @@ pub fn read_map<P: AsRef<Path>>(
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
 
     // Used when maps processing mode is PRESERVE.
-    let mut translation_map_vec_pos: usize = 0;
+    let mut lines_pos: usize = 0;
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
@@ -534,7 +543,7 @@ pub fn read_map<P: AsRef<Path>>(
                     let mut prev_map: String = String::new();
 
                     for (original, translation) in parsed_translation {
-                        if original.starts_with("<!-- Map") {
+                        if original == "<!-- Map -->" {
                             if map.is_empty() {
                                 if translation != prev_map {
                                     translation_maps.insert(map_number, take(&mut map));
@@ -581,13 +590,40 @@ pub fn read_map<P: AsRef<Path>>(
         .unwrap_log()
         .filter_map(|entry| filter_maps(entry, engine_type));
 
-    let mut map_number: u16 = 0;
-
     for (filename, obj) in obj_vec_iter {
-        map_number = parse_map_number(&filename);
+        let map_number: u16 = parse_map_number(&filename);
+        let map_number_string: String = map_number.to_string();
 
         let map_number_comment: String = String::from("<!-- Map -->");
-        let map_number_string: String = map_number.to_string();
+        let mut map_name_comment: String = String::new();
+
+        let order_number: String = {
+            let entry: String = format!("__integer__{map_number}");
+
+            let order_number: String = if engine_type == EngineType::New {
+                &mapinfos[map_number as usize]["order"]
+            } else {
+                &mapinfos[&entry]["__symbol__order"]
+            }
+            .as_u64()
+            .unwrap_log()
+            .to_string();
+
+            let map_name: String = if engine_type == EngineType::New {
+                &mapinfos[map_number as usize]["name"]
+            } else {
+                &mapinfos[&entry]["__symbol__name"]
+            }
+            .as_str()
+            .unwrap_log()
+            .to_string();
+
+            if !map_name.is_empty() {
+                map_name_comment = format!("<!-- Map Name: {map_name} -->");
+            }
+
+            order_number
+        };
 
         let mut map_display_name_comment: String = String::new();
 
@@ -602,98 +638,153 @@ pub fn read_map<P: AsRef<Path>>(
                 map_display_name_comment = format!("<!-- In-game Displayed Name: {display_name_string} -->");
             }
         }
-
-        let entry: String = format!("__integer__{map_number}");
-
-        let order_number: String = if engine_type == EngineType::New {
-            &mapinfos[map_number as usize]["order"]
-        } else {
-            &mapinfos[&entry]["__symbol__@order"]
-        }
-        .as_u64()
-        .unwrap_log()
-        .to_string();
-
         let order: String = String::from("<!-- Order -->");
 
-        match processing_mode {
-            ProcessingMode::Append => match maps_processing_mode {
-                MapsProcessingMode::Default | MapsProcessingMode::Separate => {
-                    let translation_maps_mut =
-                        unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) };
+        match (processing_mode, maps_processing_mode) {
+            (
+                ProcessingMode::Default | ProcessingMode::Force,
+                MapsProcessingMode::Default | MapsProcessingMode::Separate,
+            ) => {
+                translation_map.insert(map_number_comment.clone(), map_number_string.clone());
+                translation_map.insert(map_name_comment.clone(), String::new());
 
-                    if processing_mode == ProcessingMode::Append {
-                        if translation_maps_mut.contains_key(&map_number) {
-                            translation_map = unsafe { translation_maps_mut.get_mut(&map_number).unwrap_unchecked() };
-                        } else {
-                            translation_maps_mut.insert(
-                                map_number,
-                                std::mem::replace(translation_map, IndexMap::with_hasher(HASHER)),
-                            );
-                            translation_map = unsafe { translation_maps_mut.get_mut(&map_number).unwrap_unchecked() };
-                            translation_map.insert(map_number_comment.clone(), map_number_string);
+                if !map_display_name_comment.is_empty() {
+                    translation_map.insert(map_display_name_comment.clone(), String::new());
+                }
+
+                translation_map.insert(order.clone(), order_number.clone());
+                translation_maps.insert(map_number, take(translation_map));
+
+                if maps_processing_mode == MapsProcessingMode::Separate {
+                    lines_set.clear();
+                }
+            }
+            (ProcessingMode::Default | ProcessingMode::Force, MapsProcessingMode::Preserve) => {
+                translation_map_vec.push((map_number_comment.clone(), map_number_string.clone()));
+                translation_map_vec.push((map_name_comment.clone(), String::new()));
+
+                if !map_display_name_comment.is_empty() {
+                    translation_map_vec.push((map_display_name_comment.clone(), String::new()));
+                    lines_pos += 1;
+                }
+
+                translation_map_vec.push((order.clone(), order_number.clone()));
+                lines_pos += 3;
+            }
+            (ProcessingMode::Append, MapsProcessingMode::Default | MapsProcessingMode::Separate) => {
+                let translation_maps_mut: &mut IndexMap<u16, IndexMapXxh3> =
+                    unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) };
+
+                let translation_map: &mut IndexMap<String, String, Xxh3DefaultBuilder> =
+                    translation_maps_mut.entry(map_number).or_insert_with(|| {
+                        let mut new_map = IndexMap::with_hasher(HASHER);
+                        new_map.insert(map_number_comment.clone(), map_number_string.clone());
+                        new_map
+                    });
+
+                let mut map_number_comment_index: usize = translation_map
+                    .iter()
+                    .take(4)
+                    .position(|(k, _)| k == "<!-- Map -->")
+                    .unwrap();
+
+                if !map_name_comment.is_empty() && !translation_map.contains_key(&map_name_comment) {
+                    if let Some(index) = translation_map
+                        .iter()
+                        .take(4)
+                        .position(|(k, _)| k.starts_with("<!-- Map Name"))
+                    {
+                        translation_map.shift_remove_index(index);
+                    }
+
+                    translation_map.shift_insert(map_number_comment_index + 1, map_name_comment, String::new());
+                    map_number_comment_index += 1;
+                }
+
+                if !map_display_name_comment.is_empty() && !translation_map.contains_key(&map_display_name_comment) {
+                    let mut translation: String = String::new();
+
+                    if let Some(index) = translation_map
+                        .iter()
+                        .take(4)
+                        .position(|(k, _)| k.starts_with("<!-- In-game"))
+                    {
+                        if let Some((_, t)) = translation_map.shift_remove_index(index) {
+                            translation = t
                         }
+                    }
 
-                        if !map_display_name_comment.is_empty() {
-                            translation_map.insert(map_display_name_comment.clone(), String::new());
+                    translation_map.shift_insert(
+                        map_number_comment_index + 1,
+                        map_display_name_comment.clone(),
+                        translation,
+                    );
+                    map_number_comment_index += 1;
+                }
+
+                if let Some(x) = translation_map.get(&order) {
+                    if *x != order_number {
+                        translation_map.insert(order.clone(), order_number.clone());
+                    }
+                } else {
+                    translation_map.shift_insert(map_number_comment_index + 1, order.clone(), order_number.clone());
+                }
+
+                match maps_processing_mode {
+                    MapsProcessingMode::Separate => lines_set.clear(),
+                    _ => lines_pos = 0,
+                }
+            }
+            (ProcessingMode::Append, MapsProcessingMode::Preserve) => {
+                let mut map_number_comment_index: usize = translation_map_vec
+                    .iter()
+                    .skip(lines_pos)
+                    .take(4)
+                    .position(|(k, _)| k == "<!-- Map -->")
+                    .unwrap();
+
+                if !map_name_comment.is_empty() {
+                    if let Some(index) = translation_map_vec
+                        .iter()
+                        .take(4)
+                        .position(|(k, _)| k.starts_with("<!-- Map Name"))
+                    {
+                        translation_map_vec.remove(index);
+                    }
+
+                    translation_map_vec.insert(map_number_comment_index + 1, (map_name_comment, String::new()));
+                    map_number_comment_index += 1;
+                }
+
+                if !map_display_name_comment.is_empty() {
+                    let mut translation: String = String::new();
+
+                    if let Some(index) = translation_map_vec
+                        .iter()
+                        .take(4)
+                        .position(|(k, _)| k.starts_with("<!-- In-game"))
+                    {
+                        if translation_map_vec.get(index).is_some() {
+                            let (_, t) = translation_map_vec.remove(index);
+                            translation = t;
                         }
-
-                        if translation_map.contains_key(&order) {
-                            translation_map.insert(order.clone(), order_number);
-                        } else {
-                            translation_map.shift_insert(1, order.clone(), order_number);
-                        }
-                    } else {
-                        translation_maps_mut.insert(map_number, take(translation_map));
                     }
 
-                    if maps_processing_mode == MapsProcessingMode::Separate {
-                        lines_set.clear();
-                    }
+                    translation_map_vec.insert(
+                        map_number_comment_index + 1,
+                        (map_display_name_comment.clone(), translation),
+                    );
+                    map_number_comment_index += 1;
                 }
-                MapsProcessingMode::Preserve => {
-                    translation_map_vec_pos += 1;
 
-                    if !translation_map_vec.iter().any(|x| x.0 == order) {
-                        translation_map_vec.insert(translation_map_vec_pos, (order.clone(), order_number));
-                    } else {
-                        translation_map_vec.push((order.clone(), order_number))
-                    }
-
-                    translation_map_vec_pos += 1;
-                }
-            },
-            _ => match maps_processing_mode {
-                MapsProcessingMode::Default | MapsProcessingMode::Separate => {
-                    translation_maps.insert(map_number, take(translation_map));
-                    translation_map.insert(map_number_comment.clone(), map_number_string);
-
-                    if !map_display_name_comment.is_empty() {
-                        translation_map.insert(map_display_name_comment.clone(), String::new());
-                    }
-
-                    translation_map.insert(order.clone(), order_number);
-
-                    if maps_processing_mode == MapsProcessingMode::Separate {
-                        lines_set.clear();
-                    }
-                }
-                MapsProcessingMode::Preserve => {
-                    translation_map_vec.push((map_number_comment.clone(), map_number_string));
-
-                    if !map_display_name_comment.is_empty() {
-                        translation_map_vec.push((map_display_name_comment.clone(), String::new()));
-                    }
-
-                    translation_map_vec.push((order.clone(), order_number));
-
-                    translation_map_vec_pos += 2;
-                }
-            },
+                translation_map_vec.insert(map_number_comment_index + 1, (order.clone(), order_number.clone()));
+                lines_pos += 3;
+            }
         }
 
         if maps_processing_mode != MapsProcessingMode::Preserve && !map_display_name_comment.is_empty() {
             lines_set.insert(map_display_name_comment);
+            lines_pos += 1;
         }
 
         let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
@@ -722,11 +813,9 @@ pub fn read_map<P: AsRef<Path>>(
                     processing_mode,
                     (code_label, parameters_label),
                     unsafe { &mut *(translation_map as *mut IndexMapXxh3) },
-                    unsafe { &*(translation_map as *mut IndexMapXxh3) },
                     unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
-                    unsafe { &*(&mut lines_set as *mut IndexSetXxh3) },
                     Some(&mut translation_map_vec),
-                    Some(&mut translation_map_vec_pos),
+                    &mut lines_pos,
                     Some(maps_processing_mode),
                 );
             }
@@ -738,7 +827,7 @@ pub fn read_map<P: AsRef<Path>>(
     }
 
     if maps_processing_mode != MapsProcessingMode::Preserve {
-        translation_maps.insert(map_number, take(translation_map));
+        translation_maps.last_mut().unwrap().1.extend(translation_map.drain(..));
     }
 
     let mut output_content: String = match maps_processing_mode {
@@ -934,20 +1023,27 @@ pub fn read_other<P: AsRef<Path>>(
                 let pages_length: usize = if filename.starts_with("Tr") {
                     obj[pages_label].as_array().unwrap_log().len()
                 } else {
-                    let commonevent_name: &str = obj[if engine_type == EngineType::New {
-                        "name"
-                    } else {
-                        "__symbol__name"
-                    }]
-                    .as_str()
-                    .unwrap_log();
-
-                    if !commonevent_name.is_empty() {
-                        translation_map.insert(format!("<!-- Event Name: {commonevent_name} -->"), String::new());
-                    }
-
                     1
                 };
+
+                let commonevent_name: &str = obj[if engine_type == EngineType::New {
+                    "name"
+                } else {
+                    "__symbol__name"
+                }]
+                .as_str()
+                .unwrap_log();
+
+                if !commonevent_name.is_empty() {
+                    let event_name_comment: String = format!("<!-- Event Name: {commonevent_name} -->");
+                    lines.insert(event_name_comment.clone());
+
+                    if processing_mode == ProcessingMode::Append && !translation_map.contains_key(commonevent_name) {
+                        translation_map.shift_insert(lines.len() - 1, event_name_comment, String::new());
+                    } else {
+                        translation_map.insert(event_name_comment, String::new());
+                    }
+                }
 
                 for i in 0..pages_length {
                     let list: &Value = if pages_length != 1 {
@@ -968,11 +1064,9 @@ pub fn read_other<P: AsRef<Path>>(
                         processing_mode,
                         (code_label, parameters_label),
                         unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) },
-                        unsafe { &*(&mut translation_map as *mut IndexMapXxh3) },
                         lines_mut_ref,
-                        lines_ref,
                         None,
-                        None,
+                        &mut 0,
                         None,
                     );
                 }
