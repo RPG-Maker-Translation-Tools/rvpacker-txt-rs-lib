@@ -603,7 +603,7 @@ pub fn read_map<P: AsRef<Path>>(
             let order_number: String = if engine_type == EngineType::New {
                 &mapinfos[map_number as usize]["order"]
             } else {
-                &mapinfos[&entry]["__symbol__order"]
+                &mapinfos[&entry]["__symbol__@order"]
             }
             .as_u64()
             .unwrap_log()
@@ -612,7 +612,7 @@ pub fn read_map<P: AsRef<Path>>(
             let map_name: String = if engine_type == EngineType::New {
                 &mapinfos[map_number as usize]["name"]
             } else {
-                &mapinfos[&entry]["__symbol__name"]
+                &mapinfos[&entry]["__symbol__@name"]
             }
             .as_str()
             .unwrap_log()
