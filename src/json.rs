@@ -3,10 +3,10 @@ use crate::{
     statics::localization::{CANNOT_GENERATE_JSON, JSON_ALREADY_EXIST},
     types::{EngineType, OptionExt, ProcessingMode, ResultExt},
 };
-use marshal_rs::{load, StringMode};
+use marshal_rs::{dump, load, StringMode};
 use sonic_rs::{from_str, to_string, Value};
 use std::{
-    fs::{create_dir_all, read, read_dir, write},
+    fs::{create_dir_all, read, read_dir, read_to_string, write},
     path::Path,
 };
 
@@ -53,6 +53,13 @@ pub fn generate_json<P: AsRef<Path>>(
     }
 }
 
-pub fn write_json() {
-    todo!()
+pub fn write_json<P: AsRef<Path>>(root_dir: P) {
+    let json_dir: &Path = &root_dir.as_ref().join("json");
+
+    for entry in read_dir(json_dir).unwrap_log().flatten() {
+        let json: Value = from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log();
+        let marshal_obj: Vec<u8> = dump(json, None);
+
+        write(root_dir.as_ref().join("written"), marshal_obj).unwrap_log();
+    }
 }
