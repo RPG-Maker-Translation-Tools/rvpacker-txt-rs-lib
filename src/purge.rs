@@ -466,6 +466,10 @@ pub fn purge_map<P: AsRef<Path>>(
     logging: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
+    stat: bool,
+    leave_filled: bool,
+    purge_empty: bool,
+    create_ignore: bool,
 ) {
     let translation_path: &Path = &output_path.as_ref().join("maps.txt");
 
@@ -483,6 +487,12 @@ pub fn purge_map<P: AsRef<Path>>(
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
 
     let mut new_translation_map_vec: Vec<(String, String)> = Vec::new();
+
+    let mut stat_vec: Vec<(String, String)> = Vec::new();
+    stat_vec.push((String::from("<!-- Maps -->"), String::new()));
+
+    let mut ignore_vec: Vec<String> = Vec::new();
+    ignore_vec.push(String::from("<!-- Maps -->"));
 
     let translation: String = read_to_string(translation_path).unwrap_log();
     let parsed_translation: Box<dyn Iterator<Item = (String, String)>> = parse_translation(&translation);
@@ -569,38 +579,82 @@ pub fn purge_map<P: AsRef<Path>>(
         }
 
         if maps_processing_mode != MapsProcessingMode::Preserve {
-            for (original, _) in unsafe { &mut *(translation_map as *mut IndexMapXxh3) } {
+            for (original, translation) in unsafe { &*(translation_map as *const IndexMapXxh3) } {
+                if leave_filled && !translation.is_empty() {
+                    continue;
+                }
+
+                // TODO: Purge at the top
+                if purge_empty && !translation.is_empty() {
+                    if stat {
+                        stat_vec.push((original.to_owned(), translation.to_owned()));
+                    } else {
+                        translation_map.shift_remove(original);
+
+                        if create_ignore {
+                            ignore_vec.push(original.to_owned());
+                        }
+                    }
+                    continue;
+                }
+
                 if !original.starts_with("<!--") && !lines_set.contains(original) {
-                    translation_map.shift_remove(original);
+                    if stat {
+                        stat_vec.push((original.to_owned(), translation.to_owned()));
+                    } else {
+                        translation_map.shift_remove(original);
+
+                        if create_ignore {
+                            ignore_vec.push(original.to_owned());
+                        }
+                    }
                 }
             }
         }
     }
 
-    let mut output_content: String = match maps_processing_mode {
-        MapsProcessingMode::Default | MapsProcessingMode::Separate => String::from_iter(
-            translation_maps
-                .into_iter()
-                .flat_map(|hashmap| hashmap.1.into_iter())
-                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-        ),
-        MapsProcessingMode::Preserve => {
-            translation_map_vec
-                .retain(|x| x.0.starts_with("<!--") || new_translation_map_vec.iter().any(|y| x.0 == y.0));
+    if stat {
+        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
 
-            String::from_iter(
-                translation_map_vec
+        write(
+            output_path.as_ref().join("stat.txt"),
+            previous
+                + &String::from_iter(
+                    stat_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                ),
+        )
+        .unwrap_log();
+    } else {
+        let mut output_content: String = match maps_processing_mode {
+            MapsProcessingMode::Default | MapsProcessingMode::Separate => String::from_iter(
+                translation_maps
                     .into_iter()
+                    .flat_map(|hashmap| hashmap.1.into_iter())
                     .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-            )
+            ),
+            MapsProcessingMode::Preserve => {
+                // TODO: Args for preserve mode
+                translation_map_vec
+                    .retain(|x| x.0.starts_with("<!--") || new_translation_map_vec.iter().any(|y| x.0 == y.0));
+
+                String::from_iter(
+                    translation_map_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                )
+            }
+        };
+
+        output_content.pop();
+        write(translation_path, output_content).unwrap_log();
+
+        // TODO: Ignore file writing
+
+        if logging {
+            println!("{PURGED_FILE_MSG} maps.txt");
         }
-    };
-
-    output_content.pop();
-    write(translation_path, output_content).unwrap_log();
-
-    if logging {
-        println!("{PURGED_FILE_MSG} maps.txt");
     }
 }
 
@@ -622,6 +676,10 @@ pub fn purge_other<P: AsRef<Path>>(
     logging: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
+    stat: bool,
+    leave_filled: bool,
+    purge_empty: bool,
+    create_ignore: bool,
 ) {
     let obj_arr_iter = read_dir(original_path)
         .unwrap_log()
@@ -648,6 +706,12 @@ pub fn purge_other<P: AsRef<Path>>(
 
         let mut lines: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
         let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
+
+        let mut stat_vec: Vec<(String, String)> = Vec::new();
+        stat_vec.push((format!("<!-- {basename} -->"), String::new()));
+
+        let mut ignore_vec: Vec<String> = Vec::new();
+        ignore_vec.push(format!("<!-- {basename} -->"));
 
         let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
         let translation: String = read_to_string(txt_output_path).unwrap_log();
@@ -774,24 +838,64 @@ pub fn purge_other<P: AsRef<Path>>(
             }
         }
 
-        for (original, _) in unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) } {
+        for (original, translation) in unsafe { &*(&translation_map as *const IndexMapXxh3) } {
+            if leave_filled && !translation.is_empty() {
+                continue;
+            }
+
+            if purge_empty && !translation.is_empty() {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    translation_map.shift_remove(original);
+
+                    if create_ignore {
+                        ignore_vec.push(original.to_owned());
+                    }
+                }
+                continue;
+            }
+
             if !original.starts_with("<!--") && !lines.contains(original) {
-                translation_map.shift_remove(original);
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    translation_map.shift_remove(original);
+
+                    if create_ignore {
+                        ignore_vec.push(original.to_owned());
+                    }
+                }
             }
         }
 
-        let mut output_content: String = String::from_iter(
-            translation_map
-                .into_iter()
-                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-        );
+        if stat {
+            let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
 
-        output_content.pop();
+            write(
+                output_path.as_ref().join("stat.txt"),
+                previous
+                    + &String::from_iter(
+                        stat_vec
+                            .into_iter()
+                            .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                    ),
+            )
+            .unwrap_log();
+        } else {
+            let mut output_content: String = String::from_iter(
+                translation_map
+                    .into_iter()
+                    .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+            );
 
-        write(txt_output_path, output_content).unwrap_log();
+            output_content.pop();
 
-        if logging {
-            println!("{PURGED_FILE_MSG} {}", basename + ".txt");
+            write(txt_output_path, output_content).unwrap_log();
+
+            if logging {
+                println!("{PURGED_FILE_MSG} {}", basename + ".txt");
+            }
         }
     }
 }
@@ -812,14 +916,23 @@ pub fn purge_system<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     engine_type: EngineType,
+    stat: bool,
+    leave_filled: bool,
+    purge_empty: bool,
+    create_ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
 
     let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
     let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
 
-    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+    let mut stat_vec: Vec<(String, String)> = Vec::new();
+    stat_vec.push((String::from("<!-- System -->"), String::new()));
 
+    let mut ignore_vec: Vec<String> = Vec::new();
+    ignore_vec.push(String::from("<!-- System -->"));
+
+    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation));
 
@@ -931,18 +1044,64 @@ pub fn purge_system<P: AsRef<Path>>(
         lines_mut_ref.insert(game_title_string);
     }
 
-    let mut output_content: String = String::from_iter(
-        translation_map
-            .into_iter()
-            .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-    );
+    for (original, translation) in unsafe { &*(&translation_map as *const IndexMapXxh3) } {
+        if leave_filled && !translation.is_empty() {
+            continue;
+        }
 
-    output_content.pop();
+        if purge_empty && !translation.is_empty() {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.shift_remove(original);
 
-    write(txt_output_path, output_content).unwrap_log();
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+            continue;
+        }
 
-    if logging {
-        println!("{PURGED_FILE_MSG} system.txt");
+        if !original.starts_with("<!--") && !lines_mut_ref.contains(original) {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.shift_remove(original);
+
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+        }
+    }
+
+    if stat {
+        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
+
+        write(
+            output_path.as_ref().join("stat.txt"),
+            previous
+                + &String::from_iter(
+                    stat_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                ),
+        )
+        .unwrap_log();
+    } else {
+        let mut output_content: String = String::from_iter(
+            translation_map
+                .into_iter()
+                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+        );
+
+        output_content.pop();
+
+        write(txt_output_path, output_content).unwrap_log();
+
+        if logging {
+            println!("{PURGED_FILE_MSG} system.txt");
+        }
     }
 }
 
@@ -955,11 +1114,26 @@ pub fn purge_system<P: AsRef<Path>>(
 /// * `processing_mode` - whether to read in default mode, force rewrite or append new text to existing files
 /// * `generate_json` - whether to generate json representations of older engines' files
 #[inline(always)]
-pub fn purge_scripts<P: AsRef<Path>>(scripts_file_path: P, output_path: P, romanize: bool, logging: bool) {
+pub fn purge_scripts<P: AsRef<Path>>(
+    scripts_file_path: P,
+    output_path: P,
+    romanize: bool,
+    logging: bool,
+    stat: bool,
+    leave_filled: bool,
+    purge_empty: bool,
+    create_ignore: bool,
+) {
     let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines_vec: Vec<String> = Vec::new();
     let mut translation_map: Vec<(String, String)> = Vec::new();
+
+    let mut stat_vec: Vec<(String, String)> = Vec::new();
+    stat_vec.push((String::from("<!-- Scripts -->"), String::new()));
+
+    let mut ignore_vec: Vec<String> = Vec::new();
+    ignore_vec.push(String::from("<!-- Scripts -->"));
 
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation));
@@ -1008,7 +1182,7 @@ pub fn purge_scripts<P: AsRef<Path>>(scripts_file_path: P, output_path: P, roman
         ]
     };
 
-    lines.reserve_exact(extracted_strings.len());
+    lines_vec.reserve_exact(extracted_strings.len());
 
     for mut extracted in extracted_strings {
         if extracted.is_empty() {
@@ -1030,21 +1204,70 @@ pub fn purge_scripts<P: AsRef<Path>>(scripts_file_path: P, output_path: P, roman
             extracted = romanize_string(extracted);
         }
 
-        lines.push(extracted);
+        lines_vec.push(extracted);
     }
 
-    let mut output_content: String = String::from_iter(
-        translation_map
-            .into_iter()
-            .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-    );
+    for (i, (original, translation)) in unsafe { &mut *(&mut translation_map as *mut Vec<(String, String)>) }
+        .iter()
+        .enumerate()
+    {
+        if leave_filled && !translation.is_empty() {
+            continue;
+        }
 
-    output_content.pop();
+        if purge_empty && !translation.is_empty() {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.remove(i);
 
-    write(txt_output_path, output_content).unwrap_log();
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+            continue;
+        }
 
-    if logging {
-        println!("{PURGED_FILE_MSG} scripts.txt");
+        if !original.starts_with("<!--") && !lines_vec.contains(original) {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.remove(i);
+
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+        }
+    }
+
+    if stat {
+        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
+
+        write(
+            output_path.as_ref().join("stat.txt"),
+            previous
+                + &String::from_iter(
+                    stat_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                ),
+        )
+        .unwrap_log();
+    } else {
+        let mut output_content: String = String::from_iter(
+            translation_map
+                .into_iter()
+                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+        );
+
+        output_content.pop();
+
+        write(txt_output_path, output_content).unwrap_log();
+
+        if logging {
+            println!("{PURGED_FILE_MSG} scripts.txt");
+        }
     }
 }
 
@@ -1060,11 +1283,20 @@ pub fn purge_plugins<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     processing_mode: ProcessingMode,
+    stat: bool,
+    leave_filled: bool,
+    purge_empty: bool,
+    create_ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
-    let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
+    let mut stat_vec: Vec<(String, String)> = Vec::new();
+    stat_vec.push((String::from("<!-- Plugins -->"), String::new()));
 
+    let mut ignore_vec: Vec<String> = Vec::new();
+    ignore_vec.push(String::from("<!-- Plugins -->"));
+
+    let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation));
 
@@ -1077,12 +1309,12 @@ pub fn purge_plugins<P: AsRef<Path>>(
         .trim_end_matches([';', '\n']);
 
     let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines_vec: Vec<String> = Vec::new();
 
     traverse_json(
         None,
         &mut plugins_json,
-        &mut Some(&mut lines),
+        &mut Some(&mut lines_vec),
         &mut Some(&mut translation_map),
         &None,
         false,
@@ -1090,17 +1322,66 @@ pub fn purge_plugins<P: AsRef<Path>>(
         processing_mode,
     );
 
-    let mut output_content: String = String::from_iter(
-        translation_map
-            .into_iter()
-            .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-    );
+    for (i, (original, translation)) in unsafe { &*(&translation_map as *const VecDeque<(String, String)>) }
+        .iter()
+        .enumerate()
+    {
+        if leave_filled && !translation.is_empty() {
+            continue;
+        }
 
-    output_content.pop();
+        if purge_empty && !translation.is_empty() {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.remove(i);
 
-    write(txt_output_path, output_content).unwrap_log();
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+            continue;
+        }
 
-    if logging {
-        println!("{PURGED_FILE_MSG} plugins.json");
+        if !original.starts_with("<!--") && !lines_vec.contains(original) {
+            if stat {
+                stat_vec.push((original.to_owned(), translation.to_owned()));
+            } else {
+                translation_map.remove(i);
+
+                if create_ignore {
+                    ignore_vec.push(original.to_owned());
+                }
+            }
+        }
+    }
+
+    if stat {
+        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
+
+        write(
+            output_path.as_ref().join("stat.txt"),
+            previous
+                + &String::from_iter(
+                    stat_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                ),
+        )
+        .unwrap_log();
+    } else {
+        let mut output_content: String = String::from_iter(
+            translation_map
+                .into_iter()
+                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+        );
+
+        output_content.pop();
+
+        write(txt_output_path, output_content).unwrap_log();
+
+        if logging {
+            println!("{PURGED_FILE_MSG} plugins.json");
+        }
     }
 }
