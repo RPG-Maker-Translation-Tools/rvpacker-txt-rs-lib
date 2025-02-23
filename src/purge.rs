@@ -40,7 +40,9 @@ type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
 #[inline]
 fn parse_translation<'a>(translation: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
-        if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+        let mut split = line.split(LINES_SEPARATOR);
+
+        if let Some((original, translated)) = split.next().zip(split.last()) {
             Some((original.to_owned(), translated.to_owned()))
         } else {
             eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");

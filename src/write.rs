@@ -38,22 +38,26 @@ fn parse_translation<'a>(translation: &'a str, file: &'a str) -> Box<dyn Iterato
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
         if line.starts_with("<!--") {
             None
-        } else if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
-            #[cfg(not(debug_assertions))]
-            if translated.is_empty() {
-                return None;
-            }
-
-            Some((
-                original.replace(NEW_LINE, "\n").trim_replace(),
-                translated.replace(NEW_LINE, "\n").trim_replace(),
-            ))
         } else {
-            eprintln!(
-                "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
-                i = i + 1
-            );
-            None
+            let mut split = line.split(LINES_SEPARATOR);
+
+            if let Some((original, translated)) = split.next().zip(split.last()) {
+                #[cfg(not(debug_assertions))]
+                if translated.is_empty() {
+                    return None;
+                }
+
+                Some((
+                    original.replace(NEW_LINE, "\n").trim_replace(),
+                    translated.replace(NEW_LINE, "\n").trim_replace(),
+                ))
+            } else {
+                eprintln!(
+                    "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
+                    i = i + 1
+                );
+                None
+            }
         }
     }))
 }
@@ -574,7 +578,9 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
 
         for (i, line) in translation.split('\n').enumerate() {
             if line == "<!-- Map -->" {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                let mut split = line.split(LINES_SEPARATOR);
+
+                if let Some((original, translated)) = split.next().zip(split.last()) {
                     if original.starts_with("<!-- In-game Displayed Name:") {
                         let map_display_name: &str = unsafe {
                             original
@@ -596,7 +602,9 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                     eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
                 }
             } else if !line.starts_with("<!--") {
-                if let Some((original, translated)) = line.split_once(LINES_SEPARATOR) {
+                let mut split = line.split(LINES_SEPARATOR);
+
+                if let Some((original, translated)) = split.next().zip(split.last()) {
                     #[cfg(not(debug_assertions))]
                     if translated.is_empty() {
                         continue;
