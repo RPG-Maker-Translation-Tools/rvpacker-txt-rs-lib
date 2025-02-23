@@ -349,7 +349,7 @@ fn parse_list<'a>(
 ) {
     let mut in_sequence: bool = false;
 
-    let mut lines: Vec<&str> = Vec::with_capacity(4);
+    let mut lines_vec: Vec<&str> = Vec::with_capacity(4);
     let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
 
     let mut process_parameter = |code: Code, parameter: &str| {
@@ -414,14 +414,14 @@ fn parse_list<'a>(
 
         if in_sequence
             && (!matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit)
-                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
+                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines_vec.is_empty()))
         {
-            if !lines.is_empty() {
-                let joined: String = lines.join(NEW_LINE);
+            if !lines_vec.is_empty() {
+                let joined: String = lines_vec.join(NEW_LINE);
 
                 process_parameter(Code::Dialogue, &joined);
 
-                lines.clear();
+                lines_vec.clear();
                 unsafe { (*buf.get()).clear() };
             }
 
@@ -467,7 +467,7 @@ fn parse_list<'a>(
                 .unwrap_or_else(|| match value.as_object() {
                     Some(obj) => unsafe {
                         (*buf.get()).push(get_object_data(obj));
-                        std::str::from_utf8_unchecked(&(*buf.get())[lines.len()])
+                        std::str::from_utf8_unchecked(&(*buf.get())[lines_vec.len()])
                     },
                     None => "",
                 })
@@ -478,7 +478,7 @@ fn parse_list<'a>(
             }
 
             if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
-                lines.push(parameter_string);
+                lines_vec.push(parameter_string);
                 in_sequence = true;
             } else {
                 process_parameter(code, parameter_string);
@@ -903,9 +903,9 @@ pub fn read_other<P: AsRef<Path>>(
             continue;
         }
 
-        let mut lines: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
-        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
-        let lines_ref: &IndexSetXxh3 = unsafe { &*(&mut lines as *mut IndexSetXxh3) };
+        let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
+        let lines_ref: &IndexSetXxh3 = unsafe { &*(&mut lines_set as *mut IndexSetXxh3) };
 
         let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
@@ -1038,10 +1038,10 @@ pub fn read_other<P: AsRef<Path>>(
 
                 if !commonevent_name.is_empty() {
                     let event_name_comment: String = format!("<!-- Event Name: {commonevent_name} -->");
-                    lines.insert(event_name_comment.clone());
+                    lines_set.insert(event_name_comment.clone());
 
                     if processing_mode == ProcessingMode::Append && !translation_map.contains_key(commonevent_name) {
-                        translation_map.shift_insert(lines.len() - 1, event_name_comment, String::new());
+                        translation_map.shift_insert(lines_set.len() - 1, event_name_comment, String::new());
                     } else {
                         translation_map.insert(event_name_comment, String::new());
                     }
@@ -1082,7 +1082,7 @@ pub fn read_other<P: AsRef<Path>>(
                     .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
             )
         } else {
-            String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+            String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
         };
 
         output_content.pop();
@@ -1119,9 +1119,9 @@ pub fn read_system<P: AsRef<Path>>(
         return;
     }
 
-    let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
-    let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
-    let lines_ref: &IndexSetXxh3 = unsafe { &*lines.get() };
+    let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+    let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
+    let lines_ref: &IndexSetXxh3 = unsafe { &*(&lines_set as *const IndexSetXxh3) };
 
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
@@ -1261,12 +1261,7 @@ pub fn read_system<P: AsRef<Path>>(
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )
     } else {
-        String::from_iter(
-            lines
-                .into_inner()
-                .into_iter()
-                .map(|line: String| line + LINES_SEPARATOR + "\n"),
-        )
+        String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
     };
 
     output_content.pop();
@@ -1302,7 +1297,7 @@ pub fn read_scripts<P: AsRef<Path>>(
         return;
     }
 
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines_vec: Vec<String> = Vec::new();
     let mut translation_map: Vec<(String, String)> = Vec::new();
 
     if processing_mode == ProcessingMode::Append {
@@ -1359,7 +1354,7 @@ pub fn read_scripts<P: AsRef<Path>>(
         ]
     };
 
-    lines.reserve_exact(extracted_strings.len());
+    lines_vec.reserve_exact(extracted_strings.len());
 
     if processing_mode == ProcessingMode::Append {
         translation_map.reserve_exact(extracted_strings.len());
@@ -1385,9 +1380,9 @@ pub fn read_scripts<P: AsRef<Path>>(
             extracted = romanize_string(extracted);
         }
 
-        lines.push(extracted);
-        let last: &String = unsafe { lines.last().unwrap_unchecked() };
-        let pos: usize = lines.len() - 1;
+        lines_vec.push(extracted);
+        let last: &String = unsafe { lines_vec.last().unwrap_unchecked() };
+        let pos: usize = lines_vec.len() - 1;
 
         if processing_mode == ProcessingMode::Append && translation_map.get(pos).is_some_and(|x| *last != x.0) {
             translation_map.insert(pos, (last.to_owned(), String::new()));
@@ -1401,7 +1396,7 @@ pub fn read_scripts<P: AsRef<Path>>(
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )
     } else {
-        String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+        String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
     };
 
     output_content.pop();
@@ -1458,12 +1453,12 @@ pub fn read_plugins<P: AsRef<Path>>(
         .trim_end_matches([';', '\n']);
 
     let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines_vec: Vec<String> = Vec::new();
 
     traverse_json(
         None,
         &mut plugins_json,
-        &mut Some(&mut lines),
+        &mut Some(&mut lines_vec),
         &mut Some(&mut translation_map),
         &None,
         false,
@@ -1478,7 +1473,7 @@ pub fn read_plugins<P: AsRef<Path>>(
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         )
     } else {
-        String::from_iter(lines.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+        String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
     };
 
     output_content.pop();
