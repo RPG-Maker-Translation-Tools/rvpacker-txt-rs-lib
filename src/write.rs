@@ -19,6 +19,7 @@ use crate::{
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -77,7 +78,7 @@ fn get_translated_parameter(
     // bool indicates insert whether at start or at end
     // true inserts at end
     // false inserts at start
-    let mut remaining_strings: Vec<(&str, bool)> = Vec::with_capacity(4);
+    let mut remaining_strings: SmallVec<[(&str, bool); 4]> = SmallVec::with_capacity(4);
 
     #[allow(unreachable_patterns)]
     if let Some(game_type) = game_type {
