@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "4.0.0-rc4"
+version = "4.0.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.76.0"
@@ -16,7 +16,7 @@ serde = ["dep:serde"]
 
 [dependencies]
 encoding_rs = "0.8.35"
-flate2 = "1.0.35"
+flate2 = "1.1.0"
 indexmap = "2.7.1"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 marshal-rs = { version = "0.3.3", features = ["sonic"] }
@@ -27,3 +27,4 @@ sonic-rs = "0.3.17"
 log = { version = "0.4.26", optional = true }
 serde = { version = "1.0.218", optional = true }
 phf = { version = "0.11.3", features = ["macros"] }
+smallvec = "1.14.0"
