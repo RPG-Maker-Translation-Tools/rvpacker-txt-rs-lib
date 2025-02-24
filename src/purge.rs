@@ -50,7 +50,7 @@ fn parse_parameter(
             GameType::Termina => {
                 if parameter
                     .chars()
-                    .all(|char: char| char.is_ascii_lowercase() || char.is_ascii_punctuation())
+                    .all(|char: char| char.is_ascii_lowercase() || (char.is_ascii_punctuation() && char != '"'))
                 {
                     return None;
                 }
@@ -321,82 +321,107 @@ pub fn purge_map<P: AsRef<Path>>(
         MapsProcessingMode::Preserve => translation_map_vec.extend(parsed_translation),
     }
 
-    let (_, events_label, pages_label, list_label, code_label, parameters_label) = get_maps_labels(engine_type);
-
-    let obj_vec_iter = read_dir(original_path)
-        .unwrap_log()
-        .filter_map(|entry| filter_maps(entry, engine_type));
-
-    for (filename, obj) in obj_vec_iter {
-        let map_number: u16 = parse_map_number(&filename);
-
-        if maps_processing_mode != MapsProcessingMode::Preserve {
-            translation_map = translation_maps.get_mut(&map_number).unwrap_log();
-        }
-
-        let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
-            Box::new(obj[events_label].as_array().unwrap_log().iter().skip(1))
+    if purge_empty {
+        if maps_processing_mode == MapsProcessingMode::Preserve {
         } else {
-            Box::new(
-                obj[events_label]
-                    .as_object()
-                    .unwrap_log()
-                    .iter()
-                    .map(|(_, value)| value),
-            )
-        };
+            for (map_number, map) in translation_maps.iter_mut() {
+                stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
 
-        lines_set.clear();
+                let ignore_entry = ignore_map.entry(format!("<!-- File: {map_number} -->")).or_default();
 
-        for event in events_arr {
-            if !event[pages_label].is_array() {
-                continue;
-            }
+                let mut to_remove: Vec<usize> = Vec::new();
 
-            for page in event[pages_label].as_array().unwrap_log() {
-                parse_list(
-                    page[list_label].as_array().unwrap_log(),
-                    romanize,
-                    game_type,
-                    engine_type,
-                    (code_label, parameters_label),
-                    unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
-                    Some(&mut new_translation_map_vec),
-                    Some(maps_processing_mode),
-                );
+                for (i, (original, translation)) in map.iter().enumerate() {
+                    if !original.starts_with("<!--") && translation.is_empty() {
+                        if stat {
+                            stat_vec.push((original.to_owned(), translation.to_owned()));
+                        } else {
+                            to_remove.push(i);
+
+                            if create_ignore {
+                                ignore_entry.insert(original.to_owned());
+                            }
+                        }
+                    }
+                }
+
+                for item in to_remove.into_iter().rev() {
+                    map.shift_remove_index(item);
+                }
             }
         }
+    } else {
+        let (_, events_label, pages_label, list_label, code_label, parameters_label) = get_maps_labels(engine_type);
 
-        if maps_processing_mode != MapsProcessingMode::Preserve {
-            for (original, translation) in unsafe { &*(translation_map as *const IndexMapXxh3) } {
-                if leave_filled && !translation.is_empty() {
+        let obj_vec_iter = read_dir(original_path)
+            .unwrap_log()
+            .filter_map(|entry| filter_maps(entry, engine_type));
+
+        for (filename, obj) in obj_vec_iter {
+            let map_number: u16 = parse_map_number(&filename);
+            stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
+            let ignore_entry = ignore_map.entry(format!("<!-- File: Map{map_number} -->")).or_default();
+
+            if maps_processing_mode != MapsProcessingMode::Preserve {
+                translation_map = translation_maps.get_mut(&map_number).unwrap_log();
+            }
+
+            let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
+                Box::new(obj[events_label].as_array().unwrap_log().iter().skip(1))
+            } else {
+                Box::new(
+                    obj[events_label]
+                        .as_object()
+                        .unwrap_log()
+                        .iter()
+                        .map(|(_, value)| value),
+                )
+            };
+
+            lines_set.clear();
+
+            for event in events_arr {
+                if !event[pages_label].is_array() {
                     continue;
                 }
 
-                // TODO: Purge at the top
-                if purge_empty && !translation.is_empty() {
-                    if stat {
-                        stat_vec.push((original.to_owned(), translation.to_owned()));
-                    } else {
-                        translation_map.shift_remove(original);
+                for page in event[pages_label].as_array().unwrap_log() {
+                    parse_list(
+                        page[list_label].as_array().unwrap_log(),
+                        romanize,
+                        game_type,
+                        engine_type,
+                        (code_label, parameters_label),
+                        unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
+                        Some(&mut new_translation_map_vec),
+                        Some(maps_processing_mode),
+                    );
+                }
+            }
 
-                        if create_ignore {
-                            ignore_vec.push(original.to_owned());
+            if maps_processing_mode != MapsProcessingMode::Preserve {
+                let mut to_remove: Vec<usize> = Vec::new();
+
+                for (i, (original, translation)) in translation_map.iter().enumerate() {
+                    if leave_filled && !translation.is_empty() {
+                        continue;
+                    }
+
+                    if !original.starts_with("<!--") && !lines_set.contains(original) {
+                        if stat {
+                            stat_vec.push((original.to_owned(), translation.to_owned()));
+                        } else {
+                            to_remove.push(i);
+
+                            if create_ignore {
+                                ignore_entry.insert(original.to_owned());
+                            }
                         }
                     }
-                    continue;
                 }
 
-                if !original.starts_with("<!--") && !lines_set.contains(original) {
-                    if stat {
-                        stat_vec.push((original.to_owned(), translation.to_owned()));
-                    } else {
-                        translation_map.shift_remove(original);
-
-                        if create_ignore {
-                            ignore_vec.push(original.to_owned());
-                        }
-                    }
+                for item in to_remove.into_iter().rev() {
+                    translation_map.shift_remove_index(item);
                 }
             }
         }
@@ -424,9 +449,23 @@ pub fn purge_map<P: AsRef<Path>>(
                     .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
             ),
             MapsProcessingMode::Preserve => {
-                // TODO: Args for preserve mode
-                translation_map_vec
-                    .retain(|x| x.0.starts_with("<!--") || new_translation_map_vec.iter().any(|y| x.0 == y.0));
+                let mut to_remove: Vec<usize> = Vec::new();
+
+                for (i, (original, translation)) in translation_map_vec.iter().enumerate() {
+                    if leave_filled && !translation.is_empty() {
+                        continue;
+                    }
+
+                    // ! I have no idea, how to implement other args for preserve
+
+                    if !original.starts_with("<!--") && !lines_set.contains(original) {
+                        to_remove.push(i);
+                    }
+                }
+
+                for i in to_remove.into_iter().rev() {
+                    translation_map_vec.remove(i);
+                }
 
                 String::from_iter(
                     translation_map_vec
@@ -439,7 +478,20 @@ pub fn purge_map<P: AsRef<Path>>(
         output_content.pop();
         write(translation_path, output_content).unwrap_log();
 
-        // TODO: Ignore file writing
+        if create_ignore {
+            let mut string: String = String::new();
+
+            for (file, lines) in ignore_map {
+                string.push_str(&file);
+                string.push('\n');
+
+                for line in lines {
+                    string.push_str(&line);
+                }
+            }
+
+            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+        }
 
         if logging {
             println!("{PURGED_FILE_MSG} maps.txt");
@@ -494,187 +546,188 @@ pub fn purge_other<P: AsRef<Path>>(
 
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
-        let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
+        let txt_filename: String = basename.clone() + ".txt";
+        let txt_output_path: &Path = &output_path.as_ref().join(txt_filename.clone());
 
         let mut lines: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
         let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
 
-        let mut stat_vec: Vec<(String, String)> = Vec::new();
         stat_vec.push((format!("<!-- {basename} -->"), String::new()));
 
-        let mut ignore_vec: Vec<String> = Vec::new();
-        ignore_vec.push(format!("<!-- {basename} -->"));
+        let ignore_entry = ignore_map.entry(format!("<!-- File: {basename} -->")).or_default();
 
         let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
         let translation: String = read_to_string(txt_output_path).unwrap_log();
         translation_map.extend(parse_translation(&translation, &txt_filename, false));
 
-        // Other files except CommonEvents and Troops have the structure that consists
-        // of name, nickname, description and note
-        if !filename.starts_with("Co") && !filename.starts_with("Tr") {
-            if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && filename.starts_with("It")
-            {
-                lines_mut_ref.extend([
-                    String::from("<Menu Category: Items>"),
-                    String::from("<Menu Category: Food>"),
-                    String::from("<Menu Category: Healing>"),
-                    String::from("<Menu Category: Body bag>"),
-                ]);
-            }
+        if purge_empty {
+            let mut to_remove: Vec<usize> = Vec::new();
 
-            if let Some(obj_real_arr) = obj_arr.as_array() {
-                'obj: for obj in obj_real_arr {
-                    let mut prev_variable_type: Option<Variable> = None;
+            for (i, (original, translation)) in translation_map.iter().enumerate() {
+                if !original.starts_with("<!--") && translation.is_empty() {
+                    if stat {
+                        stat_vec.push((original.to_owned(), translation.to_owned()));
+                    } else {
+                        to_remove.push(i);
 
-                    for (variable_label, variable_type) in [
-                        (name_label, Variable::Name),
-                        (nickname_label, Variable::Nickname),
-                        (description_label, Variable::Description),
-                        (message1_label, Variable::Message1),
-                        (message2_label, Variable::Message2),
-                        (message3_label, Variable::Message3),
-                        (message4_label, Variable::Message4),
-                        (note_label, Variable::Note),
-                    ] {
-                        let value: Option<&Value> = obj.get(variable_label);
-
-                        let string: String = {
-                            let mut buf: Vec<u8> = Vec::new();
-
-                            let string: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
-                                Some(obj) => {
-                                    buf = get_object_data(obj);
-                                    unsafe { std::str::from_utf8_unchecked(&buf) }
-                                }
-                                None => "",
-                            });
-
-                            let trimmed: &str = string.trim();
-
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-
-                            if variable_type != Variable::Note {
-                                trimmed
-                            } else {
-                                string
-                            }
-                            .to_owned()
-                        };
-
-                        let parsed: Option<(String, bool)> =
-                            parse_variable(string, &variable_type, &filename, game_type, engine_type, romanize);
-
-                        if let Some((parsed, is_continuation_of_description)) = parsed {
-                            if is_continuation_of_description {
-                                if prev_variable_type != Some(Variable::Description) {
-                                    continue;
-                                }
-
-                                if let Some(last) = lines_mut_ref.pop() {
-                                    lines_mut_ref.insert(last.trim_replace() + &parsed);
-                                }
-                                continue;
-                            }
-
-                            prev_variable_type = Some(variable_type);
-
-                            let mut replaced: String =
-                                String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
-
-                            replaced.drain(replaced.len() - 2..);
-                            replaced = replaced.trim_replace();
-
-                            lines_mut_ref.insert(replaced);
-                        } else if variable_type == Variable::Name {
-                            continue 'obj;
+                        if create_ignore {
+                            ignore_entry.insert(original.to_owned());
                         }
                     }
                 }
             }
-        }
-        // Other files have the structure somewhat similar to Maps files
-        else {
-            // Skipping first element in array as it is null
-            for obj in obj_arr.as_array().unwrap_log().iter().skip(1) {
-                // CommonEvents doesn't have pages, so we can just check if it's Troops
-                let pages_length: usize = if filename.starts_with("Tr") {
-                    obj[pages_label].as_array().unwrap_log().len()
-                } else {
-                    1
-                };
 
-                for i in 0..pages_length {
-                    let list: &Value = if pages_length != 1 {
-                        &obj[pages_label][i][list_label]
+            for i in to_remove.into_iter().rev() {
+                translation_map.shift_remove_index(i);
+            }
+        } else {
+            // Other files except CommonEvents and Troops have the structure that consists
+            // of name, nickname, description and note
+            if !filename.starts_with("Co") && !filename.starts_with("Tr") {
+                if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina)
+                    && filename.starts_with("It")
+                {
+                    lines_mut_ref.extend([
+                        String::from("<Menu Category: Items>"),
+                        String::from("<Menu Category: Food>"),
+                        String::from("<Menu Category: Healing>"),
+                        String::from("<Menu Category: Body bag>"),
+                    ]);
+                }
+
+                if let Some(obj_real_arr) = obj_arr.as_array() {
+                    'obj: for obj in obj_real_arr {
+                        for (variable_label, variable_type) in [
+                            (name_label, Variable::Name),
+                            (nickname_label, Variable::Nickname),
+                            (description_label, Variable::Description),
+                            (message1_label, Variable::Message1),
+                            (message2_label, Variable::Message2),
+                            (message3_label, Variable::Message3),
+                            (message4_label, Variable::Message4),
+                            (note_label, Variable::Note),
+                        ] {
+                            let value: Option<&Value> = obj.get(variable_label);
+
+                            let variable_string: String = {
+                                let mut buf: Vec<u8> = Vec::new();
+
+                                let str: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                                    Some(obj) => {
+                                        buf = get_object_data(obj);
+                                        unsafe { std::str::from_utf8_unchecked(&buf) }
+                                    }
+                                    None => "",
+                                });
+
+                                let trimmed: &str = str.trim();
+
+                                if trimmed.is_empty() {
+                                    continue;
+                                }
+
+                                if variable_type != Variable::Note { trimmed } else { str }.to_owned()
+                            };
+
+                            let note_text: Option<&str> =
+                                if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
+                                    match obj.get(note_label) {
+                                        Some(value) => value.as_str(),
+                                        None => None,
+                                    }
+                                } else {
+                                    None
+                                };
+
+                            let parsed: Option<String> = process_variable(
+                                variable_string,
+                                note_text,
+                                variable_type,
+                                &filename,
+                                game_type,
+                                engine_type,
+                                romanize,
+                                None,
+                                false,
+                            );
+
+                            if let Some(parsed) = parsed {
+                                let mut replaced: String =
+                                    String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
+
+                                replaced.drain(replaced.len() - 2..);
+                                replaced = replaced.trim_replace();
+
+                                lines_mut_ref.insert(replaced);
+                            } else if variable_type == Variable::Name {
+                                continue 'obj;
+                            }
+                        }
+                    }
+                }
+            }
+            // Other files have the structure somewhat similar to Maps files
+            else {
+                // Skipping first element in array as it is null
+                for obj in obj_arr.as_array().unwrap_log().iter().skip(1) {
+                    // CommonEvents doesn't have pages, so we can just check if it's Troops
+                    let pages_length: usize = if filename.starts_with("Tr") {
+                        obj[pages_label].as_array().unwrap_log().len()
                     } else {
-                        &obj[list_label]
+                        1
                     };
 
-                    if !list.is_array() {
-                        continue;
-                    }
+                    for i in 0..pages_length {
+                        let list: &Value = if pages_length != 1 {
+                            &obj[pages_label][i][list_label]
+                        } else {
+                            &obj[list_label]
+                        };
 
-                    parse_list(
-                        list.as_array().unwrap_log(),
-                        romanize,
-                        game_type,
-                        engine_type,
-                        (code_label, parameters_label),
-                        lines_mut_ref,
-                        None,
-                        None,
-                    );
+                        if !list.is_array() {
+                            continue;
+                        }
+
+                        parse_list(
+                            list.as_array().unwrap_log(),
+                            romanize,
+                            game_type,
+                            engine_type,
+                            (code_label, parameters_label),
+                            lines_mut_ref,
+                            None,
+                            None,
+                        );
+                    }
                 }
+            }
+
+            let mut to_remove: Vec<usize> = Vec::new();
+
+            for (i, (original, translation)) in translation_map.iter().enumerate() {
+                if leave_filled && !translation.is_empty() {
+                    continue;
+                }
+
+                if !original.starts_with("<!--") && !lines.contains(original) {
+                    if stat {
+                        stat_vec.push((original.to_owned(), translation.to_owned()));
+                    } else {
+                        to_remove.push(i);
+
+                        if create_ignore {
+                            ignore_entry.insert(original.to_owned());
+                        }
+                    }
+                }
+            }
+
+            for item in to_remove.into_iter().rev() {
+                translation_map.shift_remove_index(item);
             }
         }
 
-        for (original, translation) in unsafe { &*(&translation_map as *const IndexMapXxh3) } {
-            if leave_filled && !translation.is_empty() {
-                continue;
-            }
-
-            if purge_empty && !translation.is_empty() {
-                if stat {
-                    stat_vec.push((original.to_owned(), translation.to_owned()));
-                } else {
-                    translation_map.shift_remove(original);
-
-                    if create_ignore {
-                        ignore_vec.push(original.to_owned());
-                    }
-                }
-                continue;
-            }
-
-            if !original.starts_with("<!--") && !lines.contains(original) {
-                if stat {
-                    stat_vec.push((original.to_owned(), translation.to_owned()));
-                } else {
-                    translation_map.shift_remove(original);
-
-                    if create_ignore {
-                        ignore_vec.push(original.to_owned());
-                    }
-                }
-            }
-        }
-
-        if stat {
-            let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-            write(
-                output_path.as_ref().join("stat.txt"),
-                previous
-                    + &String::from_iter(
-                        stat_vec
-                            .into_iter()
-                            .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                    ),
-            )
-            .unwrap_log();
-        } else {
+        if !stat {
             let mut output_content: String = String::from_iter(
                 translation_map
                     .into_iter()
@@ -689,6 +742,34 @@ pub fn purge_other<P: AsRef<Path>>(
                 println!("{PURGED_FILE_MSG} {}", basename + ".txt");
             }
         }
+    }
+
+    if stat {
+        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
+
+        write(
+            output_path.as_ref().join("stat.txt"),
+            previous
+                + &String::from_iter(
+                    stat_vec
+                        .into_iter()
+                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                ),
+        )
+        .unwrap_log();
+    } else if create_ignore {
+        let mut string: String = String::new();
+
+        for (file, lines) in ignore_map {
+            string.push_str(&file);
+            string.push('\n');
+
+            for line in lines {
+                string.push_str(&line);
+            }
+        }
+
+        write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
     }
 }
 
@@ -728,142 +809,159 @@ pub fn purge_system<P: AsRef<Path>>(
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation, "system.txt", false));
 
-    let mut parse_str = |value: &Value| {
-        let mut string: String = {
-            let mut buf: Vec<u8> = Vec::new();
+    if purge_empty {
+        let mut to_remove: Vec<usize> = Vec::new();
 
-            let str: &str = value
-                .as_str()
-                .unwrap_or_else(|| match value.as_object() {
-                    Some(obj) => {
-                        buf = get_object_data(obj);
-                        unsafe { std::str::from_utf8_unchecked(&buf) }
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if !original.starts_with("<!--") && translation.is_empty() {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
+
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
                     }
-                    None => "",
-                })
-                .trim();
+                }
+            }
+        }
 
-            if str.is_empty() {
-                return;
+        for i in to_remove.into_iter().rev() {
+            translation_map.shift_remove_index(i);
+        }
+    } else {
+        let mut parse_str = |value: &Value| {
+            let mut string: String = {
+                let mut buf: Vec<u8> = Vec::new();
+
+                let str: &str = value
+                    .as_str()
+                    .unwrap_or_else(|| match value.as_object() {
+                        Some(obj) => {
+                            buf = get_object_data(obj);
+                            unsafe { std::str::from_utf8_unchecked(&buf) }
+                        }
+                        None => "",
+                    })
+                    .trim();
+
+                if str.is_empty() {
+                    return;
+                }
+
+                str.to_owned()
+            };
+
+            if romanize {
+                string = romanize_string(string)
             }
 
-            str.to_owned()
+            lines_mut_ref.insert(string);
         };
 
-        if romanize {
-            string = romanize_string(string)
-        }
+        let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
+            get_system_labels(engine_type);
 
-        lines_mut_ref.insert(string);
-    };
-
-    let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
-        get_system_labels(engine_type);
-
-    let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-    };
-
-    // Armor types and elements - mostly system strings, but may be required for some purposes
-    for label in [
-        armor_types_label,
-        elements_label,
-        skill_types_label,
-        weapon_types_label,
-        "equipTypes",
-    ] {
-        if let Some(arr) = obj[label].as_array() {
-            for value in arr {
-                parse_str(value)
-            }
-        }
-    }
-
-    // Game terms vocabulary
-    for (key, value) in obj[terms_label].as_object().unwrap_log() {
-        if engine_type != EngineType::New && !key.starts_with("__symbol__") {
-            continue;
-        }
-
-        if key != "messages" {
-            if let Some(arr) = value.as_array() {
-                for value in arr {
-                    parse_str(value);
-                }
-            } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes")) || value.is_str() {
-                parse_str(value)
-            }
+        let obj: Value = if engine_type == EngineType::New {
+            from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
         } else {
-            if !value.is_object() {
+            load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
+        };
+
+        // Armor types and elements - mostly system strings, but may be required for some purposes
+        for label in [
+            armor_types_label,
+            elements_label,
+            skill_types_label,
+            weapon_types_label,
+            "equipTypes",
+        ] {
+            if let Some(arr) = obj[label].as_array() {
+                for value in arr {
+                    parse_str(value)
+                }
+            }
+        }
+
+        // Game terms vocabulary
+        for (key, value) in obj[terms_label].as_object().unwrap_log() {
+            if engine_type != EngineType::New && !key.starts_with("__symbol__") {
                 continue;
             }
 
-            for (_, value) in value.as_object().unwrap_log().iter() {
-                parse_str(value);
-            }
-        }
-    }
-
-    if engine_type != EngineType::New {
-        parse_str(&obj["__symbol__currency_unit"]);
-    }
-
-    // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
-    {
-        let mut game_title_string: String = {
-            let mut buf: Vec<u8> = Vec::new();
-
-            obj[game_title_label]
-                .as_str()
-                .unwrap_or_else(|| match obj[game_title_label].as_object() {
-                    Some(obj) => {
-                        buf = get_object_data(obj);
-                        unsafe { std::str::from_utf8_unchecked(&buf) }
+            if key != "messages" {
+                if let Some(arr) = value.as_array() {
+                    for value in arr {
+                        parse_str(value);
                     }
-                    None => "",
-                })
-                .trim_replace()
-        };
-
-        // We aren't checking if game_title_string is empty because VX and XP don't include game title in System file, and we still need it last
-
-        if romanize {
-            game_title_string = romanize_string(game_title_string)
-        }
-
-        lines_mut_ref.insert(game_title_string);
-    }
-
-    for (original, translation) in unsafe { &*(&translation_map as *const IndexMapXxh3) } {
-        if leave_filled && !translation.is_empty() {
-            continue;
-        }
-
-        if purge_empty && !translation.is_empty() {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes"))
+                    || value.is_str()
+                {
+                    parse_str(value)
+                }
             } else {
-                translation_map.shift_remove(original);
+                if !value.is_object() {
+                    continue;
+                }
 
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
+                for (_, value) in value.as_object().unwrap_log().iter() {
+                    parse_str(value);
                 }
             }
-            continue;
         }
 
-        if !original.starts_with("<!--") && !lines_mut_ref.contains(original) {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
-            } else {
-                translation_map.shift_remove(original);
+        if engine_type != EngineType::New {
+            parse_str(&obj["__symbol__currency_unit"]);
+        }
 
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
+        // Game title - Translators may add something like "ELFISH TRANSLATION v1.0.0" to the title
+        {
+            let mut game_title_string: String = {
+                let mut buf: Vec<u8> = Vec::new();
+
+                obj[game_title_label]
+                    .as_str()
+                    .unwrap_or_else(|| match obj[game_title_label].as_object() {
+                        Some(obj) => {
+                            buf = get_object_data(obj);
+                            unsafe { std::str::from_utf8_unchecked(&buf) }
+                        }
+                        None => "",
+                    })
+                    .trim_replace()
+            };
+
+            // We aren't checking if game_title_string is empty because VX and XP don't include game title in System file, and we still need it last
+
+            if romanize {
+                game_title_string = romanize_string(game_title_string)
+            }
+
+            lines_mut_ref.insert(game_title_string);
+        }
+
+        let mut to_remove: Vec<usize> = Vec::new();
+
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if leave_filled && !translation.is_empty() {
+                continue;
+            }
+
+            if !original.starts_with("<!--") && !lines_mut_ref.contains(original) {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
+
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
+                    }
                 }
             }
+        }
+
+        for item in to_remove.into_iter().rev() {
+            translation_map.shift_remove_index(item);
         }
     }
 
@@ -890,6 +988,21 @@ pub fn purge_system<P: AsRef<Path>>(
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
+
+        if create_ignore {
+            let mut string: String = String::new();
+
+            for (file, lines) in ignore_map {
+                string.push_str(&file);
+                string.push('\n');
+
+                for line in lines {
+                    string.push_str(&line);
+                }
+            }
+
+            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+        }
 
         if logging {
             println!("{PURGED_FILE_MSG} system.txt");
@@ -930,41 +1043,62 @@ pub fn purge_scripts<P: AsRef<Path>>(
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation, "scripts.txt", false));
 
-    let scripts_entries: Value = load(
-        &read(scripts_file_path.as_ref()).unwrap_log(),
-        Some(StringMode::Binary),
-        None,
-    )
-    .unwrap_log();
+    if purge_empty {
+        let mut to_remove: Vec<usize> = Vec::new();
 
-    let scripts_entries_array: &Array = scripts_entries.as_array().unwrap_log();
-    let mut codes_content: Vec<String> = Vec::with_capacity(scripts_entries_array.len());
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if !original.starts_with("<!--") && translation.is_empty() {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
 
-    for code in scripts_entries_array {
-        let bytes_stream: Vec<u8> = from_value(&code[2]["data"]).unwrap_log();
-
-        let mut inflated: Vec<u8> = Vec::new();
-        ZlibDecoder::new(&*bytes_stream).read_to_end(&mut inflated).unwrap_log();
-
-        let mut code: String = String::new();
-
-        for encoding in ENCODINGS {
-            let (cow, _, had_errors) = encoding.decode(&inflated);
-
-            if !had_errors {
-                code = cow.into_owned();
-                break;
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
+                    }
+                }
             }
         }
 
-        codes_content.push(code);
-    }
+        for i in to_remove.into_iter().rev() {
+            translation_map.remove(i);
+        }
+    } else {
+        let scripts_entries: Value = load(
+            &read(scripts_file_path.as_ref()).unwrap_log(),
+            Some(StringMode::Binary),
+            None,
+        )
+        .unwrap_log();
 
-    let codes_text: String = codes_content.join("");
-    let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
+        let scripts_entries_array: &Array = scripts_entries.as_array().unwrap_log();
+        let mut codes_content: Vec<String> = Vec::with_capacity(scripts_entries_array.len());
 
-    let regexes: [Regex; 5] = unsafe {
-        [
+        for code in scripts_entries_array {
+            let bytes_stream: Vec<u8> = from_value(&code[2]["data"]).unwrap_log();
+
+            let mut inflated: Vec<u8> = Vec::new();
+            ZlibDecoder::new(&*bytes_stream).read_to_end(&mut inflated).unwrap_log();
+
+            let mut code: String = String::new();
+
+            for encoding in ENCODINGS {
+                let (cow, _, had_errors) = encoding.decode(&inflated);
+
+                if !had_errors {
+                    code = cow.into_owned();
+                    break;
+                }
+            }
+
+            codes_content.push(code);
+        }
+
+        let codes_text: String = codes_content.join("");
+        let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
+
+        let regexes: [Regex; 5] = unsafe {
+            [
             Regex::new(r"(Graphics|Data|Audio|Movies|System)\/.*\/?").unwrap_unchecked(),
             Regex::new(r"r[xv]data2?$").unwrap_unchecked(),
             Regex::new(r".*\(").unwrap_unchecked(),
@@ -972,64 +1106,55 @@ pub fn purge_scripts<P: AsRef<Path>>(
             Regex::new(r"^(Actor<id>|ExtraDropItem|EquipLearnSkill|GameOver|Iconset|Window|true|false|MActor%d|[wr]b|\\f|\\n|\[[A-Z]*\])$")
                 .unwrap_unchecked(),
         ]
-    };
+        };
 
-    lines_vec.reserve_exact(extracted_strings.len());
+        lines_vec.reserve_exact(extracted_strings.len());
 
-    for mut extracted in extracted_strings {
-        if extracted.is_empty() {
-            continue;
+        for mut extracted in extracted_strings {
+            if extracted.is_empty() {
+                continue;
+            }
+
+            if string_is_only_symbols(&extracted)
+                || extracted.contains("@window")
+                || extracted.contains(r"\$game")
+                || extracted.starts_with(r"\\e")
+                || extracted.contains("ALPHAC")
+                || extracted.contains("_")
+                || regexes.iter().any(|re| re.is_match(&extracted))
+            {
+                continue;
+            }
+
+            if romanize {
+                extracted = romanize_string(extracted);
+            }
+
+            lines_vec.push(extracted);
         }
 
-        if string_is_only_symbols(&extracted)
-            || extracted.contains("@window")
-            || extracted.contains(r"\$game")
-            || extracted.starts_with(r"\\e")
-            || extracted.contains("ALPHAC")
-            || extracted.contains("_")
-            || regexes.iter().any(|re| re.is_match(&extracted))
-        {
-            continue;
-        }
+        let mut to_remove: Vec<usize> = Vec::new();
 
-        if romanize {
-            extracted = romanize_string(extracted);
-        }
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if leave_filled && !translation.is_empty() {
+                continue;
+            }
 
-        lines_vec.push(extracted);
-    }
+            if !original.starts_with("<!--") && !lines_vec.contains(original) {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
 
-    for (i, (original, translation)) in unsafe { &mut *(&mut translation_map as *mut Vec<(String, String)>) }
-        .iter()
-        .enumerate()
-    {
-        if leave_filled && !translation.is_empty() {
-            continue;
-        }
-
-        if purge_empty && !translation.is_empty() {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
-            } else {
-                translation_map.remove(i);
-
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
+                    }
                 }
             }
-            continue;
         }
 
-        if !original.starts_with("<!--") && !lines_vec.contains(original) {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
-            } else {
-                translation_map.remove(i);
-
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
-                }
-            }
+        for item in to_remove.into_iter().rev() {
+            translation_map.remove(item);
         }
     }
 
@@ -1056,6 +1181,21 @@ pub fn purge_scripts<P: AsRef<Path>>(
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
+
+        if create_ignore {
+            let mut string: String = String::new();
+
+            for (file, lines) in ignore_map {
+                string.push_str(&file);
+                string.push('\n');
+
+                for line in lines {
+                    string.push_str(&line);
+                }
+            }
+
+            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+        }
 
         if logging {
             println!("{PURGED_FILE_MSG} scripts.txt");
@@ -1074,7 +1214,6 @@ pub fn purge_plugins<P: AsRef<Path>>(
     output_path: P,
     romanize: bool,
     logging: bool,
-    processing_mode: ProcessingMode,
     stat: bool,
     leave_filled: bool,
     purge_empty: bool,
@@ -1092,59 +1231,71 @@ pub fn purge_plugins<P: AsRef<Path>>(
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation, "plugins.txt", false));
 
-    let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
+    if purge_empty {
+        let mut to_remove: Vec<usize> = Vec::new();
 
-    let plugins_object: &str = plugins_content
-        .split_once('=')
-        .unwrap_log()
-        .1
-        .trim_end_matches([';', '\n']);
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if !original.starts_with("<!--") && translation.is_empty() {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
 
-    let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
-    let mut lines_vec: Vec<String> = Vec::new();
-
-    traverse_json(
-        None,
-        &mut plugins_json,
-        &mut Some(&mut lines_vec),
-        &mut Some(&mut translation_map),
-        &None,
-        false,
-        romanize,
-        processing_mode,
-    );
-
-    for (i, (original, translation)) in unsafe { &*(&translation_map as *const VecDeque<(String, String)>) }
-        .iter()
-        .enumerate()
-    {
-        if leave_filled && !translation.is_empty() {
-            continue;
-        }
-
-        if purge_empty && !translation.is_empty() {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
-            } else {
-                translation_map.remove(i);
-
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
+                    }
                 }
             }
-            continue;
         }
 
-        if !original.starts_with("<!--") && !lines_vec.contains(original) {
-            if stat {
-                stat_vec.push((original.to_owned(), translation.to_owned()));
-            } else {
-                translation_map.remove(i);
+        for i in to_remove.into_iter().rev() {
+            translation_map.remove(i);
+        }
+    } else {
+        let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
 
-                if create_ignore {
-                    ignore_vec.push(original.to_owned());
+        let plugins_object: &str = plugins_content
+            .split_once('=')
+            .unwrap_log()
+            .1
+            .trim_end_matches([';', '\n']);
+
+        let mut plugins_json: Value = from_str(plugins_object).unwrap_log();
+        let mut lines_vec: Vec<String> = Vec::new();
+
+        traverse_json(
+            None,
+            &mut plugins_json,
+            &mut Some(&mut lines_vec),
+            &mut Some(&mut translation_map),
+            &None,
+            false,
+            romanize,
+            ProcessingMode::Default,
+        );
+
+        let mut to_remove: Vec<usize> = Vec::new();
+
+        for (i, (original, translation)) in translation_map.iter().enumerate() {
+            if leave_filled && !translation.is_empty() {
+                continue;
+            }
+
+            if !original.starts_with("<!--") && !lines_vec.contains(original) {
+                if stat {
+                    stat_vec.push((original.to_owned(), translation.to_owned()));
+                } else {
+                    to_remove.push(i);
+
+                    if create_ignore {
+                        ignore_entry.insert(original.to_owned());
+                    }
                 }
             }
+        }
+
+        for item in to_remove.into_iter().rev() {
+            translation_map.remove(item);
         }
     }
 
@@ -1171,6 +1322,21 @@ pub fn purge_plugins<P: AsRef<Path>>(
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
+
+        if create_ignore {
+            let mut string: String = String::new();
+
+            for (file, lines) in ignore_map {
+                string.push_str(&file);
+                string.push('\n');
+
+                for line in lines {
+                    string.push_str(&line);
+                }
+            }
+
+            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+        }
 
         if logging {
             println!("{PURGED_FILE_MSG} plugins.json");
