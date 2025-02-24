@@ -54,7 +54,7 @@ fn parse_parameter(
             GameType::Termina => {
                 if parameter
                     .chars()
-                    .all(|char: char| char.is_ascii_lowercase() || char.is_ascii_punctuation())
+                    .all(|char: char| char.is_ascii_lowercase() || (char.is_ascii_punctuation() && char != '"'))
                 {
                     return None;
                 }
@@ -686,7 +686,8 @@ pub fn read_other<P: AsRef<Path>>(
 
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
-        let txt_output_path: &Path = &output_path.as_ref().join(basename.clone() + ".txt");
+        let txt_filename: String = basename.clone() + ".txt";
+        let txt_output_path: &Path = &output_path.as_ref().join(txt_filename.clone());
 
         if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
             println!("{:?} {FILE_ALREADY_EXISTS_MSG}", unsafe {
@@ -726,8 +727,6 @@ pub fn read_other<P: AsRef<Path>>(
 
             if let Some(obj_real_arr) = obj_arr.as_array() {
                 'obj: for obj in obj_real_arr {
-                    let mut prev_variable_type: Option<Variable> = None;
-
                     for (variable_label, variable_type) in [
                         (name_label, Variable::Name),
                         (nickname_label, Variable::Nickname),
@@ -765,31 +764,29 @@ pub fn read_other<P: AsRef<Path>>(
                             .to_owned()
                         };
 
-                        let parsed: Option<(String, bool)> =
-                            parse_variable(string, &variable_type, &filename, game_type, engine_type, romanize);
-
-                        if let Some((parsed, is_continuation_of_description)) = parsed {
-                            if is_continuation_of_description {
-                                if prev_variable_type != Some(Variable::Description) {
-                                    continue;
+                        let note_text: Option<&str> =
+                            if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
+                                match obj.get(note_label) {
+                                    Some(value) => value.as_str(),
+                                    None => None,
                                 }
+                            } else {
+                                None
+                            };
 
-                                if let Some(last) = lines_mut_ref.pop() {
-                                    lines_mut_ref.insert(last.trim_replace() + &parsed);
-                                    let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() };
+                        let parsed: Option<String> = process_variable(
+                            string,
+                            note_text,
+                            variable_type,
+                            &filename,
+                            game_type,
+                            engine_type,
+                            romanize,
+                            None,
+                            false,
+                        );
 
-                                    //? I don't know what this code does, but apparently everything works
-                                    if processing_mode == ProcessingMode::Append {
-                                        let (index, _, translated) =
-                                            translation_map.shift_remove_full(last.as_str()).unwrap_log();
-                                        translation_map.shift_insert(index, string_ref.to_owned(), translated);
-                                    }
-                                }
-                                continue;
-                            }
-
-                            prev_variable_type = Some(variable_type);
-
+                        if let Some(parsed) = parsed {
                             let mut replaced: String =
                                 String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
 

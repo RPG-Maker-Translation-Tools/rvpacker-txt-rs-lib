@@ -614,50 +614,63 @@ pub fn write_other<P: AsRef<Path> + Sync>(
                 .skip(1) // Skipping first element in array as it is null
                 .for_each(|obj: &mut Value| {
                     for (variable_label, variable_type) in variable_tuples.into_iter() {
-                        if let Some(variable_str) = obj[variable_label].as_str() {
-                            let mut variable_string: String = if variable_type == Variable::Note {
-                                variable_str
-                            } else {
-                                variable_str.trim()
-                            }
-                            .to_owned();
+                        let value: Option<&Value> = obj.get(variable_label);
 
-                            if !variable_string.is_empty() {
-                                if romanize {
-                                    variable_string = romanize_string(variable_string)
+                        let mut variable_string: String = {
+                            let mut buf: Vec<u8> = Vec::new();
+
+                            let str: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                                Some(obj) => {
+                                    buf = get_object_data(obj);
+                                    unsafe { std::str::from_utf8_unchecked(&buf) }
                                 }
+                                None => "",
+                            });
 
-                                variable_string = variable_string
-                                    .split('\n')
-                                    .map(str::trim)
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
+                            let trimmed: &str = str.trim();
 
-                                let note_text: Option<&str> = if game_type
-                                    .is_some_and(|game_type: GameType| game_type != GameType::Termina)
-                                    && variable_type != Variable::Description
-                                {
-                                    None
-                                } else {
-                                    match obj.get(unsafe { variable_tuples.last().unwrap_unchecked() }.0) {
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+
+                            if variable_type != Variable::Note { trimmed } else { str }.to_owned()
+                        };
+
+                        if !variable_string.is_empty() {
+                            if romanize {
+                                variable_string = romanize_string(variable_string)
+                            }
+
+                            variable_string = variable_string
+                                .split('\n')
+                                .map(str::trim)
+                                .collect::<Vec<_>>()
+                                .join("\n");
+
+                            let note_text: Option<&str> =
+                                if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
+                                    match obj.get(note_label) {
                                         Some(value) => value.as_str(),
                                         None => None,
                                     }
+                                } else {
+                                    None
                                 };
 
-                                let translated: Option<String> = get_translated_variable(
-                                    variable_string,
-                                    note_text,
-                                    variable_type,
-                                    &filename,
-                                    &translation_map,
-                                    game_type,
-                                    engine_type,
-                                );
+                            let translated: Option<String> = process_variable(
+                                variable_string,
+                                note_text,
+                                variable_type,
+                                &filename,
+                                game_type,
+                                engine_type,
+                                romanize,
+                                Some(&translation_map),
+                                true,
+                            );
 
-                                if let Some(translated) = translated {
-                                    obj[variable_label] = Value::from(&translated);
-                                }
+                            if let Some(translated) = translated {
+                                obj[variable_label] = Value::from(&translated);
                             }
                         }
                     }
