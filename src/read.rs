@@ -5,16 +5,12 @@ use crate::{
     determine_extension,
     functions::{
         ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
-        get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number, romanize_string,
-        string_is_only_symbols, traverse_json,
+        get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number, parse_translation,
+        process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
     read_to_string_without_bom,
     statics::{
-        localization::{
-            AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG,
-            PARSED_FILE_MSG,
-        },
-        regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE},
+        localization::{FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG, PARSED_FILE_MSG},
         ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
@@ -34,26 +30,11 @@ use std::{
     mem::take,
     mem::transmute,
     path::{Path, PathBuf},
-    str::Chars,
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
-
-#[inline]
-fn parse_translation<'a>(translation: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
-    Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
-        let mut split = line.split(LINES_SEPARATOR);
-
-        if let Some((original, translated)) = split.next().zip(split.last()) {
-            Some((original.to_owned(), translated.to_owned()))
-        } else {
-            eprintln!("{COULD_NOT_SPLIT_LINE_MSG} {line}\n{AT_POSITION_MSG} {i}");
-            None
-        }
-    }))
-}
 
 #[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
 #[inline]
@@ -141,196 +122,6 @@ fn parse_parameter(
     }
 
     Some(result)
-}
-
-#[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-#[inline]
-fn parse_variable(
-    mut variable_text: String,
-    variable_type: &Variable,
-    filename: &str,
-    game_type: Option<GameType>,
-    engine_type: EngineType,
-    romanize: bool,
-) -> Option<(String, bool)> {
-    if string_is_only_symbols(&variable_text) {
-        return None;
-    }
-
-    if engine_type != EngineType::New {
-        if variable_text
-            .split('\n')
-            .all(|line: &str| line.is_empty() || INVALID_MULTILINE_VARIABLE_RE.is_match(line))
-            || INVALID_VARIABLE_RE.is_match(&variable_text)
-        {
-            return None;
-        };
-
-        variable_text = variable_text.replace("\r\n", "\n");
-    }
-
-    let mut is_continuation_of_description: bool = false;
-
-    #[allow(clippy::collapsible_match)]
-    if let Some(game_type) = game_type {
-        match game_type {
-            GameType::Termina => {
-                if variable_text.contains("---") || variable_text.starts_with("///") {
-                    return None;
-                }
-
-                match variable_type {
-                    Variable::Name | Variable::Nickname => {
-                        if filename.starts_with("Ac") {
-                            if ![
-                                "Levi",
-                                "Marina",
-                                "Daan",
-                                "Abella",
-                                "O'saa",
-                                "Blood golem",
-                                "Marcoh",
-                                "Karin",
-                                "Olivia",
-                                "Ghoul",
-                                "Villager",
-                                "August",
-                                "Caligura",
-                                "Henryk",
-                                "Pav",
-                                "Tanaka",
-                                "Samarie",
-                            ]
-                            .contains(&variable_text.as_str())
-                            {
-                                return None;
-                            }
-                        } else if filename.starts_with("Ar") {
-                            if variable_text.starts_with("test_armor") {
-                                return None;
-                            }
-                        } else if filename.starts_with("Cl") {
-                            if [
-                                "Girl",
-                                "Kid demon",
-                                "Captain",
-                                "Marriage",
-                                "Marriage2",
-                                "Baby demon",
-                                "Buckman",
-                                "Nas'hrah",
-                                "Skeleton",
-                            ]
-                            .contains(&variable_text.as_str())
-                            {
-                                return None;
-                            }
-                        } else if filename.starts_with("En") {
-                            if ["Spank Tank", "giant", "test"].contains(&variable_text.as_str()) {
-                                return None;
-                            }
-                        } else if filename.starts_with("It") {
-                            if [
-                                "Torch",
-                                "Flashlight",
-                                "Stick",
-                                "Quill",
-                                "Empty scroll",
-                                "Soul stone_NOT_USE",
-                                "Cube of depths",
-                                "Worm juice",
-                                "Silver shilling",
-                                "Coded letter #1 - UNUSED",
-                                "Black vial",
-                                "Torturer's notes 1",
-                                "Purple vial",
-                                "Orange vial",
-                                "Red vial",
-                                "Green vial",
-                                "Pinecone pig instructions",
-                                "Grilled salmonsnake meat",
-                                "Empty scroll",
-                                "Water vial",
-                                "Blood vial",
-                                "Devil's Grass",
-                                "Stone",
-                                "Codex #1",
-                                "The Tale of the Pocketcat I",
-                                "The Tale of the Pocketcat II",
-                            ]
-                            .contains(&variable_text.as_str())
-                                || variable_text.starts_with("The Fellowship")
-                                || variable_text.starts_with("Studies of")
-                                || variable_text.starts_with("Blueish")
-                                || variable_text.starts_with("Skeletal")
-                                || variable_text.ends_with("soul")
-                                || variable_text.ends_with("schematics")
-                            {
-                                return None;
-                            }
-                        } else if filename.starts_with("We") && variable_text == "makeshift2" {
-                            return None;
-                        }
-                    }
-                    Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4 => {
-                        return None;
-                    }
-                    Variable::Note => {
-                        if filename.starts_with("Ac") {
-                            return None;
-                        }
-
-                        if !filename.starts_with("Cl") {
-                            let mut variable_text_chars: Chars = variable_text.chars();
-
-                            if !variable_text.starts_with("flesh puppetry") {
-                                if let Some(first_char) = variable_text_chars.next() {
-                                    if let Some(second_char) = variable_text_chars.next() {
-                                        if ((first_char == '\n' && second_char != '\n')
-                                            || (first_char.is_ascii_alphabetic()
-                                                || first_char == '"'
-                                                || variable_text.starts_with("4 sticks")))
-                                            && !matches!(first_char, '.' | '!' | '/' | '?')
-                                        {
-                                            is_continuation_of_description = true;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if is_continuation_of_description {
-                                if let Some((mut left, _)) = variable_text.trim_start().split_once('\n') {
-                                    left = left.trim();
-
-                                    if !left.ends_with(['.', '%', '!', '"']) {
-                                        return None;
-                                    }
-
-                                    variable_text = NEW_LINE.to_owned() + left;
-                                } else {
-                                    if !variable_text.ends_with(['.', '%', '!', '"']) {
-                                        return None;
-                                    }
-
-                                    variable_text = NEW_LINE.to_owned() + &variable_text
-                                }
-                            } else {
-                                return None;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {} // custom processing for other games
-        }
-    }
-
-    if romanize {
-        variable_text = romanize_string(variable_text);
-    }
-
-    Some((variable_text, is_continuation_of_description))
 }
 
 #[inline]
@@ -534,7 +325,8 @@ pub fn read_map<P: AsRef<Path>>(
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-            let parsed_translation: Box<dyn Iterator<Item = (String, String)>> = parse_translation(&translation);
+            let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
+                parse_translation(&translation, "maps.txt", false);
 
             match maps_processing_mode {
                 MapsProcessingMode::Default | MapsProcessingMode::Separate => {
@@ -912,7 +704,7 @@ pub fn read_other<P: AsRef<Path>>(
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
-                translation_map.extend(parse_translation(&translation));
+                translation_map.extend(parse_translation(&translation, &txt_filename, false));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 continue;
@@ -1129,7 +921,7 @@ pub fn read_system<P: AsRef<Path>>(
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
 
-            translation_map.extend(parse_translation(&translation));
+            translation_map.extend(parse_translation(&translation, "system.txt", false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1303,7 +1095,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation));
+            translation_map.extend(parse_translation(&translation, "scripts.txt", false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1431,13 +1223,12 @@ pub fn read_plugins<P: AsRef<Path>>(
     }
 
     let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
-
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation));
+            translation_map.extend(parse_translation(&translation, "plugins.txt", false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;

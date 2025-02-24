@@ -1,20 +1,22 @@
 use crate::{
     statics::{
-        regexes::{IS_ONLY_SYMBOLS_RE, PLUGINS_REGEXPS},
-        HASHER, NEW_LINE, SYMBOLS,
+        localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG},
+        regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, IS_ONLY_SYMBOLS_RE, PLUGINS_REGEXPS},
+        HASHER, LINES_SEPARATOR, NEW_LINE, SYMBOLS,
     },
-    types::{EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt},
+    types::{EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable},
 };
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use marshal_rs::{load, StringMode};
+use smallvec::SmallVec;
 use sonic_rs::{from_str, prelude::*, Object, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
-    fs::{read, DirEntry, File},
+    fs::{read, read_to_string, DirEntry, File},
     io::{self, BufReader, Read},
-    path::Path,
-    str::from_utf8_unchecked,
+    path::{Path, PathBuf},
+    str::{from_utf8_unchecked, Chars},
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
@@ -588,5 +590,353 @@ pub fn parse_map_number(string: &str) -> u16 {
         )
         .parse::<u16>()
         .unwrap_unchecked()
+    }
+}
+
+#[inline]
+pub fn parse_translation<'a>(
+    translation: &'a str,
+    file: &'a str,
+    write: bool,
+) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
+    Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
+        if write && line.starts_with("<!--") {
+            return None;
+        }
+
+        let mut split = line.split(LINES_SEPARATOR);
+        if let Some((original, translated)) = split.next().zip(split.last()) {
+            if write {
+                #[cfg(not(debug_assertions))]
+                if translated.is_empty() {
+                    return None;
+                }
+                Some((
+                    original.replace(NEW_LINE, "\n").trim_replace(),
+                    translated.replace(NEW_LINE, "\n").trim_replace(),
+                ))
+            } else {
+                Some((original.to_owned(), translated.to_owned()))
+            }
+        } else {
+            eprintln!(
+                "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
+                i = i + 1,
+            );
+            None
+        }
+    }))
+}
+
+pub fn parse_ignore(
+    ignore_file_path: PathBuf,
+) -> IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> {
+    let mut map: IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> =
+        IndexMap::with_hasher(HASHER);
+
+    if ignore_file_path.exists() {
+        let ignore_file_content: String = read_to_string(ignore_file_path).unwrap_log();
+
+        for line in ignore_file_content.split('\n') {
+            let mut split = line.split(LINES_SEPARATOR);
+
+            if let Some((original, _)) = split.next().zip(split.last()) {
+                if original.starts_with("<!-- File") {
+                    map.insert(original.to_owned(), HashSet::default());
+                } else {
+                    map.last_mut().unwrap().1.insert(original.to_owned());
+                }
+            }
+        }
+    }
+
+    map
+}
+
+#[allow(clippy::too_many_arguments, clippy::collapsible_match, clippy::single_match)]
+#[inline(always)]
+pub fn process_variable(
+    mut variable_text: String,
+    note_text: Option<&str>,
+    variable_type: Variable,
+    filename: &str,
+    game_type: Option<GameType>,
+    engine_type: EngineType,
+    romanize: bool,
+    hashmap: Option<&HashMap<String, String, Xxh3DefaultBuilder>>,
+    write: bool,
+) -> Option<String> {
+    if string_is_only_symbols(&variable_text) {
+        return None;
+    }
+
+    if engine_type != EngineType::New {
+        if variable_text
+            .split('\n')
+            .all(|line: &str| line.is_empty() || INVALID_MULTILINE_VARIABLE_RE.is_match(line))
+            || INVALID_VARIABLE_RE.is_match(&variable_text)
+        {
+            return None;
+        }
+
+        variable_text = variable_text.replace("\r\n", "\n");
+    }
+
+    let remaining_strings: SmallVec<[(String, bool); 4]> = SmallVec::with_capacity(4);
+
+    if let Some(game_type) = game_type {
+        match game_type {
+            GameType::Termina => {
+                if variable_text.contains("---") || variable_text.starts_with("///") {
+                    return None;
+                }
+
+                match variable_type {
+                    Variable::Description => {
+                        if write {
+                            if let Some(note) = note_text {
+                                let mut note_string: String = String::from(note);
+                                let mut note_chars: Chars = note.chars();
+                                let mut note_is_continuation: bool = false;
+
+                                if !note.starts_with("flesh puppetry") {
+                                    if let Some((first_char, second_char)) = note_chars.next().zip(note_chars.next()) {
+                                        if ((first_char == '\n' && second_char != '\n')
+                                            || (first_char.is_ascii_alphabetic()
+                                                || first_char == '"'
+                                                || note.starts_with("4 sticks")))
+                                            && !matches!(first_char, '.' | '!' | '/' | '?')
+                                        {
+                                            note_is_continuation = true;
+                                        }
+                                    }
+                                }
+
+                                if note_is_continuation {
+                                    if let Some((mut left, _)) = note.trim_start().split_once('\n') {
+                                        left = left.trim();
+
+                                        if left.ends_with(['.', '%', '!', '"']) {
+                                            note_string = String::from("\n") + left;
+                                        }
+                                    } else if note.ends_with(['.', '%', '!', '"']) {
+                                        note_string = note.to_owned();
+                                    }
+
+                                    if !note_string.is_empty() {
+                                        variable_text = variable_text + &note_string;
+                                    }
+                                }
+                            }
+                        } else if let Some(note) = note_text {
+                            let mut note_chars: Chars = note.chars();
+                            let mut note_is_continuation = false;
+
+                            if !note.starts_with("flesh puppetry") {
+                                if let Some((first_char, second_char)) = note_chars.next().zip(note_chars.next()) {
+                                    if ((first_char == '\n' && second_char != '\n')
+                                        || (first_char.is_ascii_alphabetic()
+                                            || first_char == '"'
+                                            || note.starts_with("4 sticks")))
+                                        && !matches!(first_char, '.' | '!' | '/' | '?')
+                                    {
+                                        note_is_continuation = true;
+                                    }
+                                }
+                            }
+
+                            if note_is_continuation {
+                                let note_string: String;
+
+                                if let Some((mut left, _)) = note.trim_start().split_once('\n') {
+                                    left = left.trim();
+
+                                    if !left.ends_with(['.', '%', '!', '"']) {
+                                        return None;
+                                    }
+
+                                    note_string = String::from(NEW_LINE) + left;
+                                } else {
+                                    if !note.ends_with(['.', '%', '!', '"']) && !note.ends_with("takes place?") {
+                                        return None;
+                                    }
+
+                                    note_string = note.to_owned();
+                                }
+
+                                if note_string.is_empty() {
+                                    return None;
+                                }
+
+                                variable_text = variable_text + &note_string;
+                            }
+                        }
+                    }
+                    Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4 => {
+                        return None;
+                    }
+                    Variable::Note => {
+                        if write && filename.starts_with("It") {
+                            for string in [
+                                "<Menu Category: Items>",
+                                "<Menu Category: Food>",
+                                "<Menu Category: Healing>",
+                                "<Menu Category: Body bag>",
+                            ] {
+                                if variable_text.contains(string) {
+                                    variable_text = variable_text.replace(string, &hashmap?[string]);
+                                }
+                            }
+                        }
+
+                        if !filename.starts_with("Cl") {
+                            return None;
+                        }
+                    }
+                    Variable::Name | Variable::Nickname => {
+                        if filename.starts_with("Ac") {
+                            if ![
+                                "Levi",
+                                "Marina",
+                                "Daan",
+                                "Abella",
+                                "O'saa",
+                                "Blood golem",
+                                "Black Kalev",
+                                "Marcoh",
+                                "Karin",
+                                "Olivia",
+                                "Ghoul",
+                                "Villager",
+                                "August",
+                                "Caligura",
+                                "Henryk",
+                                "Pav",
+                                "Tanaka",
+                                "Samarie",
+                            ]
+                            .contains(&variable_text.as_str())
+                            {
+                                return None;
+                            }
+                        } else if filename.starts_with("Ar") {
+                            if variable_text.starts_with("test_armor") {
+                                return None;
+                            }
+                        } else if filename.starts_with("Cl") {
+                            if [
+                                "Girl",
+                                "Kid demon",
+                                "Captain",
+                                "Marriage",
+                                "Marriage2",
+                                "Baby demon",
+                                "Buckman",
+                                "Nas'hrah",
+                                "Skeleton",
+                            ]
+                            .contains(&variable_text.as_str())
+                            {
+                                return None;
+                            }
+                        } else if filename.starts_with("En") {
+                            if ["Spank Tank", "giant", "test"].contains(&variable_text.as_str()) {
+                                return None;
+                            }
+                        } else if filename.starts_with("It") {
+                            if [
+                                "Torch",
+                                "Flashlight",
+                                "Stick",
+                                "Quill",
+                                "Empty scroll",
+                                "Soul stone_NOT_USE",
+                                "Cube of depths",
+                                "Worm juice",
+                                "Silver shilling",
+                                "Coded letter #1 - UNUSED",
+                                "Black vial",
+                                "Torturer's notes 1",
+                                "Purple vial",
+                                "Orange vial",
+                                "Red vial",
+                                "Green vial",
+                                "Pinecone pig instructions",
+                                "Grilled salmonsnake meat",
+                                "Empty scroll",
+                                "Water vial",
+                                "Blood vial",
+                                "Devil's Grass",
+                                "Stone",
+                                "Codex #1",
+                                "The Tale of the Pocketcat I",
+                                "The Tale of the Pocketcat II",
+                            ]
+                            .contains(&variable_text.as_str())
+                                || variable_text.starts_with("The Fellowship")
+                                || variable_text.starts_with("Studies of")
+                                || variable_text.starts_with("Blueish")
+                                || variable_text.starts_with("Skeletal")
+                                || variable_text.ends_with("soul")
+                                || variable_text.ends_with("schematics")
+                            {
+                                return None;
+                            }
+                        } else if filename.starts_with("We") && variable_text == "makeshift2" {
+                            return None;
+                        }
+                    }
+                }
+            }
+            _ => {} // custom processing for other games
+        }
+    }
+
+    if romanize {
+        variable_text = romanize_string(variable_text);
+    }
+
+    if write {
+        let translated: Option<String> = hashmap?.get(&variable_text).map(|translated: &String| {
+            let mut result: String = translated.to_owned();
+
+            for (string, position) in remaining_strings.into_iter() {
+                match position {
+                    true => result += &string,
+                    false => result = string + &result,
+                }
+            }
+
+            if matches!(
+                variable_type,
+                Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
+            ) && !(variable_type == Variable::Message2 && filename.starts_with("Sk"))
+            {
+                result = String::from(" ") + &result;
+            }
+
+            #[allow(clippy::collapsible_if, clippy::collapsible_match)]
+            if let Some(game_type) = game_type {
+                match game_type {
+                    GameType::Termina => match variable_type {
+                        Variable::Note => {
+                            if let Some(first_char) = result.chars().next() {
+                                if first_char != '\n' {
+                                    result = String::from("\n") + &result
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+
+            result
+        });
+
+        translated
+    } else {
+        Some(variable_text)
     }
 }

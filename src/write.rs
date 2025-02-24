@@ -5,7 +5,8 @@ use crate::{
     functions::{
         determine_extension, ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index,
         get_maps_labels, get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number,
-        read_to_string_without_bom, romanize_string, string_is_only_symbols, traverse_json,
+        parse_translation, process_variable, read_to_string_without_bom, romanize_string, string_is_only_symbols,
+        traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
@@ -26,41 +27,11 @@ use std::{
     io::{Read, Write},
     mem::{take, transmute},
     path::Path,
-    str::Chars,
     sync::{Arc, Mutex},
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
-
-#[inline]
-fn parse_translation<'a>(translation: &'a str, file: &'a str) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
-    Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
-        if line.starts_with("<!--") {
-            None
-        } else {
-            let mut split = line.split(LINES_SEPARATOR);
-
-            if let Some((original, translated)) = split.next().zip(split.last()) {
-                #[cfg(not(debug_assertions))]
-                if translated.is_empty() {
-                    return None;
-                }
-
-                Some((
-                    original.replace(NEW_LINE, "\n").trim_replace(),
-                    translated.replace(NEW_LINE, "\n").trim_replace(),
-                ))
-            } else {
-                eprintln!(
-                    "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} {file}",
-                    i = i + 1
-                );
-                None
-            }
-        }
-    }))
-}
 
 #[inline]
 fn process_parameter(
@@ -193,162 +164,6 @@ fn get_translated_parameter(
     } else {
         translated
     }
-}
-
-#[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-#[inline]
-fn get_translated_variable(
-    mut variable_text: String,
-    note_text: Option<&str>, // note_text is some only when getting description
-    variable_type: Variable,
-    filename: &str,
-    hashmap: &StringHashMap,
-    game_type: Option<GameType>,
-    engine_type: EngineType,
-) -> Option<String> {
-    // bool indicates insert whether at start or at end
-    // true inserts at end
-    // false inserts at start
-    let mut remaining_strings: Vec<(String, bool)> = Vec::with_capacity(4);
-
-    if engine_type != EngineType::New {
-        variable_text = variable_text.replace("\r\n", "\n");
-    }
-
-    #[allow(clippy::collapsible_match)]
-    if let Some(game_type) = game_type {
-        match game_type {
-            GameType::Termina => match variable_type {
-                Variable::Description => match note_text {
-                    Some(mut note) => {
-                        let mut note_string: String = String::from(note);
-
-                        let mut note_chars: Chars = note.chars();
-                        let mut is_continuation_of_description: bool = false;
-
-                        if !note.starts_with("flesh puppetry") {
-                            if let Some(first_char) = note_chars.next() {
-                                if let Some(second_char) = note_chars.next() {
-                                    if ((first_char == '\n' && second_char != '\n')
-                                        || (first_char.is_ascii_alphabetic()
-                                            || first_char == '"'
-                                            || note.starts_with("4 sticks")))
-                                        && !matches!(first_char, '.' | '!' | '/' | '?')
-                                    {
-                                        is_continuation_of_description = true;
-                                    }
-                                }
-                            }
-                        }
-
-                        if is_continuation_of_description {
-                            if let Some((mut left, _)) = note.trim_start().split_once('\n') {
-                                left = left.trim();
-
-                                if left.ends_with(['.', '%', '!', '"']) {
-                                    note_string = String::from("\n") + left;
-                                }
-                            } else if note.ends_with(['.', '%', '!', '"']) {
-                                note_string = note.to_owned();
-                            }
-
-                            if !note_string.is_empty() {
-                                variable_text = variable_text + &note_string;
-                            }
-                        }
-                    }
-                    None => {}
-                },
-                Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4 => {
-                    return None;
-                }
-                Variable::Note => {
-                    if filename.starts_with("It") {
-                        for string in [
-                            "<Menu Category: Items>",
-                            "<Menu Category: Food>",
-                            "<Menu Category: Healing>",
-                            "<Menu Category: Body bag>",
-                        ] {
-                            if variable_text.contains(string) {
-                                variable_text = variable_text.replace(string, &hashmap[string]);
-                            }
-                        }
-                    }
-
-                    if !filename.starts_with("Cl") {
-                        let mut variable_text_chars: Chars = variable_text.chars();
-                        let mut is_continuation_of_description: bool = false;
-
-                        if let Some(first_char) = variable_text_chars.next() {
-                            if let Some(second_char) = variable_text_chars.next() {
-                                if ((first_char == '\n' && second_char != '\n')
-                                    || (first_char.is_ascii_alphabetic()
-                                        || first_char == '"'
-                                        || variable_text.starts_with("4 sticks")))
-                                    && !matches!(first_char, '.' | '!' | '/' | '?')
-                                {
-                                    is_continuation_of_description = true;
-                                }
-                            }
-                        }
-
-                        return if is_continuation_of_description {
-                            if let Some((_, right)) = variable_text.trim_start().split_once('\n') {
-                                Some(right.to_owned())
-                            } else {
-                                Some(String::new())
-                            }
-                        } else {
-                            Some(variable_text)
-                        };
-                    }
-                }
-                _ => {}
-            },
-            _ => {} // custom processing for other games
-        }
-    }
-
-    let translated: Option<String> = hashmap.get(&variable_text).map(|translated: &String| {
-        let mut result: String = translated.to_owned();
-
-        for (string, position) in remaining_strings.into_iter() {
-            match position {
-                true => result += &string,
-                false => result = string + &result,
-            }
-        }
-
-        if matches!(
-            variable_type,
-            Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
-        ) && !(variable_type == Variable::Message2 && filename.starts_with("Sk"))
-        {
-            result = String::from(" ") + &result;
-        }
-
-        #[allow(clippy::collapsible_if, clippy::collapsible_match)]
-        if let Some(game_type) = game_type {
-            match game_type {
-                GameType::Termina => match variable_type {
-                    Variable::Note => {
-                        if let Some(first_char) = result.chars().next() {
-                            if first_char != '\n' {
-                                result = String::from("\n") + &result
-                            }
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-
-        result
-    });
-
-    translated
 }
 
 #[inline]
@@ -782,7 +597,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
 
         let translation_map: StringHashMap = {
             let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
-            HashMap::from_iter(parse_translation(&translation, txt_filename))
+            HashMap::from_iter(parse_translation(&translation, txt_filename, true))
         };
 
         if translation_map.is_empty() {
@@ -924,7 +739,7 @@ pub fn write_system<P: AsRef<Path>>(
         let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
         let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
         (
-            HashMap::from_iter(parse_translation(&translation, "system.txt")),
+            HashMap::from_iter(parse_translation(&translation, "system.txt", true)),
             game_title,
         )
     };
@@ -1055,7 +870,7 @@ pub fn write_plugins<P: AsRef<Path>>(
 ) {
     let mut translation_map: VecDeque<(String, String)> = {
         let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-        VecDeque::from_iter(parse_translation(&translation, "plugins.txt"))
+        VecDeque::from_iter(parse_translation(&translation, "plugins.txt", true))
     };
 
     let translation_set: HashSet<String, Xxh3DefaultBuilder> =
@@ -1113,7 +928,7 @@ pub fn write_scripts<P: AsRef<Path>>(
 ) {
     let translation_map: StringHashMap = {
         let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-        StringHashMap::from_iter(parse_translation(&translation, "scripts.txt"))
+        StringHashMap::from_iter(parse_translation(&translation, "scripts.txt", true))
     };
 
     if translation_map.is_empty() {
