@@ -4,7 +4,10 @@ use crate::{
         regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, IS_ONLY_SYMBOLS_RE, PLUGINS_REGEXPS},
         HASHER, LINES_SEPARATOR, NEW_LINE, SYMBOLS,
     },
-    types::{EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable},
+    types::{
+        Code, EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt, StringHashMap, TrimReplace,
+        Variable,
+    },
 };
 use indexmap::{IndexMap, IndexSet};
 use marshal_rs::{load, StringMode};
@@ -17,6 +20,7 @@ use std::{
     io::{self, BufReader, Read},
     path::{Path, PathBuf},
     str::{from_utf8_unchecked, Chars},
+    sync::{Arc, Mutex},
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
@@ -411,6 +415,7 @@ pub fn traverse_json(
     write: bool,
     romanize: bool,
     processing_mode: ProcessingMode,
+    ignore_entry: Option<&HashSet<String, Xxh3DefaultBuilder>>,
 ) {
     let invalid_key = |key: &Option<&str>| -> bool {
         if let Some(str) = key {
@@ -456,6 +461,12 @@ pub fn traverse_json(
                         *value = (&translated).into();
                     }
                 } else {
+                    if let Some(entry) = ignore_entry {
+                        if entry.contains(&string) {
+                            return;
+                        }
+                    }
+
                     let lines = unsafe { lines.as_mut().unwrap_unchecked() };
 
                     lines.push(string);
@@ -474,12 +485,32 @@ pub fn traverse_json(
         }
         sonic_rs::JsonType::Object => {
             for (key, value) in value.as_object_mut().unwrap_log() {
-                traverse_json(Some(key), value, lines, map, set, write, romanize, processing_mode);
+                traverse_json(
+                    Some(key),
+                    value,
+                    lines,
+                    map,
+                    set,
+                    write,
+                    romanize,
+                    processing_mode,
+                    ignore_entry,
+                );
             }
         }
         sonic_rs::JsonType::Array => {
             for value in value.as_array_mut().unwrap_log() {
-                traverse_json(None, value, lines, map, set, write, romanize, processing_mode);
+                traverse_json(
+                    None,
+                    value,
+                    lines,
+                    map,
+                    set,
+                    write,
+                    romanize,
+                    processing_mode,
+                    ignore_entry,
+                );
             }
         }
         _ => {}
@@ -605,7 +636,17 @@ pub fn parse_translation<'a>(
         }
 
         let mut split = line.split(LINES_SEPARATOR);
-        if let Some((original, translated)) = split.next().zip(split.last()) {
+
+        let first: Option<&str> = split.next();
+        let mut last: Option<&str> = Some("");
+
+        for item in split {
+            if !item.is_empty() {
+                last = Some(item);
+            }
+        }
+
+        if let Some((original, translated)) = first.zip(last) {
             if write {
                 #[cfg(not(debug_assertions))]
                 if translated.is_empty() {
@@ -663,7 +704,7 @@ pub fn process_variable(
     game_type: Option<GameType>,
     engine_type: EngineType,
     romanize: bool,
-    hashmap: Option<&HashMap<String, String, Xxh3DefaultBuilder>>,
+    hashmap: Option<&HashMap<String, String, Xxh3DefaultBuilder>>, // some only when write is true
     write: bool,
 ) -> Option<String> {
     if string_is_only_symbols(&variable_text) {
@@ -730,7 +771,7 @@ pub fn process_variable(
                             }
                         } else if let Some(note) = note_text {
                             let mut note_chars: Chars = note.chars();
-                            let mut note_is_continuation = false;
+                            let mut note_is_continuation: bool = false;
 
                             if !note.starts_with("flesh puppetry") {
                                 if let Some((first_char, second_char)) = note_chars.next().zip(note_chars.next()) {
@@ -793,8 +834,8 @@ pub fn process_variable(
                             return None;
                         }
                     }
-                    Variable::Name | Variable::Nickname => {
-                        if filename.starts_with("Ac") {
+                    Variable::Name | Variable::Nickname => match &filename[..2] {
+                        "Ac" => {
                             if ![
                                 "Levi",
                                 "Marina",
@@ -819,11 +860,13 @@ pub fn process_variable(
                             {
                                 return None;
                             }
-                        } else if filename.starts_with("Ar") {
+                        }
+                        "Ar" => {
                             if variable_text.starts_with("test_armor") {
                                 return None;
                             }
-                        } else if filename.starts_with("Cl") {
+                        }
+                        "Cl" => {
                             if [
                                 "Girl",
                                 "Kid demon",
@@ -839,11 +882,13 @@ pub fn process_variable(
                             {
                                 return None;
                             }
-                        } else if filename.starts_with("En") {
+                        }
+                        "En" => {
                             if ["Spank Tank", "giant", "test"].contains(&variable_text.as_str()) {
                                 return None;
                             }
-                        } else if filename.starts_with("It") {
+                        }
+                        "It" => {
                             if [
                                 "Torch",
                                 "Flashlight",
@@ -882,10 +927,14 @@ pub fn process_variable(
                             {
                                 return None;
                             }
-                        } else if filename.starts_with("We") && variable_text == "makeshift2" {
-                            return None;
                         }
-                    }
+                        "We" => {
+                            if variable_text == "makeshift2" {
+                                return None;
+                            }
+                        }
+                        _ => {}
+                    },
                 }
             }
             _ => {} // custom processing for other games
@@ -938,5 +987,131 @@ pub fn process_variable(
         translated
     } else {
         Some(variable_text)
+    }
+}
+
+#[allow(
+    clippy::single_match,
+    clippy::match_single_binding,
+    clippy::too_many_arguments,
+    unused_mut,
+    unreachable_patterns
+)]
+#[inline(always)]
+pub fn process_parameter(
+    code: Code,
+    mut parameter: &str,
+    game_type: Option<GameType>,
+    engine_type: EngineType,
+    romanize: bool,
+    map: Option<&StringHashMap>,                 // used only when write is true
+    deque: Option<Arc<Mutex<VecDeque<String>>>>, // used only when write is true
+    write: bool,
+) -> Option<String> {
+    if string_is_only_symbols(parameter) {
+        return None;
+    }
+
+    let mut extra_strings: SmallVec<[(&str, bool); 4]> = SmallVec::with_capacity(4);
+
+    if let Some(game_type) = game_type {
+        match game_type {
+            GameType::Termina => {
+                if parameter
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || (c.is_ascii_punctuation() && c != '"'))
+                {
+                    return None;
+                }
+                if code == Code::System
+                    && !parameter.starts_with("Gab")
+                    && (!parameter.starts_with("choice_text") || parameter.ends_with("????"))
+                {
+                    return None;
+                }
+            }
+            GameType::LisaRPG => {
+                if matches!(code, Code::Dialogue | Code::DialogueStart) {
+                    if let Some(i) = find_lisa_prefix_index(parameter) {
+                        if string_is_only_symbols(&parameter[i..]) {
+                            return None;
+                        }
+
+                        if write {
+                            extra_strings.push((&parameter[..i], false));
+                        }
+
+                        if !parameter.starts_with(r"\et") {
+                            parameter = &parameter[i..];
+                        }
+                    }
+                }
+            }
+            _ => {} // custom processing for other games
+        }
+    }
+
+    if engine_type != EngineType::New {
+        if let Some(i) = ends_with_if_index(parameter) {
+            if write {
+                extra_strings.push((&parameter[..i], true));
+            }
+
+            parameter = &parameter[..i];
+        }
+
+        if code == Code::Shop {
+            if !parameter.contains("shop_talk") {
+                return None;
+            }
+
+            let (_, mut actual_string) = unsafe { parameter.split_once('=').unwrap_unchecked() };
+            actual_string = actual_string.trim();
+
+            if actual_string.len() < 2 {
+                return None;
+            }
+
+            let without_quotes: &str = &actual_string[1..actual_string.len() - 1];
+
+            if without_quotes.is_empty() || string_is_only_symbols(without_quotes) {
+                return None;
+            }
+
+            parameter = without_quotes;
+        }
+    }
+
+    if write {
+        let translated: Option<String> = if let Some(map) = map {
+            map.get(parameter).map(|s| s.to_owned())
+        } else {
+            let deque = &mut deque.as_ref().unwrap_log().lock().unwrap_log();
+
+            if code == Code::ChoiceArray {
+                deque.front().map(String::to_owned)
+            } else {
+                deque.pop_front()
+            }
+        };
+
+        translated.map(|mut trans| {
+            for (s, append) in extra_strings {
+                if append {
+                    trans.push_str(s);
+                } else {
+                    trans = format!("{}{}", s, trans);
+                }
+            }
+            trans
+        })
+    } else {
+        let mut result: String = parameter.to_owned();
+
+        if romanize {
+            result = romanize_string(result);
+        }
+
+        Some(result)
     }
 }

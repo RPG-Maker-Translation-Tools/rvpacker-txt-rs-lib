@@ -3,23 +3,22 @@
 use crate::{eprintln, println};
 use crate::{
     functions::{
-        determine_extension, ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index,
-        get_maps_labels, get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_map_number,
-        parse_translation, process_variable, read_to_string_without_bom, romanize_string, string_is_only_symbols,
-        traverse_json,
+        determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
+        get_other_labels, get_system_labels, is_allowed_code, parse_map_number, parse_translation, process_parameter,
+        process_variable, read_to_string_without_bom, romanize_string, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
         ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
+        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, StringHashMap,
+        TrimReplace, Variable,
     },
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
-use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -32,10 +31,8 @@ use std::{
 };
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
-type StringHashMap = HashMap<String, String, Xxh3DefaultBuilder>;
-
-#[inline]
-fn process_parameter(
+#[inline(always)]
+fn process_parameter_write(
     code: Code,
     mut parameter: String,
     map: Option<&StringHashMap>,
@@ -49,7 +46,8 @@ fn process_parameter(
         parameter = romanize_string(parameter);
     }
 
-    let translated: Option<String> = get_translated_parameter(code, &parameter, map, deque, game_type, engine_type);
+    let translated: Option<String> =
+        process_parameter(code, &parameter, game_type, engine_type, romanize, map, deque, true);
 
     if let Some(mut translated) = translated {
         if code == Code::Shop {
@@ -65,109 +63,7 @@ fn process_parameter(
     }
 }
 
-#[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-#[inline]
-fn get_translated_parameter(
-    code: Code,
-    mut parameter: &str,
-    hashmap: Option<&StringHashMap>,
-    deque: Option<Arc<Mutex<VecDeque<String>>>>,
-    game_type: Option<GameType>,
-    engine_type: EngineType,
-) -> Option<String> {
-    // bool indicates insert whether at start or at end
-    // true inserts at end
-    // false inserts at start
-    let mut remaining_strings: SmallVec<[(&str, bool); 4]> = SmallVec::with_capacity(4);
-
-    #[allow(unreachable_patterns)]
-    if let Some(game_type) = game_type {
-        match game_type {
-            GameType::Termina => match code {
-                Code::System => {
-                    if !parameter.starts_with("Gab")
-                        && (!parameter.starts_with("choice_text") || parameter.ends_with("????"))
-                    {
-                        return None;
-                    }
-                }
-                _ => {}
-            },
-            GameType::LisaRPG => match code {
-                Code::Dialogue | Code::DialogueStart => {
-                    if let Some(i) = find_lisa_prefix_index(parameter) {
-                        if string_is_only_symbols(&parameter[i..]) {
-                            return None;
-                        }
-
-                        remaining_strings.push((&parameter[..i], false));
-
-                        if !parameter.starts_with(r"\et") {
-                            parameter = &parameter[i..];
-                        }
-                    }
-                }
-                _ => {}
-            },
-            _ => {} // custom processing for other games
-        }
-    }
-
-    if engine_type != EngineType::New {
-        if let Some(i) = ends_with_if_index(parameter) {
-            remaining_strings.push((&parameter[..i], true));
-            parameter = &parameter[..i];
-        }
-
-        match code {
-            Code::Shop => {
-                if !parameter.contains("shop_talk") {
-                    return None;
-                }
-
-                let actual_string: &str = unsafe { parameter.split_once('=').unwrap_unchecked().1 }.trim();
-                let without_quotes: &str = &actual_string[1..actual_string.len() - 1];
-
-                if string_is_only_symbols(without_quotes) {
-                    return None;
-                }
-
-                parameter = without_quotes;
-            }
-            _ => {}
-        }
-    }
-
-    let translated: Option<String> = if let Some(hashmap) = hashmap {
-        hashmap.get(parameter).map(|translated: &String| {
-            let mut result: String = translated.to_owned();
-            result
-        })
-    } else {
-        let deque: &mut VecDeque<String> = &mut deque.as_ref().unwrap_log().lock().unwrap_log();
-
-        if code == Code::ChoiceArray {
-            deque.front().map(String::to_owned)
-        } else {
-            deque.pop_front()
-        }
-    };
-
-    if let Some(mut translated) = translated {
-        for (string, position) in remaining_strings.into_iter() {
-            match position {
-                false => translated = string.to_owned() + &translated,
-                true => translated += string,
-            }
-        }
-
-        Some(translated)
-    } else {
-        translated
-    }
-}
-
-#[inline]
+#[inline(always)]
 fn write_list(
     list: &mut Array,
     romanize: bool,
@@ -218,17 +114,19 @@ fn write_list(
                     joined = romanize_string(joined)
                 }
 
-                let translated: Option<String> = get_translated_parameter(
+                let translated: Option<String> = process_parameter(
                     Code::Dialogue,
                     &joined,
+                    game_type,
+                    engine_type,
+                    romanize,
                     if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
                         None
                     } else {
                         Some(map)
                     },
                     deque.clone(),
-                    game_type,
-                    engine_type,
+                    true,
                 );
 
                 if let Some(translated) = translated {
@@ -299,7 +197,7 @@ fn write_list(
                         subparameter_string.to_owned()
                     };
 
-                    process_parameter(
+                    process_parameter_write(
                         code,
                         subparameter_string,
                         Some(map),
@@ -338,7 +236,7 @@ fn write_list(
                     item_indices.push(it);
                     in_sequence = true;
                 } else {
-                    process_parameter(
+                    process_parameter_write(
                         code,
                         parameter_string,
                         Some(map),
@@ -909,6 +807,7 @@ pub fn write_plugins<P: AsRef<Path>>(
         true,
         romanize,
         ProcessingMode::Default,
+        None,
     );
 
     write(

@@ -3,14 +3,15 @@
 use crate::println;
 use crate::{
     functions::{
-        ends_with_if_index, extract_strings, filter_maps, filter_other, find_lisa_prefix_index, get_maps_labels,
-        get_object_data, get_other_labels, get_system_labels, is_allowed_code, parse_ignore, parse_map_number,
-        parse_translation, process_variable, romanize_string, string_is_only_symbols, traverse_json,
+        extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
+        get_system_labels, is_allowed_code, parse_ignore, parse_map_number, parse_translation, process_parameter,
+        process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
     read_to_string_without_bom,
     statics::{localization::PURGED_FILE_MSG, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE},
     types::{
-        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
+        Code, EngineType, GameType, IgnoreMap, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
+        Variable,
     },
 };
 use flate2::read::ZlibDecoder;
@@ -20,7 +21,7 @@ use regex::Regex;
 use sonic_rs::{from_str, from_value, prelude::*, Array, Value};
 use std::{
     cell::UnsafeCell,
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
     mem::{take, transmute},
@@ -30,97 +31,8 @@ use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
 type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
-type IgnoreMap = IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder>;
 
-#[allow(clippy::single_match, clippy::match_single_binding, unused_mut)]
-#[inline]
-fn parse_parameter(
-    code: Code,
-    mut parameter: &str,
-    game_type: Option<GameType>,
-    engine_type: EngineType,
-    romanize: bool,
-) -> Option<String> {
-    if string_is_only_symbols(parameter) {
-        return None;
-    }
-
-    if let Some(game_type) = game_type {
-        match game_type {
-            GameType::Termina => {
-                if parameter
-                    .chars()
-                    .all(|char: char| char.is_ascii_lowercase() || (char.is_ascii_punctuation() && char != '"'))
-                {
-                    return None;
-                }
-
-                match code {
-                    Code::System => {
-                        if !parameter.starts_with("Gab")
-                            && (!parameter.starts_with("choice_text") || parameter.ends_with("????"))
-                        {
-                            return None;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            GameType::LisaRPG => {
-                match code {
-                    Code::Dialogue | Code::DialogueStart => {
-                        if let Some(i) = find_lisa_prefix_index(parameter) {
-                            if string_is_only_symbols(&parameter[i..]) {
-                                return None;
-                            }
-
-                            if !parameter.starts_with(r"\et") {
-                                parameter = &parameter[i..];
-                            }
-                        }
-                    }
-                    _ => {}
-                } // custom processing for other games
-            }
-        }
-    }
-
-    if engine_type != EngineType::New {
-        if let Some(i) = ends_with_if_index(parameter) {
-            parameter = &parameter[..i]
-        }
-
-        match code {
-            Code::Shop => {
-                if !parameter.contains("shop_talk") {
-                    return None;
-                }
-
-                let (_, mut actual_string) = unsafe { parameter.split_once('=').unwrap_unchecked() };
-
-                actual_string = actual_string.trim();
-
-                // removing the quotes
-                parameter = &actual_string[1..actual_string.len() - 1];
-
-                if parameter.is_empty() || string_is_only_symbols(parameter) {
-                    return None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut result: String = parameter.to_owned();
-
-    if romanize {
-        result = romanize_string(result);
-    }
-
-    Some(result)
-}
-
-#[inline]
+#[inline(always)]
 fn parse_list(
     list: &Array,
     romanize: bool,
@@ -137,7 +49,7 @@ fn parse_list(
     let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
 
     let mut process_parameter = |code: Code, parameter: &str| {
-        if let Some(parsed) = parse_parameter(code, parameter, game_type, engine_type, romanize) {
+        if let Some(parsed) = process_parameter(code, parameter, game_type, engine_type, romanize, None, None, false) {
             if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
                 vec.push((parsed, String::new()));
