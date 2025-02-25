@@ -10,8 +10,8 @@ use crate::{
     read_to_string_without_bom,
     statics::{localization::PURGED_FILE_MSG, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE},
     types::{
-        Code, EngineType, GameType, IgnoreMap, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
-        Variable,
+        Code, EngineType, GameType, IgnoreMap, IndexMapXxh3, IndexSetXxh3, MapsProcessingMode, OptionExt,
+        ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
 use flate2::read::ZlibDecoder;
@@ -27,10 +27,26 @@ use std::{
     mem::{take, transmute},
     path::Path,
 };
-use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
-type IndexSetXxh3 = IndexSet<String, Xxh3DefaultBuilder>;
-type IndexMapXxh3 = IndexMap<String, String, Xxh3DefaultBuilder>;
+fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
+    use std::fmt::Write;
+
+    let contents: String = ignore_map.into_iter().fold(String::new(), |mut output, (file, lines)| {
+        let _ = write!(
+            output,
+            "{}\n{}",
+            file,
+            String::from_iter(lines.into_iter().map(|mut x| {
+                x.push('\n');
+                x
+            }))
+        );
+
+        output
+    });
+
+    write(output_path.as_ref().join(".rvpacker-ignore"), contents).unwrap();
+}
 
 #[inline(always)]
 fn parse_list(
@@ -402,18 +418,7 @@ pub fn purge_map<P: AsRef<Path>>(
         write(translation_path, output_content).unwrap_log();
 
         if create_ignore {
-            let mut string: String = String::new();
-
-            for (file, lines) in ignore_map {
-                string.push_str(&file);
-                string.push('\n');
-
-                for line in lines {
-                    string.push_str(&line);
-                }
-            }
-
-            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+            write_ignore(ignore_map, output_path);
         }
 
         if logging {
@@ -681,18 +686,7 @@ pub fn purge_other<P: AsRef<Path>>(
         )
         .unwrap_log();
     } else if create_ignore {
-        let mut string: String = String::new();
-
-        for (file, lines) in ignore_map {
-            string.push_str(&file);
-            string.push('\n');
-
-            for line in lines {
-                string.push_str(&line);
-            }
-        }
-
-        write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+        write_ignore(ignore_map, output_path);
     }
 }
 
@@ -913,18 +907,7 @@ pub fn purge_system<P: AsRef<Path>>(
         write(txt_output_path, output_content).unwrap_log();
 
         if create_ignore {
-            let mut string: String = String::new();
-
-            for (file, lines) in ignore_map {
-                string.push_str(&file);
-                string.push('\n');
-
-                for line in lines {
-                    string.push_str(&line);
-                }
-            }
-
-            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+            write_ignore(ignore_map, output_path);
         }
 
         if logging {
@@ -1106,18 +1089,7 @@ pub fn purge_scripts<P: AsRef<Path>>(
         write(txt_output_path, output_content).unwrap_log();
 
         if create_ignore {
-            let mut string: String = String::new();
-
-            for (file, lines) in ignore_map {
-                string.push_str(&file);
-                string.push('\n');
-
-                for line in lines {
-                    string.push_str(&line);
-                }
-            }
-
-            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+            write_ignore(ignore_map, output_path);
         }
 
         if logging {
@@ -1248,18 +1220,7 @@ pub fn purge_plugins<P: AsRef<Path>>(
         write(txt_output_path, output_content).unwrap_log();
 
         if create_ignore {
-            let mut string: String = String::new();
-
-            for (file, lines) in ignore_map {
-                string.push_str(&file);
-                string.push('\n');
-
-                for line in lines {
-                    string.push_str(&line);
-                }
-            }
-
-            write(output_path.as_ref().join(".rvpacker-ignore"), string).unwrap();
+            write_ignore(ignore_map, output_path);
         }
 
         if logging {
