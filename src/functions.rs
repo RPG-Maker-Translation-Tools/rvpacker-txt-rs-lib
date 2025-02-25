@@ -679,13 +679,11 @@ pub fn parse_ignore(
         let ignore_file_content: String = read_to_string(ignore_file_path).unwrap_log();
 
         for line in ignore_file_content.split('\n') {
-            let mut split = line.split(LINES_SEPARATOR);
-
-            if let Some((original, _)) = split.next().zip(split.last()) {
-                if original.starts_with("<!-- File") {
-                    map.insert(original.to_owned(), HashSet::default());
+            if !line.is_empty() {
+                if line.starts_with("<!-- File") {
+                    map.insert(line.to_owned(), HashSet::default());
                 } else {
-                    map.last_mut().unwrap().1.insert(original.to_owned());
+                    map.last_mut().unwrap().1.insert(line.to_owned());
                 }
             }
         }
