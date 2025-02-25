@@ -1,6 +1,6 @@
 use crate::{
     read_to_string_without_bom,
-    statics::localization::{CANNOT_GENERATE_JSON, JSON_ALREADY_EXIST},
+    statics::localization::{APPEND_MODE_IS_NOT_SUPPORTED, CANNOT_GENERATE_JSON, JSON_ALREADY_EXIST},
     types::{EngineType, OptionExt, ProcessingMode, ResultExt},
 };
 use marshal_rs::{dump, load, StringMode};
@@ -17,6 +17,11 @@ pub fn generate_json<P: AsRef<Path>>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
 ) {
+    if processing_mode == ProcessingMode::Append {
+        println!("{APPEND_MODE_IS_NOT_SUPPORTED}");
+        return;
+    }
+
     if output_path.as_ref().join("json").exists() && processing_mode != ProcessingMode::Force {
         println!("{JSON_ALREADY_EXIST}");
         return;

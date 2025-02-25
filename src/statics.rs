@@ -12,6 +12,7 @@ pub mod localization {
     pub const CANNOT_GENERATE_JSON: &str = "Can't generate json for MV/MZ engines, they're already json.";
 
     pub const PURGED_FILE_MSG: &str = "Purged unused lines from file";
+    pub const APPEND_MODE_IS_NOT_SUPPORTED: &str = "Append mode is not supported in `generate_json` function.";
 
     // write messages
     pub const WROTE_FILE_MSG: &str = "Wrote file";
