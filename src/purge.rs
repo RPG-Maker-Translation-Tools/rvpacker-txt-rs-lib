@@ -250,7 +250,7 @@ pub fn purge_map<P: AsRef<Path>>(
             for (map_number, map) in translation_maps.iter_mut() {
                 stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
 
-                let ignore_entry = ignore_map.entry(format!("<!-- File: {map_number} -->")).or_default();
+                let ignore_entry = ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
 
                 let mut to_remove: Vec<usize> = Vec::new();
 
@@ -283,7 +283,7 @@ pub fn purge_map<P: AsRef<Path>>(
         for (filename, obj) in obj_vec_iter {
             let map_number: u16 = parse_map_number(&filename);
             stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
-            let ignore_entry = ignore_map.entry(format!("<!-- File: Map{map_number} -->")).or_default();
+            let ignore_entry = ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
 
             if maps_processing_mode != MapsProcessingMode::Preserve {
                 translation_map = translation_maps.get_mut(&map_number).unwrap_log();
@@ -726,7 +726,7 @@ pub fn purge_system<P: AsRef<Path>>(
     stat_vec.push((String::from("<!-- System -->"), String::new()));
 
     let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: System -->")).or_default();
+    let ignore_entry = ignore_map.entry(String::from("<!-- File: system -->")).or_default();
 
     let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
     let translation: String = read_to_string(txt_output_path).unwrap_log();
@@ -961,7 +961,7 @@ pub fn purge_scripts<P: AsRef<Path>>(
     stat_vec.push((String::from("<!-- Scripts -->"), String::new()));
 
     let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: Scripts -->")).or_default();
+    let ignore_entry = ignore_map.entry(String::from("<!-- File: scripts -->")).or_default();
 
     let translation: String = read_to_string(txt_output_path).unwrap_log();
     translation_map.extend(parse_translation(&translation, "scripts.txt", false));
@@ -1148,7 +1148,7 @@ pub fn purge_plugins<P: AsRef<Path>>(
     stat_vec.push((String::from("<!-- Plugins -->"), String::new()));
 
     let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: Plugins -->")).or_default();
+    let ignore_entry = ignore_map.entry(String::from("<!-- File: plugins -->")).or_default();
 
     let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
     let translation: String = read_to_string(txt_output_path).unwrap_log();
@@ -1195,6 +1195,7 @@ pub fn purge_plugins<P: AsRef<Path>>(
             false,
             romanize,
             ProcessingMode::Default,
+            None,
         );
 
         let mut to_remove: Vec<usize> = Vec::new();
