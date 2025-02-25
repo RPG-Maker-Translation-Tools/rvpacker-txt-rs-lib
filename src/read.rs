@@ -77,21 +77,19 @@ fn parse_list<'a>(
             } else {
                 let absent: bool = set.insert(parsed.clone());
                 let pos: usize = if maps_processing_mode == Some(MapsProcessingMode::Default) {
-                    if absent {
-                        *lines_pos += 1;
-                    }
-
                     *lines_pos
                 } else {
                     set.len() - 1
                 };
 
                 if processing_mode == ProcessingMode::Append {
-                    if !map.contains_key(&parsed)
-                        && (matches!(maps_processing_mode, None | Some(MapsProcessingMode::Separate))
-                            || !set.contains(&parsed))
-                    {
-                        map.shift_insert(pos, parsed, String::new());
+                    if !map.contains_key(&parsed) {
+                        if maps_processing_mode == Some(MapsProcessingMode::Separate) && !set.contains(&parsed) {
+                            map.shift_insert(pos, parsed, String::new());
+                        } else if maps_processing_mode == Some(MapsProcessingMode::Default) && absent {
+                            map.shift_insert(pos, parsed, String::new());
+                            *lines_pos += 1;
+                        }
                     }
                 } else if maps_processing_mode == Some(MapsProcessingMode::Default) {
                     if absent {
@@ -228,7 +226,7 @@ pub fn read_map<P: AsRef<Path>>(
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
     // Reads the translation from existing .txt file and then appends new lines.
-    let translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
+    let mut translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
 
     // Allocated when maps processing mode is SEPARATE.
     let mut translation_maps: IndexMap<u16, IndexMapXxh3> = IndexMap::new();
@@ -311,7 +309,7 @@ pub fn read_map<P: AsRef<Path>>(
         let map_number: u16 = parse_map_number(&filename);
         let map_number_string: String = map_number.to_string();
 
-        let ignore_entry = ignore_map.get(&format!("<!-- File: map{map_number}"));
+        let ignore_entry = ignore_map.get(&format!("<!-- File: map{map_number} -->"));
 
         let map_number_comment: String = String::from("<!-- Map -->");
         let mut map_name_comment: String = String::new();
@@ -391,11 +389,14 @@ pub fn read_map<P: AsRef<Path>>(
                 lines_pos += 3;
             }
             (ProcessingMode::Append, MapsProcessingMode::Default | MapsProcessingMode::Separate) => {
-                let translation_maps_mut: &mut IndexMap<u16, IndexMapXxh3> =
-                    unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) };
+                match maps_processing_mode {
+                    MapsProcessingMode::Separate => lines_set.clear(),
+                    _ => lines_pos = 0,
+                }
 
-                let translation_map: &mut IndexMap<String, String, Xxh3DefaultBuilder> =
-                    translation_maps_mut.entry(map_number).or_insert_with(|| {
+                translation_map = unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) }
+                    .entry(map_number)
+                    .or_insert_with(|| {
                         let mut new_map = IndexMap::with_hasher(HASHER);
                         new_map.insert(map_number_comment.clone(), map_number_string.clone());
                         new_map
@@ -439,6 +440,7 @@ pub fn read_map<P: AsRef<Path>>(
                         translation,
                     );
                     map_number_comment_index += 1;
+                    lines_pos += 1;
                 }
 
                 if let Some(x) = translation_map.get(&order) {
@@ -449,10 +451,7 @@ pub fn read_map<P: AsRef<Path>>(
                     translation_map.shift_insert(map_number_comment_index + 1, order.clone(), order_number.clone());
                 }
 
-                match maps_processing_mode {
-                    MapsProcessingMode::Separate => lines_set.clear(),
-                    _ => lines_pos = 0,
-                }
+                lines_pos += 3;
             }
             (ProcessingMode::Append, MapsProcessingMode::Preserve) => {
                 let mut map_number_comment_index: usize = translation_map_vec
@@ -531,8 +530,8 @@ pub fn read_map<P: AsRef<Path>>(
                     engine_type,
                     processing_mode,
                     (code_label, parameters_label),
-                    unsafe { &mut *(translation_map as *mut IndexMapXxh3) },
-                    unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
+                    translation_map,
+                    &mut lines_set,
                     Some(&mut translation_map_vec),
                     &mut lines_pos,
                     Some(maps_processing_mode),
@@ -544,10 +543,6 @@ pub fn read_map<P: AsRef<Path>>(
         if logging {
             println!("{PARSED_FILE_MSG} {filename}");
         }
-    }
-
-    if maps_processing_mode != MapsProcessingMode::Preserve {
-        translation_maps.last_mut().unwrap().1.extend(translation_map.drain(..));
     }
 
     let mut output_content: String = match maps_processing_mode {
@@ -633,7 +628,6 @@ pub fn read_other<P: AsRef<Path>>(
 
         let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
         let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
-        let lines_ref: &IndexSetXxh3 = unsafe { &*(&mut lines_set as *mut IndexSetXxh3) };
 
         let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
 
@@ -729,10 +723,14 @@ pub fn read_other<P: AsRef<Path>>(
                             replaced = replaced.trim_replace();
 
                             lines_mut_ref.insert(replaced);
-                            let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
+                            let string_ref: &str = unsafe { lines_mut_ref.last().unwrap_unchecked() }.as_str();
 
                             if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
-                                translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+                                translation_map.shift_insert(
+                                    lines_mut_ref.len() - 1,
+                                    string_ref.to_owned(),
+                                    String::new(),
+                                );
                             }
                         } else if variable_type == Variable::Name {
                             continue 'obj;
