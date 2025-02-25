@@ -10,6 +10,7 @@ use std::{
     path::Path,
 };
 
+#[inline(always)]
 pub fn generate_json<P: AsRef<Path>>(
     original_path: P,
     output_path: P,
@@ -53,6 +54,7 @@ pub fn generate_json<P: AsRef<Path>>(
     }
 }
 
+#[inline(always)]
 pub fn write_json<P: AsRef<Path>>(root_dir: P) {
     let json_dir: &Path = &root_dir.as_ref().join("json");
 
