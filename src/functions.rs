@@ -635,29 +635,24 @@ pub fn parse_translation<'a>(
             return None;
         }
 
-        let mut split = line.split(LINES_SEPARATOR);
+        let split: Vec<&str> = line.split(LINES_SEPARATOR).collect();
 
-        let first: Option<&str> = split.next();
-        let mut last: Option<&str> = Some("");
+        if split.len() >= 2 {
+            let original: &str = split.first().unwrap();
+            let translation: &str = split.into_iter().skip(1).rfind(|x| !x.is_empty()).unwrap_or("");
 
-        for item in split {
-            if !item.is_empty() {
-                last = Some(item);
-            }
-        }
-
-        if let Some((original, translated)) = first.zip(last) {
             if write {
                 #[cfg(not(debug_assertions))]
-                if translated.is_empty() {
+                if translation.is_empty() {
                     return None;
                 }
+
                 Some((
                     original.replace(NEW_LINE, "\n").trim_replace(),
-                    translated.replace(NEW_LINE, "\n").trim_replace(),
+                    translation.replace(NEW_LINE, "\n").trim_replace(),
                 ))
             } else {
-                Some((original.to_owned(), translated.to_owned()))
+                Some((original.to_owned(), translation.to_owned()))
             }
         } else {
             eprintln!(

@@ -291,53 +291,41 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         let mut map_number: u16 = 0;
 
         for (i, line) in translation.split('\n').enumerate() {
-            if line == "<!-- Map -->" {
-                let mut split = line.split(LINES_SEPARATOR);
+            let parts: Vec<&str> = line.split(LINES_SEPARATOR).collect();
 
-                if let Some((original, translated)) = split.next().zip(split.last()) {
-                    if original.starts_with("<!-- In-game Displayed Name:") {
-                        let map_display_name: &str = unsafe {
-                            original
-                                .strip_prefix("<!-- In-game Displayed Name: ")
-                                .unwrap_unchecked()
-                                .strip_suffix(" -->")
-                                .unwrap_unchecked()
-                        };
+            if parts.len() >= 2 {
+                let original: &str = parts.first().unwrap();
+                let translation: &str = parts.into_iter().skip(1).rfind(|x| !x.is_empty()).unwrap_or("");
 
-                        names_map.insert(map_display_name.trim_replace(), translated.trim_replace());
-                    }
-
+                if original.starts_with("<!-- In-game Displayed Name:") {
+                    let map_display_name: &str = &original[29..original.len() - 4];
+                    names_map.insert(map_display_name.trim_replace(), translation.trim_replace());
+                } else if original == "<!-- Map -->" {
                     if maps_processing_mode == MapsProcessingMode::Separate && i > 0 {
                         translation_maps.insert(map_number, take(&mut translation_map));
                     }
 
-                    map_number = parse_map_number(translated);
-                } else {
-                    eprintln!("{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}", i = i + 1);
-                }
-            } else if !line.starts_with("<!--") {
-                let mut split = line.split(LINES_SEPARATOR);
-
-                if let Some((original, translated)) = split.next().zip(split.last()) {
+                    map_number = parse_map_number(translation);
+                } else if !line.starts_with("<!--") {
                     #[cfg(not(debug_assertions))]
-                    if translated.is_empty() {
+                    if translation.is_empty() {
                         continue;
                     }
 
                     if maps_processing_mode == MapsProcessingMode::Preserve {
-                        translation_deque.push_back(translated.replace(NEW_LINE, "\n").trim_replace());
+                        translation_deque.push_back(translation.replace(NEW_LINE, "\n").trim_replace());
                     } else {
                         translation_map.insert(
                             original.replace(NEW_LINE, "\n").trim_replace(),
-                            translated.replace(NEW_LINE, "\n").trim_replace(),
+                            translation.replace(NEW_LINE, "\n").trim_replace(),
                         );
                     }
-                } else {
-                    eprintln!(
-                        "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} maps.txt",
-                        i = i + 1
-                    );
                 }
+            } else {
+                eprintln!(
+                    "{COULD_NOT_SPLIT_LINE_MSG} ({line})\n{AT_POSITION_MSG} {i}\n{IN_FILE_MSG} maps.txt",
+                    i = i + 1,
+                );
             }
         }
 
