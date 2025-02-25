@@ -323,6 +323,17 @@ pub fn purge_map<P: AsRef<Path>>(
 
     if purge_empty {
         if maps_processing_mode == MapsProcessingMode::Preserve {
+            let mut to_remove: Vec<usize> = Vec::new();
+
+            for (i, (original, translation)) in translation_map_vec.iter().enumerate() {
+                if !original.starts_with("<!--") && translation.is_empty() {
+                    to_remove.push(i);
+                }
+            }
+
+            for item in to_remove.into_iter().rev() {
+                translation_map_vec.remove(item);
+            }
         } else {
             for (map_number, map) in translation_maps.iter_mut() {
                 stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
