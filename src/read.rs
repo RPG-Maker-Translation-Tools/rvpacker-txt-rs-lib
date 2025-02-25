@@ -46,6 +46,7 @@ fn parse_list<'a>(
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
     lines_pos: &mut usize,
     maps_processing_mode: Option<MapsProcessingMode>,
+    ignore_entry: Option<&HashSet<String, Xxh3DefaultBuilder>>,
 ) {
     let mut in_sequence: bool = false;
 
@@ -213,6 +214,7 @@ pub fn read_map<P: AsRef<Path>>(
     game_type: Option<GameType>,
     engine_type: EngineType,
     processing_mode: ProcessingMode,
+    ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("maps.txt");
 
@@ -237,12 +239,18 @@ pub fn read_map<P: AsRef<Path>>(
     // Used when maps processing mode is PRESERVE.
     let mut lines_pos: usize = 0;
 
+    let mut ignore_map: IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> =
+        IndexMap::with_hasher(HASHER);
+
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
+            if ignore {
+                ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+            }
+
             let translation: String = read_to_string(txt_output_path).unwrap_log();
             let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
                 parse_translation(&translation, "maps.txt", false);
-
             match maps_processing_mode {
                 MapsProcessingMode::Default | MapsProcessingMode::Separate => {
                     translation_maps.reserve(512);
@@ -302,6 +310,8 @@ pub fn read_map<P: AsRef<Path>>(
     for (filename, obj) in obj_vec_iter {
         let map_number: u16 = parse_map_number(&filename);
         let map_number_string: String = map_number.to_string();
+
+        let ignore_entry = ignore_map.get(&format!("<!-- File: map{map_number}"));
 
         let map_number_comment: String = String::from("<!-- Map -->");
         let mut map_name_comment: String = String::new();
@@ -526,6 +536,7 @@ pub fn read_map<P: AsRef<Path>>(
                     Some(&mut translation_map_vec),
                     &mut lines_pos,
                     Some(maps_processing_mode),
+                    ignore_entry,
                 );
             }
         }
@@ -579,6 +590,7 @@ pub fn read_other<P: AsRef<Path>>(
     game_type: Option<GameType>,
     processing_mode: ProcessingMode,
     engine_type: EngineType,
+    ignore: bool,
 ) {
     let obj_arr_iter = read_dir(original_path)
         .unwrap_log()
@@ -599,6 +611,12 @@ pub fn read_other<P: AsRef<Path>>(
         parameters_label,
     ) = get_other_labels(engine_type);
 
+    let mut ignore_map: IgnoreMap = IndexMap::default();
+
+    if ignore {
+        ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+    }
+
     for (filename, obj_arr) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
         let txt_filename: String = basename.clone() + ".txt";
@@ -610,6 +628,8 @@ pub fn read_other<P: AsRef<Path>>(
             });
             continue;
         }
+
+        let ignore_entry = ignore_map.get(&format!("<!-- File: {basename} -->"));
 
         let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
         let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
@@ -774,6 +794,7 @@ pub fn read_other<P: AsRef<Path>>(
                         None,
                         &mut 0,
                         None,
+                        ignore_entry,
                     );
                 }
             }
@@ -815,6 +836,7 @@ pub fn read_system<P: AsRef<Path>>(
     logging: bool,
     processing_mode: ProcessingMode,
     engine_type: EngineType,
+    ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
 
@@ -822,6 +844,8 @@ pub fn read_system<P: AsRef<Path>>(
         println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
+
+    let mut ignore_map: IgnoreMap = IndexMap::default();
 
     let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
     let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
@@ -831,6 +855,10 @@ pub fn read_system<P: AsRef<Path>>(
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
+            if ignore {
+                ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+            }
+
             let translation: String = read_to_string(txt_output_path).unwrap_log();
 
             translation_map.extend(parse_translation(&translation, "system.txt", false));
@@ -839,6 +867,8 @@ pub fn read_system<P: AsRef<Path>>(
             return;
         }
     }
+
+    let ignore_entry = ignore_map.get("<!-- File: system -->");
 
     let mut parse_str = |value: &Value| {
         let mut string: String = {
@@ -864,6 +894,12 @@ pub fn read_system<P: AsRef<Path>>(
 
         if romanize {
             string = romanize_string(string)
+        }
+
+        if let Some(entry) = ignore_entry {
+            if entry.contains(&string) {
+                return;
+            }
         }
 
         lines_mut_ref.insert(string);
@@ -993,6 +1029,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     processing_mode: ProcessingMode,
+    ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
@@ -1001,11 +1038,17 @@ pub fn read_scripts<P: AsRef<Path>>(
         return;
     }
 
+    let mut ignore_map: IgnoreMap = IndexMap::default();
+
     let mut lines_vec: Vec<String> = Vec::new();
     let mut translation_map: Vec<(String, String)> = Vec::new();
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
+            if ignore {
+                ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+            }
+
             let translation: String = read_to_string(txt_output_path).unwrap_log();
             translation_map.extend(parse_translation(&translation, "scripts.txt", false));
         } else {
@@ -1013,6 +1056,8 @@ pub fn read_scripts<P: AsRef<Path>>(
             return;
         }
     }
+
+    let ignore_entry = ignore_map.get("<!-- File: scripts -->");
 
     let scripts_entries: Value = load(
         &read(scripts_file_path.as_ref()).unwrap_log(),
@@ -1084,6 +1129,12 @@ pub fn read_scripts<P: AsRef<Path>>(
             extracted = romanize_string(extracted);
         }
 
+        if let Some(entry) = ignore_entry {
+            if entry.contains(&extracted) {
+                return;
+            }
+        }
+
         lines_vec.push(extracted);
         let last: &String = unsafe { lines_vec.last().unwrap_unchecked() };
         let pos: usize = lines_vec.len() - 1;
@@ -1126,6 +1177,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     romanize: bool,
     logging: bool,
     processing_mode: ProcessingMode,
+    ignore: bool,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
@@ -1134,10 +1186,16 @@ pub fn read_plugins<P: AsRef<Path>>(
         return;
     }
 
+    let mut ignore_map: IgnoreMap = IndexMap::default();
+
     let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
     let translation: String;
 
     if processing_mode == ProcessingMode::Append {
+        if ignore {
+            ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+        }
+
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
             translation_map.extend(parse_translation(&translation, "plugins.txt", false));
@@ -1146,6 +1204,8 @@ pub fn read_plugins<P: AsRef<Path>>(
             return;
         }
     }
+
+    let ignore_entry = ignore_map.get("<!-- File: plugins -->");
 
     let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
 
@@ -1167,6 +1227,7 @@ pub fn read_plugins<P: AsRef<Path>>(
         false,
         romanize,
         processing_mode,
+        ignore_entry,
     );
 
     let mut output_content: String = if processing_mode == ProcessingMode::Append {
