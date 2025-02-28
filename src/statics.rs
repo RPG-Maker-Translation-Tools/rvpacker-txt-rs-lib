@@ -1,5 +1,4 @@
 use phf::phf_set;
-use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 pub mod localization {
     // read messages
@@ -65,5 +64,3 @@ pub static ENCODINGS: [&encoding_rs::Encoding; 5] = [
     encoding_rs::SHIFT_JIS,
     encoding_rs::GB18030,
 ];
-
-pub const HASHER: Xxh3DefaultBuilder = Xxh3DefaultBuilder::new();

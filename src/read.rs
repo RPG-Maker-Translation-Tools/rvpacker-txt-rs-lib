@@ -5,33 +5,33 @@ use crate::{
     determine_extension,
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, is_allowed_code, parse_ignore, parse_map_number, parse_translation, process_parameter,
-        process_variable, romanize_string, string_is_only_symbols, traverse_json,
+        get_system_labels, is_allowed_code, parse_ignore, parse_map_number, parse_rpgm_file, parse_translation,
+        process_parameter, process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
-    read_to_string_without_bom,
     statics::{
         localization::{FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG, PARSED_FILE_MSG},
-        ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
+        ENCODINGS, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, IgnoreMap, IndexMapXxh3, IndexSetXxh3, MapsProcessingMode, OptionExt,
+        Code, EngineType, GameType, IgnoreEntry, IgnoreMap, IndexMapGx, IndexSetGx, MapsProcessingMode, OptionExt,
         ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
 use flate2::read::ZlibDecoder;
+use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use marshal_rs::{load, StringMode};
 use regex::Regex;
+use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, prelude::*, Array, Value};
 use std::{
     cell::UnsafeCell,
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
     mem::{take, transmute},
     path::{Path, PathBuf},
 };
-use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 #[inline(always)]
 fn parse_list<'a>(
@@ -41,17 +41,17 @@ fn parse_list<'a>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
     (code_label, parameters_label): (&str, &str),
-    map: &'a mut IndexMapXxh3,
-    set: &'a mut IndexSetXxh3,
+    map: &'a mut IndexMapGx,
+    set: &'a mut IndexSetGx,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
     lines_pos: &mut usize,
     maps_processing_mode: Option<MapsProcessingMode>,
-    ignore_entry: Option<&HashSet<String, Xxh3DefaultBuilder>>,
+    ignore_entry: Option<&IgnoreEntry>,
 ) {
     let mut in_sequence: bool = false;
 
-    let mut lines_vec: Vec<&str> = Vec::with_capacity(4);
-    let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
+    let mut lines_vec: SmallVec<[&str; 4]> = SmallVec::with_capacity(4);
+    let buf: UnsafeCell<SmallVec<[Vec<u8>; 4]>> = UnsafeCell::new(SmallVec::with_capacity(4));
 
     let mut process_parameter = |code: Code, parameter: &str| {
         if let Some(parsed) = process_parameter(code, parameter, game_type, engine_type, romanize, None, None, false) {
@@ -192,6 +192,125 @@ fn parse_list<'a>(
     }
 }
 
+#[inline]
+fn get_order_number(mapinfos: &Value, entry: &str, map_number: u16, engine_type: EngineType) -> String {
+    if engine_type == EngineType::New {
+        &mapinfos[map_number as usize]["order"]
+    } else {
+        &mapinfos[entry]["__symbol__order"]
+    }
+    .as_u64()
+    .unwrap_log()
+    .to_string()
+}
+
+#[inline]
+fn get_map_name(mapinfos: &Value, entry: &str, map_number: u16, engine_type: EngineType) -> String {
+    if engine_type == EngineType::New {
+        &mapinfos[map_number as usize]["name"]
+    } else {
+        &mapinfos[&entry]["__symbol__name"]
+    }
+    .as_str()
+    .unwrap_log()
+    .to_string()
+}
+
+#[inline]
+fn find_starting_comment<'a, I: Iterator<Item = (&'a String, &'a String)>>(
+    iterable: I,
+    n: usize,
+    str: &str,
+) -> Option<usize> {
+    iterable.skip(n).take(4).position(|(k, _)| k.starts_with(str))
+}
+
+#[inline]
+fn process_map_comments(
+    translation_map: &mut IndexMapGx,
+    map_number_comment_index: &mut usize,
+    map_name_comment: &str,
+    map_display_name_comment: &str,
+    lines_pos: &mut usize,
+) {
+    if !map_name_comment.is_empty() && !translation_map.contains_key(map_name_comment) {
+        if let Some(index) = find_starting_comment(translation_map.iter(), *lines_pos, "<!-- Map Name") {
+            translation_map.shift_remove_index(index);
+        }
+
+        translation_map.shift_insert(
+            *map_number_comment_index + 1,
+            map_name_comment.to_string(),
+            String::new(),
+        );
+        *map_number_comment_index += 1;
+    }
+
+    if !map_display_name_comment.is_empty() && !translation_map.contains_key(map_display_name_comment) {
+        let mut translation: String = String::new();
+
+        if let Some(index) = find_starting_comment(translation_map.iter(), *lines_pos, "<!-- In-game") {
+            if let Some((_, t)) = translation_map.shift_remove_index(index) {
+                translation = t
+            }
+        }
+
+        translation_map.shift_insert(
+            *map_number_comment_index + 1,
+            map_display_name_comment.to_string(),
+            translation,
+        );
+        *map_number_comment_index += 1;
+        *lines_pos += 1;
+    }
+}
+
+#[inline]
+fn process_map_comments_vec(
+    translation_map_vec: &mut Vec<(String, String)>,
+    map_number_comment_index: &mut usize,
+    lines_pos: usize,
+    map_name_comment: &str,
+    map_display_name_comment: &str,
+) {
+    if !map_name_comment.is_empty() {
+        if let Some(index) = find_starting_comment(
+            translation_map_vec.iter().map(|(a, b)| (a, b)),
+            lines_pos,
+            "<!-- Map Name",
+        ) {
+            translation_map_vec.remove(index);
+        }
+
+        translation_map_vec.insert(
+            *map_number_comment_index + 1,
+            (map_name_comment.to_string(), String::new()),
+        );
+        *map_number_comment_index += 1;
+    }
+
+    if !map_display_name_comment.is_empty() {
+        let mut translation: String = String::new();
+
+        if let Some(index) = find_starting_comment(
+            translation_map_vec.iter().map(|(a, b)| (a, b)),
+            lines_pos,
+            "<!-- In-game",
+        ) {
+            if translation_map_vec.get(index).is_some() {
+                let (_, t) = translation_map_vec.remove(index);
+                translation = t;
+            }
+        }
+
+        translation_map_vec.insert(
+            *map_number_comment_index + 1,
+            (map_display_name_comment.to_string(), translation),
+        );
+        *map_number_comment_index += 1;
+    }
+}
+
 /// Reads all Map files of original_path and parses them into .txt files in `output_path`.
 /// # Parameters
 /// * `original_path` - path to directory that contains game files
@@ -222,14 +341,14 @@ pub fn read_map<P: AsRef<Path>>(
     }
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
-    let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+    let mut lines_set: IndexSetGx = IndexSet::default();
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
     // Reads the translation from existing .txt file and then appends new lines.
-    let mut translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
+    let mut translation_map: &mut IndexMapGx = &mut IndexMap::default();
 
     // Allocated when maps processing mode is SEPARATE.
-    let mut translation_maps: IndexMap<u16, IndexMapXxh3> = IndexMap::new();
+    let mut translation_maps: IndexMap<u16, IndexMapGx> = IndexMap::new();
 
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
@@ -237,8 +356,7 @@ pub fn read_map<P: AsRef<Path>>(
     // Used when maps processing mode is PRESERVE.
     let mut lines_pos: usize = 0;
 
-    let mut ignore_map: IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> =
-        IndexMap::with_hasher(HASHER);
+    let mut ignore_map: IndexMap<String, IgnoreEntry, GxBuildHasher> = IndexMap::default();
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
@@ -249,11 +367,12 @@ pub fn read_map<P: AsRef<Path>>(
             let translation: String = read_to_string(txt_output_path).unwrap_log();
             let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
                 parse_translation(&translation, "maps.txt", false);
+
             match maps_processing_mode {
                 MapsProcessingMode::Default | MapsProcessingMode::Separate => {
                     translation_maps.reserve(512);
 
-                    let mut map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+                    let mut map: IndexMapGx = IndexMap::default();
                     let mut map_number: u16 = u16::MAX;
                     let mut prev_map: String = String::new();
 
@@ -263,18 +382,15 @@ pub fn read_map<P: AsRef<Path>>(
                                 if translation != prev_map {
                                     translation_maps.insert(map_number, take(&mut map));
                                 }
-
-                                map.insert(original.clone(), translation.clone());
                             } else {
                                 translation_maps.insert(map_number, take(&mut map));
-                                map.insert(original.clone(), translation.clone());
                             }
 
                             map_number = parse_map_number(&translation);
-                            prev_map = translation;
-                        } else {
-                            map.insert(original, translation);
+                            prev_map = translation.clone();
                         }
+
+                        map.insert(original, translation);
                     }
 
                     if !map.is_empty() {
@@ -295,17 +411,14 @@ pub fn read_map<P: AsRef<Path>>(
     let mapinfos_path: PathBuf = original_path
         .as_ref()
         .join("MapInfos".to_owned() + determine_extension(engine_type));
-    let mapinfos: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string(mapinfos_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(mapinfos_path).unwrap_log(), Some(StringMode::UTF8), None).unwrap_log()
-    };
+    let mapinfos: Value = parse_rpgm_file(&mapinfos_path, engine_type);
 
-    let obj_vec_iter = read_dir(original_path)
+    let maps_iter = read_dir(original_path)
         .unwrap_log()
         .filter_map(|entry| filter_maps(entry, engine_type));
 
-    for (filename, obj) in obj_vec_iter {
+    for (filename, path) in maps_iter {
+        let obj: Value = parse_rpgm_file(&path, engine_type);
         let map_number: u16 = parse_map_number(&filename);
         let map_number_string: String = map_number.to_string();
 
@@ -314,33 +427,14 @@ pub fn read_map<P: AsRef<Path>>(
         let map_number_comment: String = String::from("<!-- Map -->");
         let mut map_name_comment: String = String::new();
 
-        let order_number: String = {
-            let entry: String = format!("__integer__{map_number}");
+        let entry: String = format!("__integer__{map_number}");
 
-            let order_number: String = if engine_type == EngineType::New {
-                &mapinfos[map_number as usize]["order"]
-            } else {
-                &mapinfos[&entry]["__symbol__@order"]
-            }
-            .as_u64()
-            .unwrap_log()
-            .to_string();
+        let order_number: String = get_order_number(&mapinfos, &entry, map_number, engine_type);
+        let map_name: String = get_map_name(&mapinfos, &entry, map_number, engine_type);
 
-            let map_name: String = if engine_type == EngineType::New {
-                &mapinfos[map_number as usize]["name"]
-            } else {
-                &mapinfos[&entry]["__symbol__@name"]
-            }
-            .as_str()
-            .unwrap_log()
-            .to_string();
-
-            if !map_name.is_empty() {
-                map_name_comment = format!("<!-- Map Name: {map_name} -->");
-            }
-
-            order_number
-        };
+        if !map_name.is_empty() {
+            map_name_comment = format!("<!-- Map Name: {map_name} -->");
+        }
 
         let mut map_display_name_comment: String = String::new();
 
@@ -355,6 +449,9 @@ pub fn read_map<P: AsRef<Path>>(
                 map_display_name_comment = format!("<!-- In-game Displayed Name: {display_name_string} -->");
             }
         }
+
+        let map_display_name_comment_clone: String = map_display_name_comment.clone();
+
         let order: String = String::from("<!-- Order -->");
 
         match (processing_mode, maps_processing_mode) {
@@ -362,14 +459,14 @@ pub fn read_map<P: AsRef<Path>>(
                 ProcessingMode::Default | ProcessingMode::Force,
                 MapsProcessingMode::Default | MapsProcessingMode::Separate,
             ) => {
-                translation_map.insert(map_number_comment.clone(), map_number_string.clone());
-                translation_map.insert(map_name_comment.clone(), String::new());
+                translation_map.insert(map_number_comment, map_number_string);
+                translation_map.insert(map_name_comment, String::new());
 
                 if !map_display_name_comment.is_empty() {
-                    translation_map.insert(map_display_name_comment.clone(), String::new());
+                    translation_map.insert(map_display_name_comment, String::new());
                 }
 
-                translation_map.insert(order.clone(), order_number.clone());
+                translation_map.insert(order, order_number);
                 translation_maps.insert(map_number, take(translation_map));
 
                 if maps_processing_mode == MapsProcessingMode::Separate {
@@ -377,15 +474,15 @@ pub fn read_map<P: AsRef<Path>>(
                 }
             }
             (ProcessingMode::Default | ProcessingMode::Force, MapsProcessingMode::Preserve) => {
-                translation_map_vec.push((map_number_comment.clone(), map_number_string.clone()));
-                translation_map_vec.push((map_name_comment.clone(), String::new()));
+                translation_map_vec.push((map_number_comment, map_number_string));
+                translation_map_vec.push((map_name_comment, String::new()));
 
                 if !map_display_name_comment.is_empty() {
-                    translation_map_vec.push((map_display_name_comment.clone(), String::new()));
+                    translation_map_vec.push((map_display_name_comment, String::new()));
                     lines_pos += 1;
                 }
 
-                translation_map_vec.push((order.clone(), order_number.clone()));
+                translation_map_vec.push((order, order_number));
                 lines_pos += 3;
             }
             (ProcessingMode::Append, MapsProcessingMode::Default | MapsProcessingMode::Separate) => {
@@ -394,11 +491,11 @@ pub fn read_map<P: AsRef<Path>>(
                     _ => lines_pos = 0,
                 }
 
-                translation_map = unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapXxh3>) }
+                translation_map = unsafe { &mut *(&mut translation_maps as *mut IndexMap<u16, IndexMapGx>) }
                     .entry(map_number)
                     .or_insert_with(|| {
-                        let mut new_map = IndexMap::with_hasher(HASHER);
-                        new_map.insert(map_number_comment.clone(), map_number_string.clone());
+                        let mut new_map = IndexMap::default();
+                        new_map.insert(map_number_comment, map_number_string);
                         new_map
                     });
 
@@ -406,49 +503,22 @@ pub fn read_map<P: AsRef<Path>>(
                     .iter()
                     .take(4)
                     .position(|(k, _)| k == "<!-- Map -->")
-                    .unwrap();
+                    .unwrap_log();
 
-                if !map_name_comment.is_empty() && !translation_map.contains_key(&map_name_comment) {
-                    if let Some(index) = translation_map
-                        .iter()
-                        .take(4)
-                        .position(|(k, _)| k.starts_with("<!-- Map Name"))
-                    {
-                        translation_map.shift_remove_index(index);
-                    }
-
-                    translation_map.shift_insert(map_number_comment_index + 1, map_name_comment, String::new());
-                    map_number_comment_index += 1;
-                }
-
-                if !map_display_name_comment.is_empty() && !translation_map.contains_key(&map_display_name_comment) {
-                    let mut translation: String = String::new();
-
-                    if let Some(index) = translation_map
-                        .iter()
-                        .take(4)
-                        .position(|(k, _)| k.starts_with("<!-- In-game"))
-                    {
-                        if let Some((_, t)) = translation_map.shift_remove_index(index) {
-                            translation = t
-                        }
-                    }
-
-                    translation_map.shift_insert(
-                        map_number_comment_index + 1,
-                        map_display_name_comment.clone(),
-                        translation,
-                    );
-                    map_number_comment_index += 1;
-                    lines_pos += 1;
-                }
+                process_map_comments(
+                    translation_map,
+                    &mut map_number_comment_index,
+                    &map_name_comment,
+                    &map_display_name_comment,
+                    &mut lines_pos,
+                );
 
                 if let Some(x) = translation_map.get(&order) {
                     if *x != order_number {
-                        translation_map.insert(order.clone(), order_number.clone());
+                        translation_map.insert(order, order_number);
                     }
                 } else {
-                    translation_map.shift_insert(map_number_comment_index + 1, order.clone(), order_number.clone());
+                    translation_map.shift_insert(map_number_comment_index + 1, order, order_number);
                 }
 
                 lines_pos += 3;
@@ -459,49 +529,23 @@ pub fn read_map<P: AsRef<Path>>(
                     .skip(lines_pos)
                     .take(4)
                     .position(|(k, _)| k == "<!-- Map -->")
-                    .unwrap();
+                    .unwrap_log();
 
-                if !map_name_comment.is_empty() {
-                    if let Some(index) = translation_map_vec
-                        .iter()
-                        .take(4)
-                        .position(|(k, _)| k.starts_with("<!-- Map Name"))
-                    {
-                        translation_map_vec.remove(index);
-                    }
+                process_map_comments_vec(
+                    &mut translation_map_vec,
+                    &mut map_number_comment_index,
+                    lines_pos,
+                    &map_name_comment,
+                    &map_display_name_comment,
+                );
 
-                    translation_map_vec.insert(map_number_comment_index + 1, (map_name_comment, String::new()));
-                    map_number_comment_index += 1;
-                }
-
-                if !map_display_name_comment.is_empty() {
-                    let mut translation: String = String::new();
-
-                    if let Some(index) = translation_map_vec
-                        .iter()
-                        .take(4)
-                        .position(|(k, _)| k.starts_with("<!-- In-game"))
-                    {
-                        if translation_map_vec.get(index).is_some() {
-                            let (_, t) = translation_map_vec.remove(index);
-                            translation = t;
-                        }
-                    }
-
-                    translation_map_vec.insert(
-                        map_number_comment_index + 1,
-                        (map_display_name_comment.clone(), translation),
-                    );
-                    map_number_comment_index += 1;
-                }
-
-                translation_map_vec.insert(map_number_comment_index + 1, (order.clone(), order_number.clone()));
+                translation_map_vec.insert(map_number_comment_index + 1, (order, order_number));
                 lines_pos += 3;
             }
         }
 
-        if maps_processing_mode != MapsProcessingMode::Preserve && !map_display_name_comment.is_empty() {
-            lines_set.insert(map_display_name_comment);
+        if maps_processing_mode != MapsProcessingMode::Preserve && !map_display_name_comment_clone.is_empty() {
+            lines_set.insert(map_display_name_comment_clone);
             lines_pos += 1;
         }
 
@@ -612,24 +656,22 @@ pub fn read_other<P: AsRef<Path>>(
         ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
     }
 
-    for (filename, obj_arr) in obj_arr_iter {
+    for (filename, path) in obj_arr_iter {
         let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
         let txt_filename: String = basename.clone() + ".txt";
         let txt_output_path: &Path = &output_path.as_ref().join(txt_filename.clone());
 
         if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
-            println!("{:?} {FILE_ALREADY_EXISTS_MSG}", unsafe {
-                txt_output_path.file_name().unwrap_unchecked()
-            });
+            println!("{txt_filename} {FILE_ALREADY_EXISTS_MSG}",);
             continue;
         }
 
         let ignore_entry = ignore_map.get(&format!("<!-- File: {basename} -->"));
 
-        let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
-        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
+        let mut lines_set: IndexSetGx = IndexSet::default();
+        let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *(&mut lines_set as *mut IndexSetGx) };
 
-        let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+        let mut translation_map: IndexMapGx = IndexMap::default();
 
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
@@ -641,11 +683,12 @@ pub fn read_other<P: AsRef<Path>>(
             }
         }
 
+        let obj_arr: Value = parse_rpgm_file(&path, engine_type);
+
         // Other files except CommonEvents and Troops have the structure that consists
         // of name, nickname, description and note
         if !filename.starts_with("Co") && !filename.starts_with("Tr") {
-            if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina) && filename.starts_with("It")
-            {
+            if game_type == Some(GameType::Termina) && filename.starts_with("It") {
                 lines_mut_ref.extend([
                     String::from("<Menu Category: Items>"),
                     String::from("<Menu Category: Food>"),
@@ -750,13 +793,7 @@ pub fn read_other<P: AsRef<Path>>(
                     1
                 };
 
-                let commonevent_name: &str = obj[if engine_type == EngineType::New {
-                    "name"
-                } else {
-                    "__symbol__name"
-                }]
-                .as_str()
-                .unwrap_log();
+                let commonevent_name: &str = obj[&name_label].as_str().unwrap_log();
 
                 if !commonevent_name.is_empty() {
                     let event_name_comment: String = format!("<!-- Event Name: {commonevent_name} -->");
@@ -787,7 +824,7 @@ pub fn read_other<P: AsRef<Path>>(
                         engine_type,
                         processing_mode,
                         (code_label, parameters_label),
-                        unsafe { &mut *(&mut translation_map as *mut IndexMapXxh3) },
+                        unsafe { &mut *(&mut translation_map as *mut IndexMapGx) },
                         lines_mut_ref,
                         None,
                         &mut 0,
@@ -798,14 +835,13 @@ pub fn read_other<P: AsRef<Path>>(
             }
         }
 
-        let mut output_content: String = if processing_mode == ProcessingMode::Append {
-            String::from_iter(
+        let mut output_content: String = match processing_mode {
+            ProcessingMode::Append => String::from_iter(
                 translation_map
                     .into_iter()
                     .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-            )
-        } else {
-            String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+            ),
+            _ => String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n")),
         };
 
         output_content.pop();
@@ -845,11 +881,11 @@ pub fn read_system<P: AsRef<Path>>(
 
     let mut ignore_map: IgnoreMap = IndexMap::default();
 
-    let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
-    let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) };
-    let lines_ref: &IndexSetXxh3 = unsafe { &*(&lines_set as *const IndexSetXxh3) };
+    let mut lines_set: IndexSetGx = IndexSet::default();
+    let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *(&mut lines_set as *mut IndexSetGx) };
+    let lines_ref: &IndexSetGx = unsafe { &*(&lines_set as *const IndexSetGx) };
 
-    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+    let mut translation_map: IndexMapGx = IndexMap::default();
 
     if processing_mode == ProcessingMode::Append {
         if txt_output_path.exists() {
@@ -858,7 +894,6 @@ pub fn read_system<P: AsRef<Path>>(
             }
 
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-
             translation_map.extend(parse_translation(&translation, "system.txt", false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
@@ -911,11 +946,7 @@ pub fn read_system<P: AsRef<Path>>(
     let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
         get_system_labels(engine_type);
 
-    let obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-    };
+    let obj: Value = parse_rpgm_file(system_file_path.as_ref(), engine_type);
 
     // Armor types and elements - mostly system strings, but may be required for some purposes
     for label in [
@@ -943,7 +974,7 @@ pub fn read_system<P: AsRef<Path>>(
                 for value in arr {
                     parse_str(value);
                 }
-            } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes")) || value.is_str() {
+            } else if (value.is_object() && value["__type"].as_str() == Some("bytes")) || value.is_str() {
                 parse_str(value)
             }
         } else {
@@ -992,14 +1023,13 @@ pub fn read_system<P: AsRef<Path>>(
         }
     }
 
-    let mut output_content: String = if processing_mode == ProcessingMode::Append {
-        String::from_iter(
+    let mut output_content: String = match processing_mode {
+        ProcessingMode::Append => String::from_iter(
             translation_map
                 .into_iter()
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-        )
-    } else {
-        String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+        ),
+        _ => String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n")),
     };
 
     output_content.pop();
@@ -1007,9 +1037,7 @@ pub fn read_system<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {:?}", unsafe {
-            system_file_path.as_ref().file_name().unwrap_unchecked()
-        });
+        println!("{PARSED_FILE_MSG} System{}", determine_extension(engine_type))
     }
 }
 
@@ -1026,6 +1054,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     output_path: P,
     romanize: bool,
     logging: bool,
+    engine_type: EngineType,
     processing_mode: ProcessingMode,
     ignore: bool,
 ) {
@@ -1088,7 +1117,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     }
 
     let codes_text: String = codes_content.join("");
-    let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
+    let extracted_strings: IndexSetGx = extract_strings(&codes_text, false).0;
 
     let regexes: [Regex; 5] = unsafe {
         [
@@ -1142,14 +1171,13 @@ pub fn read_scripts<P: AsRef<Path>>(
         }
     }
 
-    let mut output_content: String = if processing_mode == ProcessingMode::Append {
-        String::from_iter(
+    let mut output_content: String = match processing_mode {
+        ProcessingMode::Append => String::from_iter(
             translation_map
                 .into_iter()
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-        )
-    } else {
-        String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+        ),
+        _ => String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n")),
     };
 
     output_content.pop();
@@ -1157,9 +1185,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {:?}", unsafe {
-            scripts_file_path.as_ref().file_name().unwrap_unchecked()
-        });
+        println!("{PARSED_FILE_MSG} Scripts{}", determine_extension(engine_type))
     }
 }
 
@@ -1203,7 +1229,7 @@ pub fn read_plugins<P: AsRef<Path>>(
         }
     }
 
-    let ignore_entry = ignore_map.get("<!-- File: plugins -->");
+    let ignore_entry: Option<&IgnoreEntry> = ignore_map.get("<!-- File: plugins -->");
 
     let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
 
@@ -1228,14 +1254,13 @@ pub fn read_plugins<P: AsRef<Path>>(
         ignore_entry,
     );
 
-    let mut output_content: String = if processing_mode == ProcessingMode::Append {
-        String::from_iter(
+    let mut output_content: String = match processing_mode {
+        ProcessingMode::Append => String::from_iter(
             translation_map
                 .into_iter()
                 .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
-        )
-    } else {
-        String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n"))
+        ),
+        _ => String::from_iter(lines_vec.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n")),
     };
 
     output_content.pop();
@@ -1243,8 +1268,6 @@ pub fn read_plugins<P: AsRef<Path>>(
     write(txt_output_path, output_content).unwrap_log();
 
     if logging {
-        println!("{PARSED_FILE_MSG} {:?}", unsafe {
-            plugins_file_path.as_ref().file_name().unwrap_unchecked()
-        });
+        println!("{PARSED_FILE_MSG} plugins.js")
     }
 }

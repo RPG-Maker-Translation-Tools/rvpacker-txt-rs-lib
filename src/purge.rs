@@ -4,31 +4,33 @@ use crate::println;
 use crate::{
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, is_allowed_code, parse_ignore, parse_map_number, parse_translation, process_parameter,
+        get_system_labels, is_allowed_code, parse_map_number, parse_rpgm_file, parse_translation, process_parameter,
         process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
-    read_to_string_without_bom,
-    statics::{localization::PURGED_FILE_MSG, ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE},
+    statics::{localization::PURGED_FILE_MSG, ENCODINGS, LINES_SEPARATOR, NEW_LINE},
     types::{
-        Code, EngineType, GameType, IgnoreMap, IndexMapXxh3, IndexSetXxh3, MapsProcessingMode, OptionExt,
+        Code, EngineType, GameType, IgnoreEntry, IgnoreMap, IndexMapGx, IndexSetGx, MapsProcessingMode, OptionExt,
         ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
 use flate2::read::ZlibDecoder;
+use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use marshal_rs::{load, StringMode};
 use regex::Regex;
+use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, prelude::*, Array, Value};
 use std::{
     cell::UnsafeCell,
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs::{read, read_dir, read_to_string, write},
     io::Read,
     mem::{take, transmute},
     path::Path,
 };
 
-fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
+#[inline]
+pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
     use std::fmt::Write;
 
     let contents: String = ignore_map.into_iter().fold(String::new(), |mut output, (file, lines)| {
@@ -48,6 +50,19 @@ fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
     write(output_path.as_ref().join(".rvpacker-ignore"), contents).unwrap();
 }
 
+#[inline]
+pub fn write_stat<P: AsRef<Path>>(stat_vec: Vec<(String, String)>, output_path: P) {
+    write(
+        output_path.as_ref().join("stat.txt"),
+        String::from_iter(
+            stat_vec
+                .into_iter()
+                .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+        ),
+    )
+    .unwrap_log();
+}
+
 #[inline(always)]
 fn parse_list(
     list: &Array,
@@ -55,18 +70,18 @@ fn parse_list(
     game_type: Option<GameType>,
     engine_type: EngineType,
     (code_label, parameters_label): (&str, &str),
-    set_mut_ref: &mut IndexSetXxh3,
+    set_mut_ref: &mut IndexSetGx,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
 
-    let mut lines: Vec<&str> = Vec::with_capacity(4);
-    let buf: UnsafeCell<Vec<Vec<u8>>> = UnsafeCell::new(Vec::with_capacity(4));
+    let mut lines: SmallVec<[&str; 4]> = SmallVec::with_capacity(4);
+    let buf: UnsafeCell<SmallVec<[Vec<u8>; 4]>> = UnsafeCell::new(SmallVec::with_capacity(4));
 
     let mut process_parameter = |code: Code, parameter: &str| {
         if let Some(parsed) = process_parameter(code, parameter, game_type, engine_type, romanize, None, None, false) {
-            if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
+            if maps_processing_mode == Some(MapsProcessingMode::Preserve) {
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
                 vec.push((parsed, String::new()));
             } else {
@@ -189,28 +204,27 @@ pub fn purge_map<P: AsRef<Path>>(
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    ignore_map: &mut IgnoreMap,
+    stat_vec: &mut Vec<(String, String)>,
 ) {
-    let translation_path: &Path = &output_path.as_ref().join("maps.txt");
+    let txt_file_path: &Path = &output_path.as_ref().join("maps.txt");
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
-    let mut lines_set: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
+    let mut lines_set: IndexSetGx = IndexSet::default();
 
     // Allocated when maps processing mode is DEFAULT or SEPARATE.
     // Reads the translation from existing .txt file and then appends new lines.
-    let mut translation_map: &mut IndexMapXxh3 = &mut IndexMap::with_hasher(HASHER);
+    let mut translation_map: &mut IndexMapGx = &mut IndexMap::default();
 
     // Allocated when maps processing mode is SEPARATE.
-    let mut translation_maps: IndexMap<u16, IndexMapXxh3> = IndexMap::new();
+    let mut translation_maps: IndexMap<u16, IndexMapGx> = IndexMap::new();
 
     // Allocated when maps processing mode is PRESERVE or SEPARATE.
     let mut translation_map_vec: Vec<(String, String)> = Vec::new(); // This map is implemented via Vec<Tuple> because required to preserve duplicates.
 
     let mut new_translation_map_vec: Vec<(String, String)> = Vec::new();
 
-    let mut stat_vec: Vec<(String, String)> = Vec::new();
-    let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-
-    let translation: String = read_to_string(translation_path).unwrap_log();
+    let translation: String = read_to_string(txt_file_path).unwrap_log();
     let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
         parse_translation(&translation, "maps.txt", false);
 
@@ -218,13 +232,13 @@ pub fn purge_map<P: AsRef<Path>>(
         MapsProcessingMode::Default | MapsProcessingMode::Separate => {
             translation_maps.reserve(512);
 
-            let mut map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
+            let mut map: IndexMapGx = IndexMap::default();
             let mut map_number: u16 = u16::MAX;
             let mut prev_map: String = String::new();
 
             for (original, translation) in parsed_translation {
                 if original == "<!-- Map -->" {
-                    if map.is_empty() {
+                    if map.is_empty() && map_number != u16::MAX {
                         if translation != prev_map {
                             translation_maps.insert(map_number, take(&mut map));
                         }
@@ -249,43 +263,34 @@ pub fn purge_map<P: AsRef<Path>>(
         MapsProcessingMode::Preserve => translation_map_vec.extend(parsed_translation),
     }
 
+    let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
+
     if purge_empty {
         if maps_processing_mode == MapsProcessingMode::Preserve {
-            let mut to_remove: Vec<usize> = Vec::new();
-
             for (i, (original, translation)) in translation_map_vec.iter().enumerate() {
                 if !original.starts_with("<!--") && translation.is_empty() {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
                 }
-            }
-
-            for item in to_remove.into_iter().rev() {
-                translation_map_vec.remove(item);
             }
         } else {
             for (map_number, map) in translation_maps.iter_mut() {
                 stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
 
-                let ignore_entry = ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
-
-                let mut to_remove: Vec<usize> = Vec::new();
+                let ignore_entry: &mut IgnoreEntry =
+                    ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
 
                 for (i, (original, translation)) in map.iter().enumerate() {
                     if !original.starts_with("<!--") && translation.is_empty() {
                         if stat {
                             stat_vec.push((original.to_owned(), translation.to_owned()));
                         } else {
-                            to_remove.push(i);
+                            skip_indices.insert(i);
 
                             if create_ignore {
                                 ignore_entry.insert(original.to_owned());
                             }
                         }
                     }
-                }
-
-                for item in to_remove.into_iter().rev() {
-                    map.shift_remove_index(item);
                 }
             }
         }
@@ -296,10 +301,13 @@ pub fn purge_map<P: AsRef<Path>>(
             .unwrap_log()
             .filter_map(|entry| filter_maps(entry, engine_type));
 
-        for (filename, obj) in obj_vec_iter {
+        for (filename, path) in obj_vec_iter {
+            let obj: Value = parse_rpgm_file(&path, engine_type);
             let map_number: u16 = parse_map_number(&filename);
+
             stat_vec.push((String::from("<!-- Map -->"), map_number.to_string()));
-            let ignore_entry = ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
+            let ignore_entry: &mut IgnoreEntry =
+                ignore_map.entry(format!("<!-- File: map{map_number} -->")).or_default();
 
             if maps_processing_mode != MapsProcessingMode::Preserve {
                 translation_map = translation_maps.get_mut(&map_number).unwrap_log();
@@ -331,7 +339,7 @@ pub fn purge_map<P: AsRef<Path>>(
                         game_type,
                         engine_type,
                         (code_label, parameters_label),
-                        unsafe { &mut *(&mut lines_set as *mut IndexSetXxh3) },
+                        unsafe { &mut *(&mut lines_set as *mut IndexSetGx) },
                         Some(&mut new_translation_map_vec),
                         Some(maps_processing_mode),
                     );
@@ -339,8 +347,6 @@ pub fn purge_map<P: AsRef<Path>>(
             }
 
             if maps_processing_mode != MapsProcessingMode::Preserve {
-                let mut to_remove: Vec<usize> = Vec::new();
-
                 for (i, (original, translation)) in translation_map.iter().enumerate() {
                     if leave_filled && !translation.is_empty() {
                         continue;
@@ -350,7 +356,7 @@ pub fn purge_map<P: AsRef<Path>>(
                         if stat {
                             stat_vec.push((original.to_owned(), translation.to_owned()));
                         } else {
-                            to_remove.push(i);
+                            skip_indices.insert(i);
 
                             if create_ignore {
                                 ignore_entry.insert(original.to_owned());
@@ -358,68 +364,44 @@ pub fn purge_map<P: AsRef<Path>>(
                         }
                     }
                 }
-
-                for item in to_remove.into_iter().rev() {
-                    translation_map.shift_remove_index(item);
-                }
             }
         }
     }
 
-    if stat {
-        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-        write(
-            output_path.as_ref().join("stat.txt"),
-            previous
-                + &String::from_iter(
-                    stat_vec
-                        .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                ),
-        )
-        .unwrap_log();
-    } else {
+    if !stat {
         let mut output_content: String = match maps_processing_mode {
             MapsProcessingMode::Default | MapsProcessingMode::Separate => String::from_iter(
                 translation_maps
                     .into_iter()
                     .flat_map(|hashmap| hashmap.1.into_iter())
-                    .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                    .enumerate()
+                    .filter(|(i, _)| !skip_indices.contains(i))
+                    .map(|(_, (original, translation))| format!("{original}{LINES_SEPARATOR}{translation}\n")),
             ),
             MapsProcessingMode::Preserve => {
-                let mut to_remove: Vec<usize> = Vec::new();
-
                 for (i, (original, translation)) in translation_map_vec.iter().enumerate() {
                     if leave_filled && !translation.is_empty() {
                         continue;
                     }
 
                     // ! I have no idea, how to implement other args for preserve
-
                     if !original.starts_with("<!--") && !lines_set.contains(original) {
-                        to_remove.push(i);
+                        skip_indices.insert(i);
                     }
-                }
-
-                for i in to_remove.into_iter().rev() {
-                    translation_map_vec.remove(i);
                 }
 
                 String::from_iter(
                     translation_map_vec
                         .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
+                        .enumerate()
+                        .filter(|(i, _)| !skip_indices.contains(i))
+                        .map(|(_, (original, translation))| format!("{original}{LINES_SEPARATOR}{translation}\n")),
                 )
             }
         };
 
         output_content.pop();
-        write(translation_path, output_content).unwrap_log();
-
-        if create_ignore {
-            write_ignore(ignore_map, output_path);
-        }
+        write(txt_file_path, output_content).unwrap_log();
 
         if logging {
             println!("{PURGED_FILE_MSG} maps.txt");
@@ -449,8 +431,10 @@ pub fn purge_other<P: AsRef<Path>>(
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    ignore_map: &mut IgnoreMap,
+    stat_vec: &mut Vec<(String, String)>,
 ) {
-    let obj_arr_iter = read_dir(original_path)
+    let other_iter = read_dir(original_path)
         .unwrap_log()
         .filter_map(|entry| filter_other(entry, engine_type, game_type));
 
@@ -469,34 +453,33 @@ pub fn purge_other<P: AsRef<Path>>(
         parameters_label,
     ) = get_other_labels(engine_type);
 
-    let mut stat_vec: Vec<(String, String)> = Vec::new();
-    let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
+    let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
 
-    for (filename, obj_arr) in obj_arr_iter {
+    for (filename, path) in other_iter {
         let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
         let txt_filename: String = basename.clone() + ".txt";
         let txt_output_path: &Path = &output_path.as_ref().join(txt_filename.clone());
 
-        let mut lines: IndexSetXxh3 = IndexSet::with_hasher(HASHER);
-        let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *(&mut lines as *mut IndexSetXxh3) };
+        let mut lines: IndexSetGx = IndexSet::default();
+        let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *(&mut lines as *mut IndexSetGx) };
 
         stat_vec.push((format!("<!-- {basename} -->"), String::new()));
 
-        let ignore_entry = ignore_map.entry(format!("<!-- File: {basename} -->")).or_default();
+        let ignore_entry: &mut IgnoreEntry = ignore_map.entry(format!("<!-- File: {basename} -->")).or_default();
 
-        let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
-        let translation: String = read_to_string(txt_output_path).unwrap_log();
-        translation_map.extend(parse_translation(&translation, &txt_filename, false));
+        let translation_map: IndexMapGx = IndexMap::from_iter(parse_translation(
+            &read_to_string(txt_output_path).unwrap_log(),
+            &txt_filename,
+            false,
+        ));
 
         if purge_empty {
-            let mut to_remove: Vec<usize> = Vec::new();
-
             for (i, (original, translation)) in translation_map.iter().enumerate() {
                 if !original.starts_with("<!--") && translation.is_empty() {
                     if stat {
                         stat_vec.push((original.to_owned(), translation.to_owned()));
                     } else {
-                        to_remove.push(i);
+                        skip_indices.insert(i);
 
                         if create_ignore {
                             ignore_entry.insert(original.to_owned());
@@ -504,17 +487,13 @@ pub fn purge_other<P: AsRef<Path>>(
                     }
                 }
             }
-
-            for i in to_remove.into_iter().rev() {
-                translation_map.shift_remove_index(i);
-            }
         } else {
+            let obj_arr: Value = parse_rpgm_file(&path, engine_type);
+
             // Other files except CommonEvents and Troops have the structure that consists
             // of name, nickname, description and note
             if !filename.starts_with("Co") && !filename.starts_with("Tr") {
-                if game_type.is_some_and(|game_type: GameType| game_type == GameType::Termina)
-                    && filename.starts_with("It")
-                {
+                if game_type == Some(GameType::Termina) && filename.starts_with("It") {
                     lines_mut_ref.extend([
                         String::from("<Menu Category: Items>"),
                         String::from("<Menu Category: Food>"),
@@ -630,8 +609,6 @@ pub fn purge_other<P: AsRef<Path>>(
                 }
             }
 
-            let mut to_remove: Vec<usize> = Vec::new();
-
             for (i, (original, translation)) in translation_map.iter().enumerate() {
                 if leave_filled && !translation.is_empty() {
                     continue;
@@ -641,7 +618,7 @@ pub fn purge_other<P: AsRef<Path>>(
                     if stat {
                         stat_vec.push((original.to_owned(), translation.to_owned()));
                     } else {
-                        to_remove.push(i);
+                        skip_indices.insert(i);
 
                         if create_ignore {
                             ignore_entry.insert(original.to_owned());
@@ -649,17 +626,15 @@ pub fn purge_other<P: AsRef<Path>>(
                     }
                 }
             }
-
-            for item in to_remove.into_iter().rev() {
-                translation_map.shift_remove_index(item);
-            }
         }
 
         if !stat {
             let mut output_content: String = String::from_iter(
                 translation_map
                     .into_iter()
-                    .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+                    .enumerate()
+                    .filter(|(i, _)| !skip_indices.contains(i))
+                    .map(|(_, (original, translated))| format!("{original}{LINES_SEPARATOR}{translated}\n")),
             );
 
             output_content.pop();
@@ -667,26 +642,9 @@ pub fn purge_other<P: AsRef<Path>>(
             write(txt_output_path, output_content).unwrap_log();
 
             if logging {
-                println!("{PURGED_FILE_MSG} {}", basename + ".txt");
+                println!("{PURGED_FILE_MSG} {basename}.txt",);
             }
         }
-    }
-
-    if stat {
-        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-        write(
-            output_path.as_ref().join("stat.txt"),
-            previous
-                + &String::from_iter(
-                    stat_vec
-                        .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                ),
-        )
-        .unwrap_log();
-    } else if create_ignore {
-        write_ignore(ignore_map, output_path);
     }
 }
 
@@ -710,41 +668,39 @@ pub fn purge_system<P: AsRef<Path>>(
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    ignore_map: &mut IgnoreMap,
+    stat_vec: &mut Vec<(String, String)>,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
 
-    let lines: UnsafeCell<IndexSetXxh3> = UnsafeCell::new(IndexSet::with_hasher(HASHER));
-    let lines_mut_ref: &mut IndexSetXxh3 = unsafe { &mut *lines.get() };
+    let lines: UnsafeCell<IndexSetGx> = UnsafeCell::new(IndexSet::default());
+    let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *lines.get() };
 
-    let mut stat_vec: Vec<(String, String)> = Vec::new();
     stat_vec.push((String::from("<!-- System -->"), String::new()));
 
-    let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: system -->")).or_default();
+    let ignore_entry: &mut IgnoreEntry = ignore_map.entry(String::from("<!-- File: system -->")).or_default();
 
-    let mut translation_map: IndexMapXxh3 = IndexMap::with_hasher(HASHER);
-    let translation: String = read_to_string(txt_output_path).unwrap_log();
-    translation_map.extend(parse_translation(&translation, "system.txt", false));
+    let translation_map: IndexMapGx = IndexMap::from_iter(parse_translation(
+        &read_to_string(txt_output_path).unwrap_log(),
+        "system.txt",
+        false,
+    ));
+
+    let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
 
     if purge_empty {
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if !original.starts_with("<!--") && translation.is_empty() {
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
                     }
                 }
             }
-        }
-
-        for i in to_remove.into_iter().rev() {
-            translation_map.shift_remove_index(i);
         }
     } else {
         let mut parse_str = |value: &Value| {
@@ -779,11 +735,7 @@ pub fn purge_system<P: AsRef<Path>>(
         let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
             get_system_labels(engine_type);
 
-        let obj: Value = if engine_type == EngineType::New {
-            from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
-        } else {
-            load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-        };
+        let obj: Value = parse_rpgm_file(system_file_path.as_ref(), engine_type);
 
         // Armor types and elements - mostly system strings, but may be required for some purposes
         for label in [
@@ -811,9 +763,7 @@ pub fn purge_system<P: AsRef<Path>>(
                     for value in arr {
                         parse_str(value);
                     }
-                } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes"))
-                    || value.is_str()
-                {
+                } else if (value.is_object() && value["__type"].as_str() == Some("bytes")) || value.is_str() {
                     parse_str(value)
                 }
             } else {
@@ -857,8 +807,6 @@ pub fn purge_system<P: AsRef<Path>>(
             lines_mut_ref.insert(game_title_string);
         }
 
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if leave_filled && !translation.is_empty() {
                 continue;
@@ -868,7 +816,7 @@ pub fn purge_system<P: AsRef<Path>>(
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
@@ -876,39 +824,20 @@ pub fn purge_system<P: AsRef<Path>>(
                 }
             }
         }
-
-        for item in to_remove.into_iter().rev() {
-            translation_map.shift_remove_index(item);
-        }
     }
 
-    if stat {
-        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-        write(
-            output_path.as_ref().join("stat.txt"),
-            previous
-                + &String::from_iter(
-                    stat_vec
-                        .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                ),
-        )
-        .unwrap_log();
-    } else {
+    if !stat {
         let mut output_content: String = String::from_iter(
             translation_map
                 .into_iter()
-                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+                .enumerate()
+                .filter(|(i, _)| !skip_indices.contains(i))
+                .map(|(_, (original, translated))| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         );
 
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
-
-        if create_ignore {
-            write_ignore(ignore_map, output_path);
-        }
 
         if logging {
             println!("{PURGED_FILE_MSG} system.txt");
@@ -934,40 +863,39 @@ pub fn purge_scripts<P: AsRef<Path>>(
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    ignore_map: &mut IgnoreMap,
+    stat_vec: &mut Vec<(String, String)>,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
     let mut lines_vec: Vec<String> = Vec::new();
-    let mut translation_map: Vec<(String, String)> = Vec::new();
+    let translation_map: Vec<(String, String)> = Vec::from_iter(parse_translation(
+        &read_to_string(txt_output_path).unwrap_log(),
+        "scripts.txt",
+        false,
+    ));
 
-    let mut stat_vec: Vec<(String, String)> = Vec::new();
-    stat_vec.push((String::from("<!-- Scripts -->"), String::new()));
+    if stat {
+        stat_vec.push((String::from("<!-- Scripts -->"), String::new()));
+    }
 
-    let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: scripts -->")).or_default();
+    let ignore_entry: &mut IgnoreEntry = ignore_map.entry(String::from("<!-- File: scripts -->")).or_default();
 
-    let translation: String = read_to_string(txt_output_path).unwrap_log();
-    translation_map.extend(parse_translation(&translation, "scripts.txt", false));
+    let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
 
     if purge_empty {
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if !original.starts_with("<!--") && translation.is_empty() {
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
                     }
                 }
             }
-        }
-
-        for i in to_remove.into_iter().rev() {
-            translation_map.remove(i);
         }
     } else {
         let scripts_entries: Value = load(
@@ -982,8 +910,8 @@ pub fn purge_scripts<P: AsRef<Path>>(
 
         for code in scripts_entries_array {
             let bytes_stream: Vec<u8> = from_value(&code[2]["data"]).unwrap_log();
-
             let mut inflated: Vec<u8> = Vec::new();
+
             ZlibDecoder::new(&*bytes_stream).read_to_end(&mut inflated).unwrap_log();
 
             let mut code: String = String::new();
@@ -1001,7 +929,7 @@ pub fn purge_scripts<P: AsRef<Path>>(
         }
 
         let codes_text: String = codes_content.join("");
-        let extracted_strings: IndexSetXxh3 = extract_strings(&codes_text, false).0;
+        let extracted_strings: IndexSetGx = extract_strings(&codes_text, false).0;
 
         let regexes: [Regex; 5] = unsafe {
             [
@@ -1039,8 +967,6 @@ pub fn purge_scripts<P: AsRef<Path>>(
             lines_vec.push(extracted);
         }
 
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if leave_filled && !translation.is_empty() {
                 continue;
@@ -1050,7 +976,7 @@ pub fn purge_scripts<P: AsRef<Path>>(
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
@@ -1058,39 +984,20 @@ pub fn purge_scripts<P: AsRef<Path>>(
                 }
             }
         }
-
-        for item in to_remove.into_iter().rev() {
-            translation_map.remove(item);
-        }
     }
 
-    if stat {
-        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-        write(
-            output_path.as_ref().join("stat.txt"),
-            previous
-                + &String::from_iter(
-                    stat_vec
-                        .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                ),
-        )
-        .unwrap_log();
-    } else {
+    if !stat {
         let mut output_content: String = String::from_iter(
             translation_map
                 .into_iter()
-                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+                .enumerate()
+                .filter(|(i, _)| !skip_indices.contains(i))
+                .map(|(_, (original, translated))| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         );
 
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
-
-        if create_ignore {
-            write_ignore(ignore_map, output_path);
-        }
 
         if logging {
             println!("{PURGED_FILE_MSG} scripts.txt");
@@ -1113,38 +1020,38 @@ pub fn purge_plugins<P: AsRef<Path>>(
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    ignore_map: &mut IgnoreMap,
+    stat_vec: &mut Vec<(String, String)>,
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
-    let mut stat_vec: Vec<(String, String)> = Vec::new();
-    stat_vec.push((String::from("<!-- Plugins -->"), String::new()));
+    let ignore_entry: &mut IgnoreEntry = ignore_map.entry(String::from("<!-- File: plugins -->")).or_default();
 
-    let mut ignore_map: IgnoreMap = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
-    let ignore_entry = ignore_map.entry(String::from("<!-- File: plugins -->")).or_default();
+    let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
+        &read_to_string(txt_output_path).unwrap_log(),
+        "plugins.txt",
+        false,
+    ));
 
-    let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
-    let translation: String = read_to_string(txt_output_path).unwrap_log();
-    translation_map.extend(parse_translation(&translation, "plugins.txt", false));
+    let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
+
+    if stat {
+        stat_vec.push((String::from("<!-- Plugins -->"), String::new()));
+    }
 
     if purge_empty {
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if !original.starts_with("<!--") && translation.is_empty() {
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
                     }
                 }
             }
-        }
-
-        for i in to_remove.into_iter().rev() {
-            translation_map.remove(i);
         }
     } else {
         let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
@@ -1170,8 +1077,6 @@ pub fn purge_plugins<P: AsRef<Path>>(
             None,
         );
 
-        let mut to_remove: Vec<usize> = Vec::new();
-
         for (i, (original, translation)) in translation_map.iter().enumerate() {
             if leave_filled && !translation.is_empty() {
                 continue;
@@ -1181,7 +1086,7 @@ pub fn purge_plugins<P: AsRef<Path>>(
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
                 } else {
-                    to_remove.push(i);
+                    skip_indices.insert(i);
 
                     if create_ignore {
                         ignore_entry.insert(original.to_owned());
@@ -1189,42 +1094,23 @@ pub fn purge_plugins<P: AsRef<Path>>(
                 }
             }
         }
-
-        for item in to_remove.into_iter().rev() {
-            translation_map.remove(item);
-        }
     }
 
-    if stat {
-        let previous: String = read_to_string(output_path.as_ref().join("stat.txt")).unwrap_or(String::new());
-
-        write(
-            output_path.as_ref().join("stat.txt"),
-            previous
-                + &String::from_iter(
-                    stat_vec
-                        .into_iter()
-                        .map(|(original, translation)| format!("{original}{LINES_SEPARATOR}{translation}\n")),
-                ),
-        )
-        .unwrap_log();
-    } else {
+    if !stat {
         let mut output_content: String = String::from_iter(
             translation_map
                 .into_iter()
-                .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
+                .enumerate()
+                .filter(|(i, _)| !skip_indices.contains(i))
+                .map(|(_, (original, translated))| format!("{original}{LINES_SEPARATOR}{translated}\n")),
         );
 
         output_content.pop();
 
         write(txt_output_path, output_content).unwrap_log();
 
-        if create_ignore {
-            write_ignore(ignore_map, output_path);
-        }
-
         if logging {
-            println!("{PURGED_FILE_MSG} plugins.json");
+            println!("{PURGED_FILE_MSG} plugins.txt");
         }
     }
 }

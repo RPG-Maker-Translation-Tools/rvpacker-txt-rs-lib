@@ -6,14 +6,12 @@ use std::mem::transmute;
 #[cfg(feature = "log")]
 use log;
 
-pub type IgnoreMap = indexmap::IndexMap<
-    String,
-    std::collections::HashSet<String, xxhash_rust::xxh3::Xxh3DefaultBuilder>,
-    xxhash_rust::xxh3::Xxh3DefaultBuilder,
->;
-pub type StringHashMap = std::collections::HashMap<String, String, xxhash_rust::xxh3::Xxh3DefaultBuilder>;
-pub type IndexSetXxh3 = indexmap::IndexSet<String, xxhash_rust::xxh3::Xxh3DefaultBuilder>;
-pub type IndexMapXxh3 = indexmap::IndexMap<String, String, xxhash_rust::xxh3::Xxh3DefaultBuilder>;
+pub type IgnoreMap =
+    indexmap::IndexMap<String, std::collections::HashSet<String, gxhash::GxBuildHasher>, gxhash::GxBuildHasher>;
+pub type HashMapGx = std::collections::HashMap<String, String, gxhash::GxBuildHasher>;
+pub type IndexSetGx = indexmap::IndexSet<String, gxhash::GxBuildHasher>;
+pub type IndexMapGx = indexmap::IndexMap<String, String, gxhash::GxBuildHasher>;
+pub type IgnoreEntry = std::collections::HashSet<String, gxhash::GxBuildHasher>;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum GameType {

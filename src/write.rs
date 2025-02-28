@@ -4,21 +4,23 @@ use crate::{eprintln, println};
 use crate::{
     functions::{
         determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
-        get_other_labels, get_system_labels, is_allowed_code, parse_map_number, parse_translation, process_parameter,
-        process_variable, read_to_string_without_bom, romanize_string, traverse_json,
+        get_other_labels, get_system_labels, is_allowed_code, parse_map_number, parse_rpgm_file, parse_translation,
+        process_parameter, process_variable, romanize_string, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
-        ENCODINGS, HASHER, LINES_SEPARATOR, NEW_LINE,
+        ENCODINGS, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, StringHashMap,
-        TrimReplace, Variable,
+        Code, EngineType, GameType, HashMapGx, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
+        Variable,
     },
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use gxhash::GxBuildHasher;
 use marshal_rs::{dump, load, StringMode};
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, json, prelude::*, to_string, to_vec, Array, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -29,13 +31,12 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
-use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 #[inline(always)]
 fn process_parameter_write(
     code: Code,
     mut parameter: String,
-    map: Option<&StringHashMap>,
+    map: Option<&HashMapGx>,
     deque: Option<Arc<Mutex<VecDeque<String>>>>,
     game_type: Option<GameType>,
     engine_type: EngineType,
@@ -69,14 +70,14 @@ fn write_list(
     romanize: bool,
     game_type: Option<GameType>,
     engine_type: EngineType,
-    map: &StringHashMap,
+    map: &HashMapGx,
     deque: Option<Arc<Mutex<VecDeque<String>>>>,
     (code_label, parameters_label): (&str, &str),
     maps_processing_mode: Option<MapsProcessingMode>,
 ) {
     let mut in_sequence: bool = false;
-    let mut lines: Vec<String> = Vec::with_capacity(4);
-    let mut item_indices: Vec<usize> = Vec::with_capacity(4);
+    let mut lines: SmallVec<[String; 4]> = SmallVec::with_capacity(4);
+    let mut item_indices: SmallVec<[usize; 4]> = SmallVec::with_capacity(4);
 
     for it in 0..list.len() {
         let code: u16 = list[it][code_label].as_u64().unwrap_log() as u16;
@@ -120,7 +121,7 @@ fn write_list(
                     game_type,
                     engine_type,
                     romanize,
-                    if maps_processing_mode.is_some_and(|mode| mode == MapsProcessingMode::Preserve) {
+                    if maps_processing_mode == Some(MapsProcessingMode::Preserve) {
                         None
                     } else {
                         Some(map)
@@ -279,14 +280,14 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
         // Allocated when maps processing mode is PRESERVE.
         let mut translation_deque: VecDeque<String> = VecDeque::new();
         // Default map for translation from the .txt file.
-        let mut translation_map: StringHashMap = HashMap::with_hasher(HASHER);
+        let mut translation_map: HashMapGx = HashMap::default();
         // A vec that holds translation maps. If maps processing mode is
         // DEFAULT, only ever holds one hashmap with all the translation lines.
         // If maps processing mode is SEPARATE, holds multiple hashmap, each
         // respective to a single map file.
-        let mut translation_maps: HashMap<u16, StringHashMap, Xxh3DefaultBuilder> = HashMap::with_hasher(HASHER);
+        let mut translation_maps: HashMap<u16, HashMapGx, GxBuildHasher> = HashMap::default();
         // Always allocated.
-        let mut names_map: StringHashMap = HashMap::with_hasher(HASHER);
+        let mut names_map: HashMapGx = HashMap::default();
 
         let mut map_number: u16 = 0;
 
@@ -341,12 +342,13 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
     let (display_name_label, events_label, pages_label, list_label, code_label, parameters_label) =
         get_maps_labels(engine_type);
 
-    let maps_obj_iter = read_dir(original_path)
+    let maps_iter = read_dir(original_path)
         .unwrap_log()
-        .par_bridge()
         .filter_map(|entry| filter_maps(entry, engine_type));
 
-    maps_obj_iter.for_each(|(filename, mut obj)| {
+    maps_iter.par_bridge().for_each(|(filename, path)| {
+        let mut obj: Value = parse_rpgm_file(&path, engine_type);
+
         if let Some(mut display_name) = obj[display_name_label].as_str().map(str::to_owned) {
             if !display_name.is_empty() {
                 if romanize {
@@ -359,12 +361,12 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             }
         }
 
-        let reserve_map: StringHashMap = StringHashMap::with_hasher(HASHER);
+        let reserve_map: HashMapGx = HashMapGx::default();
 
-        let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Preserve {
+        let hashmap: &HashMapGx = if maps_processing_mode == MapsProcessingMode::Preserve {
             &reserve_map
         } else {
-            let hashmap: &StringHashMap = if maps_processing_mode == MapsProcessingMode::Separate {
+            let hashmap: &HashMapGx = if maps_processing_mode == MapsProcessingMode::Separate {
                 unsafe {
                     let filename: &str = filename.split_once('.').unwrap_unchecked().0;
                     let map_number: u16 = parse_map_number(filename);
@@ -473,23 +475,25 @@ pub fn write_other<P: AsRef<Path> + Sync>(
         (note_label, Variable::Note),
     ]);
 
-    let other_obj_arr_iter = read_dir(original_path)
+    let other_iter = read_dir(original_path)
         .unwrap_log()
-        .par_bridge()
         .filter_map(|entry| filter_other(entry, engine_type, game_type));
 
-    other_obj_arr_iter.for_each(|(filename, mut obj_arr)| {
+    other_iter.par_bridge().for_each(|(filename, path)| {
         let txt_filename: &str =
             &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
 
-        let translation_map: StringHashMap = {
-            let translation: String = read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log();
-            HashMap::from_iter(parse_translation(&translation, txt_filename, true))
-        };
+        let translation_map: HashMapGx = HashMap::from_iter(parse_translation(
+            &read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log(),
+            txt_filename,
+            true,
+        ));
 
         if translation_map.is_empty() {
             return;
         }
+
+        let mut obj_arr: Value = parse_rpgm_file(&path, engine_type);
 
         // Other files except CommonEvents and Troops have the structure that consists
         // of name, nickname, description and note
@@ -635,9 +639,9 @@ pub fn write_system<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
-    let (translation_map, game_title): (StringHashMap, String) = {
+    let (translation_map, game_title): (HashMapGx, String) = {
         let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
-        let game_title: String = translation.rsplit_once(LINES_SEPARATOR).unwrap_log().1.to_owned();
+        let game_title: String = translation[translation.rfind(LINES_SEPARATOR).unwrap_log() + 3..].to_owned();
         (
             HashMap::from_iter(parse_translation(&translation, "system.txt", true)),
             game_title,
@@ -682,11 +686,7 @@ pub fn write_system<P: AsRef<Path>>(
     let (armor_types_label, elements_label, skill_types_label, terms_label, weapon_types_label, game_title_label) =
         get_system_labels(engine_type);
 
-    let mut obj: Value = if engine_type == EngineType::New {
-        from_str(&read_to_string_without_bom(&system_file_path).unwrap_log()).unwrap_log()
-    } else {
-        load(&read(&system_file_path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-    };
+    let mut obj: Value = parse_rpgm_file(system_file_path.as_ref(), engine_type);
 
     for label in [
         armor_types_label,
@@ -712,9 +712,7 @@ pub fn write_system<P: AsRef<Path>>(
             if key != "messages" {
                 if let Some(arr) = value.as_array_mut() {
                     arr.par_iter_mut().for_each(replace_value);
-                } else if (value.is_object() && value["__type"].as_str().is_some_and(|x| x == "bytes"))
-                    || value.is_str()
-                {
+                } else if (value.is_object() && value["__type"].as_str() == Some("bytes")) || value.is_str() {
                     replace_value(value)
                 }
             } else {
@@ -768,13 +766,14 @@ pub fn write_plugins<P: AsRef<Path>>(
     logging: bool,
     romanize: bool,
 ) {
-    let mut translation_map: VecDeque<(String, String)> = {
-        let translation: String = read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log();
-        VecDeque::from_iter(parse_translation(&translation, "plugins.txt", true))
-    };
+    let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
+        &read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log(),
+        "plugins.txt",
+        true,
+    ));
 
-    let translation_set: HashSet<String, Xxh3DefaultBuilder> =
-        HashSet::from_iter(translation_map.iter().map(|x| x.0.to_owned()));
+    let translation_set: HashSet<String, GxBuildHasher> =
+        HashSet::from_iter(translation_map.iter().map(|(k, _)| k.to_owned()));
 
     let plugins_content: String = read_to_string(plugins_file_path.as_ref()).unwrap_log();
 
@@ -827,10 +826,11 @@ pub fn write_scripts<P: AsRef<Path>>(
     logging: bool,
     engine_type: EngineType,
 ) {
-    let translation_map: StringHashMap = {
-        let translation: String = read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log();
-        StringHashMap::from_iter(parse_translation(&translation, "scripts.txt", true))
-    };
+    let translation_map: HashMapGx = HashMapGx::from_iter(parse_translation(
+        &read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log(),
+        "scripts.txt",
+        true,
+    ));
 
     if translation_map.is_empty() {
         return;
@@ -896,8 +896,6 @@ pub fn write_scripts<P: AsRef<Path>>(
     .unwrap_log();
 
     if logging {
-        println!("{WROTE_FILE_MSG} {:?}", unsafe {
-            scripts_file_path.as_ref().file_name().unwrap_unchecked()
-        });
+        println!("{WROTE_FILE_MSG} Scripts{}", determine_extension(engine_type));
     }
 }

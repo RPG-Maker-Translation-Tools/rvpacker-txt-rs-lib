@@ -2,13 +2,13 @@ use crate::{
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG},
         regexes::{INVALID_MULTILINE_VARIABLE_RE, INVALID_VARIABLE_RE, IS_ONLY_SYMBOLS_RE, PLUGINS_REGEXPS},
-        HASHER, LINES_SEPARATOR, NEW_LINE, SYMBOLS,
+        LINES_SEPARATOR, NEW_LINE, SYMBOLS,
     },
     types::{
-        Code, EachLine, EngineType, GameType, OptionExt, ProcessingMode, ResultExt, StringHashMap, TrimReplace,
-        Variable,
+        Code, EachLine, EngineType, GameType, HashMapGx, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
     },
 };
+use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use marshal_rs::{load, StringMode};
 use smallvec::SmallVec;
@@ -22,7 +22,6 @@ use std::{
     str::{from_utf8_unchecked, Chars},
     sync::{Arc, Mutex},
 };
-use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 #[inline]
 pub fn romanize_string(string: String) -> String {
@@ -108,10 +107,7 @@ pub fn get_object_data(object: &Object) -> Vec<u8> {
 }
 
 #[inline]
-pub fn extract_strings(
-    ruby_code: &str,
-    write: bool,
-) -> (IndexSet<String, Xxh3DefaultBuilder>, Vec<std::ops::Range<usize>>) {
+pub fn extract_strings(ruby_code: &str, write: bool) -> (IndexSet<String, GxBuildHasher>, Vec<std::ops::Range<usize>>) {
     fn is_escaped(index: usize, string: &str) -> bool {
         let mut backslash_count: u8 = 0;
 
@@ -126,7 +122,7 @@ pub fn extract_strings(
         backslash_count % 2 == 1
     }
 
-    let mut strings: IndexSet<String, Xxh3DefaultBuilder> = IndexSet::with_hasher(HASHER);
+    let mut strings: IndexSet<String, GxBuildHasher> = IndexSet::default();
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
     let mut inside_string: bool = false;
     let mut inside_multiline_comment: bool = false;
@@ -203,7 +199,7 @@ pub const fn determine_extension(engine_type: EngineType) -> &'static str {
 }
 
 #[inline]
-pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineType) -> Option<(String, Value)> {
+pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineType) -> Option<(String, PathBuf)> {
     if let Ok(entry) = entry {
         if !entry.file_type().unwrap_log().is_file() {
             return None;
@@ -216,13 +212,7 @@ pub fn filter_maps(entry: Result<DirEntry, std::io::Error>, engine_type: EngineT
             && unsafe { (*filename_str.as_bytes().get_unchecked(3) as char).is_ascii_digit() }
             && filename_str.ends_with(determine_extension(engine_type))
         {
-            let json: Value = if engine_type == EngineType::New {
-                from_str(&read_to_string_without_bom(entry.path()).unwrap_log()).unwrap_log()
-            } else {
-                load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-            };
-
-            Some((filename_str.to_owned(), json))
+            Some((filename_str.to_owned(), entry.path()))
         } else {
             None
         }
@@ -236,7 +226,7 @@ pub fn filter_other(
     entry: Result<DirEntry, std::io::Error>,
     engine_type: EngineType,
     game_type: Option<GameType>,
-) -> Option<(String, Value)> {
+) -> Option<(String, PathBuf)> {
     if let Ok(entry) = entry {
         if !entry.file_type().unwrap_log().is_file() {
             return None;
@@ -255,13 +245,7 @@ pub fn filter_other(
                 return None;
             }
 
-            let json: Value = if engine_type == EngineType::New {
-                from_str(&read_to_string_without_bom(entry.path()).unwrap_log()).unwrap_log()
-            } else {
-                load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
-            };
-
-            Some((filename_str.to_owned(), json))
+            Some((filename_str.to_owned(), entry.path()))
         } else {
             None
         }
@@ -411,11 +395,11 @@ pub fn traverse_json(
     value: &mut Value,
     lines: &mut Option<&mut Vec<String>>,
     map: &mut Option<&mut VecDeque<(String, String)>>,
-    set: &Option<&HashSet<String, Xxh3DefaultBuilder>>,
+    set: &Option<&HashSet<String, GxBuildHasher>>,
     write: bool,
     romanize: bool,
     processing_mode: ProcessingMode,
-    ignore_entry: Option<&HashSet<String, Xxh3DefaultBuilder>>,
+    ignore_entry: Option<&HashSet<String, GxBuildHasher>>,
 ) {
     let invalid_key = |key: &Option<&str>| -> bool {
         if let Some(str) = key {
@@ -664,11 +648,8 @@ pub fn parse_translation<'a>(
     }))
 }
 
-pub fn parse_ignore(
-    ignore_file_path: PathBuf,
-) -> IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> {
-    let mut map: IndexMap<String, HashSet<String, Xxh3DefaultBuilder>, Xxh3DefaultBuilder> =
-        IndexMap::with_hasher(HASHER);
+pub fn parse_ignore(ignore_file_path: PathBuf) -> IndexMap<String, HashSet<String, GxBuildHasher>, GxBuildHasher> {
+    let mut map: IndexMap<String, HashSet<String, GxBuildHasher>, GxBuildHasher> = IndexMap::default();
 
     if ignore_file_path.exists() {
         let ignore_file_content: String = read_to_string(ignore_file_path).unwrap_log();
@@ -697,7 +678,7 @@ pub fn process_variable(
     game_type: Option<GameType>,
     engine_type: EngineType,
     romanize: bool,
-    hashmap: Option<&HashMap<String, String, Xxh3DefaultBuilder>>, // some only when write is true
+    hashmap: Option<&HashMap<String, String, GxBuildHasher>>, // some only when write is true
     write: bool,
 ) -> Option<String> {
     if string_is_only_symbols(&variable_text) {
@@ -997,7 +978,7 @@ pub fn process_parameter(
     game_type: Option<GameType>,
     engine_type: EngineType,
     romanize: bool,
-    map: Option<&StringHashMap>,                 // used only when write is true
+    map: Option<&HashMapGx>,                     // used only when write is true
     deque: Option<Arc<Mutex<VecDeque<String>>>>, // used only when write is true
     write: bool,
 ) -> Option<String> {
@@ -1106,5 +1087,13 @@ pub fn process_parameter(
         }
 
         Some(result)
+    }
+}
+
+#[inline]
+pub fn parse_rpgm_file(path: &Path, engine_type: EngineType) -> Value {
+    match engine_type {
+        EngineType::New => from_str(&read_to_string_without_bom(path).unwrap_log()).unwrap_log(),
+        _ => load(&read(path).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log(),
     }
 }
