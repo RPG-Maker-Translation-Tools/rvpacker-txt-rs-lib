@@ -366,7 +366,7 @@ pub fn read_map<P: AsRef<Path>>(
 
             let translation: String = read_to_string(txt_output_path).unwrap_log();
             let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
-                parse_translation(&translation, "maps.txt", false);
+                parse_translation(&translation, "maps.txt", false, true);
 
             match maps_processing_mode {
                 MapsProcessingMode::Default | MapsProcessingMode::Separate => {
@@ -676,7 +676,7 @@ pub fn read_other<P: AsRef<Path>>(
         if processing_mode == ProcessingMode::Append {
             if txt_output_path.exists() {
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
-                translation_map.extend(parse_translation(&translation, &txt_filename, false));
+                translation_map.extend(parse_translation(&translation, &txt_filename, false, true));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 continue;
@@ -889,7 +889,7 @@ pub fn read_system<P: AsRef<Path>>(
             }
 
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation, "system.txt", false));
+            translation_map.extend(parse_translation(&translation, "system.txt", false, true));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1072,7 +1072,7 @@ pub fn read_scripts<P: AsRef<Path>>(
             }
 
             let translation: String = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation, "scripts.txt", false));
+            translation_map.extend(parse_translation(&translation, "scripts.txt", false, false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;
@@ -1217,7 +1217,7 @@ pub fn read_plugins<P: AsRef<Path>>(
 
         if txt_output_path.exists() {
             translation = read_to_string(txt_output_path).unwrap_log();
-            translation_map.extend(parse_translation(&translation, "plugins.txt", false));
+            translation_map.extend(parse_translation(&translation, "plugins.txt", false, false));
         } else {
             println!("{FILES_ARE_NOT_PARSED_MSG}");
             return;

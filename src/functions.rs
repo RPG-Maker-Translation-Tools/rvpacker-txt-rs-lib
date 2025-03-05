@@ -432,6 +432,10 @@ pub fn traverse_json(
             {
                 let mut string: String = str.replace('\n', NEW_LINE);
 
+                if string.trim().is_empty() {
+                    return;
+                }
+
                 if romanize {
                     string = romanize_string(string);
                 }
@@ -613,6 +617,7 @@ pub fn parse_translation<'a>(
     translation: &'a str,
     file: &'a str,
     write: bool,
+    trim: bool,
 ) -> Box<dyn Iterator<Item = (String, String)> + 'a> {
     Box::new(translation.split('\n').enumerate().filter_map(move |(i, line)| {
         if write && line.starts_with("<!--") {
@@ -631,10 +636,14 @@ pub fn parse_translation<'a>(
                     return None;
                 }
 
-                Some((
-                    original.replace(NEW_LINE, "\n").trim_replace(),
-                    translation.replace(NEW_LINE, "\n").trim_replace(),
-                ))
+                if trim {
+                    Some((
+                        original.replace(NEW_LINE, "\n").trim_replace(),
+                        translation.replace(NEW_LINE, "\n").trim_replace(),
+                    ))
+                } else {
+                    Some((original.replace(NEW_LINE, "\n"), translation.replace(NEW_LINE, "\n")))
+                }
             } else {
                 Some((original.to_owned(), translation.to_owned()))
             }

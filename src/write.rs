@@ -487,6 +487,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
             &read_to_string(other_path.as_ref().join(txt_filename)).unwrap_log(),
             txt_filename,
             true,
+            true,
         ));
 
         if translation_map.is_empty() {
@@ -643,7 +644,7 @@ pub fn write_system<P: AsRef<Path>>(
         let translation: String = read_to_string(other_path.as_ref().join("system.txt")).unwrap_log();
         let game_title: String = translation[translation.rfind(LINES_SEPARATOR).unwrap_log() + 3..].to_owned();
         (
-            HashMap::from_iter(parse_translation(&translation, "system.txt", true)),
+            HashMap::from_iter(parse_translation(&translation, "system.txt", true, true)),
             game_title,
         )
     };
@@ -770,6 +771,7 @@ pub fn write_plugins<P: AsRef<Path>>(
         &read_to_string(plugins_path.as_ref().join("plugins.txt")).unwrap_log(),
         "plugins.txt",
         true,
+        false,
     ));
 
     let translation_set: HashSet<String, GxBuildHasher> =
@@ -830,6 +832,7 @@ pub fn write_scripts<P: AsRef<Path>>(
         &read_to_string(other_path.as_ref().join("scripts.txt")).unwrap_log(),
         "scripts.txt",
         true,
+        false,
     ));
 
     if translation_map.is_empty() {
@@ -863,7 +866,7 @@ pub fn write_scripts<P: AsRef<Path>>(
             let (extracted_strings, ranges) = extract_strings(&code, true);
 
             for (mut extracted, range) in extracted_strings.into_iter().zip(ranges).rev() {
-                if extracted.is_empty() {
+                if extracted.trim().is_empty() {
                     continue;
                 }
 

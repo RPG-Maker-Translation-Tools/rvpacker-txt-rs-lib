@@ -226,7 +226,7 @@ pub fn purge_map<P: AsRef<Path>>(
 
     let translation: String = read_to_string(txt_file_path).unwrap_log();
     let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
-        parse_translation(&translation, "maps.txt", false);
+        parse_translation(&translation, "maps.txt", false, true);
 
     match maps_processing_mode {
         MapsProcessingMode::Default | MapsProcessingMode::Separate => {
@@ -471,6 +471,7 @@ pub fn purge_other<P: AsRef<Path>>(
             &read_to_string(txt_output_path).unwrap_log(),
             &txt_filename,
             false,
+            true,
         ));
 
         if purge_empty {
@@ -684,6 +685,7 @@ pub fn purge_system<P: AsRef<Path>>(
         &read_to_string(txt_output_path).unwrap_log(),
         "system.txt",
         false,
+        true,
     ));
 
     let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
@@ -873,6 +875,7 @@ pub fn purge_scripts<P: AsRef<Path>>(
         &read_to_string(txt_output_path).unwrap_log(),
         "scripts.txt",
         false,
+        false,
     ));
 
     if stat {
@@ -1030,6 +1033,7 @@ pub fn purge_plugins<P: AsRef<Path>>(
     let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
         &read_to_string(txt_output_path).unwrap_log(),
         "plugins.txt",
+        false,
         false,
     ));
 
