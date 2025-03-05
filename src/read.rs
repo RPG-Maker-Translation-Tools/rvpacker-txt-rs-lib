@@ -714,7 +714,7 @@ pub fn read_other<P: AsRef<Path>>(
                         let string: String = {
                             let mut buf: Vec<u8> = Vec::new();
 
-                            let string: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                            let str: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
                                 Some(obj) => {
                                     buf = get_object_data(obj);
                                     unsafe { std::str::from_utf8_unchecked(&buf) }
@@ -722,18 +722,13 @@ pub fn read_other<P: AsRef<Path>>(
                                 None => "",
                             });
 
-                            let trimmed: &str = string.trim();
+                            let trimmed: &str = str.trim();
 
                             if trimmed.is_empty() {
                                 continue;
                             }
 
-                            if variable_type != Variable::Note {
-                                trimmed
-                            } else {
-                                string
-                            }
-                            .to_owned()
+                            trimmed.to_owned()
                         };
 
                         let note_text: Option<&str> =
@@ -762,8 +757,8 @@ pub fn read_other<P: AsRef<Path>>(
                             let mut replaced: String =
                                 String::from_iter(parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE));
 
-                            replaced.drain(replaced.len() - 2..);
-                            replaced = replaced.trim_replace();
+                            replaced.pop();
+                            replaced.pop();
 
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_mut_ref.last().unwrap_unchecked() }.as_str();

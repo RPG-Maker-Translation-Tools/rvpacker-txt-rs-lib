@@ -524,7 +524,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
                                 continue;
                             }
 
-                            if variable_type != Variable::Note { trimmed } else { str }.to_owned()
+                            trimmed.to_owned()
                         };
 
                         if !variable_string.is_empty() {
