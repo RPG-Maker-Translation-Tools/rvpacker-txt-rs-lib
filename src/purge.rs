@@ -646,6 +646,8 @@ pub fn purge_other<P: AsRef<Path>>(
                 println!("{PURGED_FILE_MSG} {basename}.txt",);
             }
         }
+
+        skip_indices.clear();
     }
 }
 
