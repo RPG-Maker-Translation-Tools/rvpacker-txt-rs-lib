@@ -461,7 +461,7 @@ pub fn traverse_json(
                     let last: &String = unsafe { lines.last().unwrap_unchecked() };
                     let pos: usize = lines.len() - 1;
 
-                    if processing_mode == ProcessingMode::Append {
+                    if processing_mode.is_append() {
                         let translation_map = unsafe { map.as_mut().unwrap_unchecked() };
 
                         if translation_map.get(pos).is_some_and(|x| *last != x.0) {
@@ -596,6 +596,11 @@ pub const fn is_allowed_code(code: u16) -> bool {
 }
 
 #[inline(always)]
+pub const fn is_bad_code(code: Code, engine_type: EngineType) -> bool {
+    code.is_dialogue_start() && !engine_type.is_xp()
+}
+
+#[inline(always)]
 pub fn parse_map_number(string: &str) -> u16 {
     unsafe {
         String::from_utf8_unchecked(
@@ -694,7 +699,7 @@ pub fn process_variable(
         return None;
     }
 
-    if engine_type != EngineType::New {
+    if !engine_type.is_new() {
         if variable_text
             .split('\n')
             .all(|line: &str| line.is_empty() || INVALID_MULTILINE_VARIABLE_RE.is_match(line))
@@ -939,11 +944,7 @@ pub fn process_variable(
                 }
             }
 
-            if matches!(
-                variable_type,
-                Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
-            ) && !(variable_type == Variable::Message2 && filename.starts_with("Sk"))
-            {
+            if variable_type.is_any_message() && !(variable_type.is_message2() && filename.starts_with("Sk")) {
                 result = String::from(" ") + &result;
             }
 
@@ -1006,7 +1007,7 @@ pub fn process_parameter(
                 {
                     return None;
                 }
-                if code == Code::System
+                if code.is_system()
                     && !parameter.starts_with("Gab")
                     && (!parameter.starts_with("choice_text") || parameter.ends_with("????"))
                 {
@@ -1014,7 +1015,7 @@ pub fn process_parameter(
                 }
             }
             GameType::LisaRPG => {
-                if matches!(code, Code::Dialogue | Code::DialogueStart) {
+                if code.is_any_dialogue() {
                     if let Some(i) = find_lisa_prefix_index(parameter) {
                         if string_is_only_symbols(&parameter[i..]) {
                             return None;
@@ -1034,7 +1035,7 @@ pub fn process_parameter(
         }
     }
 
-    if engine_type != EngineType::New {
+    if !engine_type.is_new() {
         if let Some(i) = ends_with_if_index(parameter) {
             if write {
                 extra_strings.push((&parameter[..i], true));
@@ -1043,7 +1044,7 @@ pub fn process_parameter(
             parameter = &parameter[..i];
         }
 
-        if code == Code::Shop {
+        if code.is_shop() {
             if !parameter.contains("shop_talk") {
                 return None;
             }
@@ -1071,7 +1072,7 @@ pub fn process_parameter(
         } else {
             let deque = &mut deque.as_ref().unwrap_log().lock().unwrap_log();
 
-            if code == Code::ChoiceArray {
+            if code.is_choice_array() {
                 deque.front().map(String::to_owned)
             } else {
                 deque.pop_front()

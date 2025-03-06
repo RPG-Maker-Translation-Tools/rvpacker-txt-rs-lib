@@ -4,8 +4,8 @@ use crate::{eprintln, println};
 use crate::{
     functions::{
         determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
-        get_other_labels, get_system_labels, is_allowed_code, parse_map_number, parse_rpgm_file, parse_translation,
-        process_parameter, process_variable, romanize_string, traverse_json,
+        get_other_labels, get_system_labels, is_allowed_code, is_bad_code, parse_map_number, parse_rpgm_file,
+        parse_translation, process_parameter, process_variable, romanize_string, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
@@ -51,12 +51,12 @@ fn process_parameter_write(
         process_parameter(code, &parameter, game_type, engine_type, romanize, map, deque, true);
 
     if let Some(mut translated) = translated {
-        if code == Code::Shop {
+        if code.is_shop() {
             let left: &str = unsafe { parameter.split_once('=').unwrap_unchecked().0 };
             translated = format!("{left}=\"{translated}\"");
         }
 
-        *value = if engine_type == EngineType::New {
+        *value = if engine_type.is_new() {
             Value::from(&translated)
         } else {
             json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
@@ -85,7 +85,7 @@ fn write_list(
         let code: Code = if is_allowed_code(code) {
             let code: Code = unsafe { transmute(code) };
 
-            if code == Code::DialogueStart && engine_type != EngineType::XP {
+            if is_bad_code(code, engine_type) {
                 Code::Bad
             } else {
                 code
@@ -94,7 +94,7 @@ fn write_list(
             Code::Bad
         };
 
-        let write_string_literally: bool = if engine_type == EngineType::New {
+        let write_string_literally: bool = if engine_type.is_new() {
             true
         } else {
             !match code {
@@ -105,8 +105,7 @@ fn write_list(
         };
 
         if in_sequence
-            && (!matches!(code, Code::Dialogue | Code::DialogueStart)
-                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
+            && (!code.is_any_dialogue() || (engine_type.is_xp() && code.is_dialogue_start() && !lines.is_empty()))
         {
             if !lines.is_empty() {
                 let mut joined: String = lines.join("\n");
@@ -164,15 +163,12 @@ fn write_list(
             in_sequence = false;
         }
 
-        if code == Code::Bad {
+        if code.is_bad() {
             continue;
         }
 
-        let value_i: usize = match code {
-            Code::Misc1 | Code::Misc2 | Code::Choice => 1,
-            _ => 0,
-        };
-        let value: &mut Value = &mut list[it][parameters_label][value_i];
+        let value_index: usize = if code.is_any_misc() || code.is_choice() { 1 } else { 0 };
+        let value: &mut Value = &mut list[it][parameters_label][value_index];
 
         match code {
             Code::ChoiceArray => {
@@ -225,14 +221,14 @@ fn write_list(
                         })
                         .trim();
 
-                    if code != Code::Credit && parameter_string.is_empty() {
+                    if !code.is_credit() && parameter_string.is_empty() {
                         continue;
                     }
 
                     parameter_string.to_owned()
                 };
 
-                if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
+                if code.is_any_dialogue() {
                     lines.push(parameter_string);
                     item_indices.push(it);
                     in_sequence = true;
@@ -384,7 +380,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
             hashmap
         };
 
-        let events_arr: Box<dyn Iterator<Item = &mut Value> + Send> = if engine_type == EngineType::New {
+        let events_arr: Box<dyn Iterator<Item = &mut Value> + Send> = if engine_type.is_new() {
             // Skipping first element in array as it is null
             Box::new(obj[events_label].as_array_mut().unwrap_log().iter_mut().skip(1))
         } else {
@@ -416,7 +412,7 @@ pub fn write_maps<P: AsRef<Path> + Sync>(
                 });
         });
 
-        let output_data: Vec<u8> = if engine_type == EngineType::New {
+        let output_data: Vec<u8> = if engine_type.is_new() {
             unsafe { to_vec(&obj).unwrap_unchecked() }
         } else {
             dump(obj, Some(""))
@@ -540,7 +536,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
                                 .join("\n");
 
                             let note_text: Option<&str> =
-                                if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
+                                if game_type == Some(GameType::Termina) && variable_type.is_desc() {
                                     match obj.get(note_label) {
                                         Some(value) => value.as_str(),
                                         None => None,
@@ -607,7 +603,7 @@ pub fn write_other<P: AsRef<Path> + Sync>(
                 });
         }
 
-        let output_data: Vec<u8> = if engine_type == EngineType::New {
+        let output_data: Vec<u8> = if engine_type.is_new() {
             unsafe { to_vec(&obj_arr).unwrap_unchecked() }
         } else {
             dump(obj_arr, Some(""))
@@ -675,7 +671,7 @@ pub fn write_system<P: AsRef<Path>>(
             }
 
             if let Some(translated) = translation_map.get(&string) {
-                *value = if engine_type == EngineType::New {
+                *value = if engine_type.is_new() {
                     Value::from(translated)
                 } else {
                     json!({"__type": "bytes", "data": Array::from(translated.as_bytes())})
@@ -706,7 +702,7 @@ pub fn write_system<P: AsRef<Path>>(
         .unwrap_log()
         .iter_mut()
         .for_each(|(key, value): (&str, &mut Value)| {
-            if engine_type != EngineType::New && !key.starts_with("__symbol__") {
+            if !engine_type.is_new() && !key.starts_with("__symbol__") {
                 return;
             }
 
@@ -729,7 +725,7 @@ pub fn write_system<P: AsRef<Path>>(
             }
         });
 
-    if engine_type != EngineType::New {
+    if !engine_type.is_new() {
         replace_value(&mut obj["__symbol__currency_unit"]);
     }
 
@@ -737,7 +733,7 @@ pub fn write_system<P: AsRef<Path>>(
         obj[game_title_label] = Value::from(&game_title);
     }
 
-    let output_data: Vec<u8> = if engine_type == EngineType::New {
+    let output_data: Vec<u8> = if engine_type.is_new() {
         unsafe { to_vec(&obj).unwrap_unchecked() }
     } else {
         dump(obj, Some(""))

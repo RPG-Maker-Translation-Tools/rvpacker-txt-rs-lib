@@ -27,12 +27,44 @@ pub enum ProcessingMode {
     Force,
 }
 
+impl ProcessingMode {
+    pub const fn is_default(self) -> bool {
+        matches!(self, ProcessingMode::Default)
+    }
+
+    pub const fn is_append(self) -> bool {
+        matches!(self, ProcessingMode::Append)
+    }
+
+    pub const fn is_force(self) -> bool {
+        matches!(self, ProcessingMode::Force)
+    }
+}
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum EngineType {
     New,
     VXAce,
     VX,
     XP,
+}
+
+impl EngineType {
+    pub const fn is_new(self) -> bool {
+        matches!(self, EngineType::New)
+    }
+
+    pub const fn is_ace(self) -> bool {
+        matches!(self, EngineType::VXAce)
+    }
+
+    pub const fn is_vx(self) -> bool {
+        matches!(self, EngineType::VX)
+    }
+
+    pub const fn is_xp(self) -> bool {
+        matches!(self, EngineType::XP)
+    }
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -50,6 +82,56 @@ pub enum Code {
     Bad = 0,
 }
 
+impl Code {
+    pub const fn is_dialogue(self) -> bool {
+        matches!(self, Code::Dialogue)
+    }
+
+    pub const fn is_dialogue_start(self) -> bool {
+        matches!(self, Code::DialogueStart)
+    }
+
+    pub const fn is_credit(self) -> bool {
+        matches!(self, Code::Credit)
+    }
+
+    pub const fn is_choice_array(self) -> bool {
+        matches!(self, Code::ChoiceArray)
+    }
+
+    pub const fn is_choice(self) -> bool {
+        matches!(self, Code::Choice)
+    }
+
+    pub const fn is_system(self) -> bool {
+        matches!(self, Code::System)
+    }
+
+    pub const fn is_misc1(self) -> bool {
+        matches!(self, Code::Misc1)
+    }
+
+    pub const fn is_misc2(self) -> bool {
+        matches!(self, Code::Misc2)
+    }
+
+    pub const fn is_any_misc(self) -> bool {
+        matches!(self, Code::Misc1 | Code::Misc2)
+    }
+
+    pub const fn is_shop(self) -> bool {
+        matches!(self, Code::Shop)
+    }
+
+    pub const fn is_bad(self) -> bool {
+        matches!(self, Code::Bad)
+    }
+
+    pub const fn is_any_dialogue(self) -> bool {
+        matches!(self, Code::Dialogue | Code::DialogueStart | Code::Credit)
+    }
+}
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum Variable {
     Name,
@@ -62,12 +144,67 @@ pub enum Variable {
     Note,
 }
 
+impl Variable {
+    pub const fn is_name(self) -> bool {
+        matches!(self, Variable::Name)
+    }
+
+    pub const fn is_nickname(self) -> bool {
+        matches!(self, Variable::Nickname)
+    }
+
+    pub const fn is_desc(self) -> bool {
+        matches!(self, Variable::Description)
+    }
+
+    pub const fn is_message1(self) -> bool {
+        matches!(self, Variable::Message1)
+    }
+
+    pub const fn is_message2(self) -> bool {
+        matches!(self, Variable::Message2)
+    }
+
+    pub const fn is_message3(self) -> bool {
+        matches!(self, Variable::Message3)
+    }
+
+    pub const fn is_message4(self) -> bool {
+        matches!(self, Variable::Message4)
+    }
+
+    pub const fn is_any_message(self) -> bool {
+        matches!(
+            self,
+            Variable::Message1 | Variable::Message2 | Variable::Message3 | Variable::Message4
+        )
+    }
+
+    pub const fn is_note(self) -> bool {
+        matches!(self, Variable::Note)
+    }
+}
+
 #[derive(PartialEq, Clone, Copy)]
 #[repr(u8)]
 pub enum MapsProcessingMode {
     Default,
     Separate,
     Preserve,
+}
+
+impl MapsProcessingMode {
+    pub const fn is_default(self) -> bool {
+        matches!(self, MapsProcessingMode::Default)
+    }
+
+    pub const fn is_separate(self) -> bool {
+        matches!(self, MapsProcessingMode::Separate)
+    }
+
+    pub const fn is_preserve(self) -> bool {
+        matches!(self, MapsProcessingMode::Preserve)
+    }
 }
 
 pub trait TrimReplace {

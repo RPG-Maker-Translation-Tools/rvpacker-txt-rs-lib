@@ -4,8 +4,8 @@ use crate::println;
 use crate::{
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, is_allowed_code, parse_map_number, parse_rpgm_file, parse_translation, process_parameter,
-        process_variable, romanize_string, string_is_only_symbols, traverse_json,
+        get_system_labels, is_allowed_code, is_bad_code, parse_map_number, parse_rpgm_file, parse_translation,
+        process_parameter, process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
     statics::{localization::PURGED_FILE_MSG, ENCODINGS, LINES_SEPARATOR, NEW_LINE},
     types::{
@@ -96,7 +96,7 @@ fn parse_list(
         let code: Code = if is_allowed_code(code) {
             let code: Code = unsafe { transmute(code) };
 
-            if code == Code::DialogueStart && engine_type != EngineType::XP {
+            if is_bad_code(code, engine_type) {
                 Code::Bad
             } else {
                 code
@@ -106,8 +106,7 @@ fn parse_list(
         };
 
         if in_sequence
-            && (!matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit)
-                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines.is_empty()))
+            && (!code.is_any_dialogue() || (engine_type.is_xp() && code.is_dialogue_start() && !lines.is_empty()))
         {
             if !lines.is_empty() {
                 let joined: String = lines.join(NEW_LINE);
@@ -121,19 +120,16 @@ fn parse_list(
             in_sequence = false;
         }
 
-        if code == Code::Bad {
+        if code.is_bad() {
             continue;
         }
 
         let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
-        let value_i: usize = match code {
-            Code::Misc1 | Code::Misc2 => 1,
-            _ => 0,
-        };
-        let value: &Value = &parameters[value_i];
+        let value_index: usize = if code.is_any_misc() { 1 } else { 0 };
+        let value: &Value = &parameters[value_index];
 
-        if code == Code::ChoiceArray {
+        if code.is_choice_array() {
             for i in 0..value.as_array().unwrap_log().len() {
                 let mut buf: Vec<u8> = Vec::new();
 
@@ -166,11 +162,11 @@ fn parse_list(
                 })
                 .trim();
 
-            if code != Code::Credit && parameter_string.is_empty() {
+            if !code.is_credit() && parameter_string.is_empty() {
                 continue;
             }
 
-            if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
+            if code.is_any_dialogue() {
                 lines.push(parameter_string);
                 in_sequence = true;
             } else {
@@ -313,7 +309,7 @@ pub fn purge_map<P: AsRef<Path>>(
                 translation_map = translation_maps.get_mut(&map_number).unwrap_log();
             }
 
-            let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
+            let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type.is_new() {
                 Box::new(obj[events_label].as_array().unwrap_log().iter().skip(1))
             } else {
                 Box::new(
@@ -534,11 +530,11 @@ pub fn purge_other<P: AsRef<Path>>(
                                     continue;
                                 }
 
-                                if variable_type != Variable::Note { trimmed } else { str }.to_owned()
+                                trimmed.to_owned()
                             };
 
                             let note_text: Option<&str> =
-                                if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
+                                if game_type == Some(GameType::Termina) && variable_type.is_desc() {
                                     match obj.get(note_label) {
                                         Some(value) => value.as_str(),
                                         None => None,
@@ -567,7 +563,7 @@ pub fn purge_other<P: AsRef<Path>>(
                                 replaced = replaced.trim_replace();
 
                                 lines_mut_ref.insert(replaced);
-                            } else if variable_type == Variable::Name {
+                            } else if variable_type.is_name() {
                                 continue 'obj;
                             }
                         }
@@ -758,7 +754,7 @@ pub fn purge_system<P: AsRef<Path>>(
 
         // Game terms vocabulary
         for (key, value) in obj[terms_label].as_object().unwrap_log() {
-            if engine_type != EngineType::New && !key.starts_with("__symbol__") {
+            if !engine_type.is_new() && !key.starts_with("__symbol__") {
                 continue;
             }
 
@@ -781,7 +777,7 @@ pub fn purge_system<P: AsRef<Path>>(
             }
         }
 
-        if engine_type != EngineType::New {
+        if !engine_type.is_new() {
             parse_str(&obj["__symbol__currency_unit"]);
         }
 

@@ -5,8 +5,8 @@ use crate::{
     determine_extension,
     functions::{
         extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
-        get_system_labels, is_allowed_code, parse_ignore, parse_map_number, parse_rpgm_file, parse_translation,
-        process_parameter, process_variable, romanize_string, string_is_only_symbols, traverse_json,
+        get_system_labels, is_allowed_code, is_bad_code, parse_ignore, parse_map_number, parse_rpgm_file,
+        parse_translation, process_parameter, process_variable, romanize_string, string_is_only_symbols, traverse_json,
     },
     statics::{
         localization::{FILES_ARE_NOT_PARSED_MSG, FILE_ALREADY_EXISTS_MSG, PARSED_FILE_MSG},
@@ -65,7 +65,7 @@ fn parse_list<'a>(
                 let vec: &mut &mut Vec<(String, String)> = unsafe { translation_map_vec.as_mut().unwrap_unchecked() };
                 let pos: usize = *lines_pos;
 
-                if processing_mode == ProcessingMode::Append {
+                if processing_mode.is_append() {
                     if vec.get(pos).is_some_and(|(o, _)| *o != parsed) {
                         vec.insert(pos, (parsed, String::new()));
                     }
@@ -124,7 +124,7 @@ fn parse_list<'a>(
         let code: Code = if is_allowed_code(code) {
             let code: Code = unsafe { transmute(code) };
 
-            if code == Code::DialogueStart && engine_type != EngineType::XP {
+            if is_bad_code(code, engine_type) {
                 Code::Bad
             } else {
                 code
@@ -134,8 +134,7 @@ fn parse_list<'a>(
         };
 
         if in_sequence
-            && (!matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit)
-                || (engine_type == EngineType::XP && code == Code::DialogueStart && !lines_vec.is_empty()))
+            && (!code.is_any_dialogue() || (engine_type.is_xp() && code.is_dialogue_start() && !lines_vec.is_empty()))
         {
             if !lines_vec.is_empty() {
                 let joined: String = lines_vec.join(NEW_LINE);
@@ -149,19 +148,16 @@ fn parse_list<'a>(
             in_sequence = false;
         }
 
-        if code == Code::Bad {
+        if code.is_bad() {
             continue;
         }
 
         let parameters: &Array = item[parameters_label].as_array().unwrap_log();
 
-        let value_i: usize = match code {
-            Code::Misc1 | Code::Misc2 => 1,
-            _ => 0,
-        };
-        let value: &Value = &parameters[value_i];
+        let value_index: usize = if code.is_any_misc() { 1 } else { 0 };
+        let value: &Value = &parameters[value_index];
 
-        if code == Code::ChoiceArray {
+        if code.is_choice_array() {
             for i in 0..value.as_array().unwrap_log().len() {
                 let mut buf: Vec<u8> = Vec::new();
 
@@ -194,11 +190,11 @@ fn parse_list<'a>(
                 })
                 .trim();
 
-            if code != Code::Credit && parameter_string.is_empty() {
+            if !code.is_credit() && parameter_string.is_empty() {
                 continue;
             }
 
-            if matches!(code, Code::Dialogue | Code::DialogueStart | Code::Credit) {
+            if code.is_any_dialogue() {
                 lines_vec.push(parameter_string);
                 in_sequence = true;
             } else {
@@ -210,7 +206,7 @@ fn parse_list<'a>(
 
 #[inline]
 fn get_order_number(mapinfos: &Value, entry: &str, map_number: u16, engine_type: EngineType) -> String {
-    if engine_type == EngineType::New {
+    if engine_type.is_new() {
         &mapinfos[map_number as usize]["order"]
     } else {
         &mapinfos[entry]["__symbol__order"]
@@ -222,7 +218,7 @@ fn get_order_number(mapinfos: &Value, entry: &str, map_number: u16, engine_type:
 
 #[inline]
 fn get_map_name(mapinfos: &Value, entry: &str, map_number: u16, engine_type: EngineType) -> String {
-    if engine_type == EngineType::New {
+    if engine_type.is_new() {
         &mapinfos[map_number as usize]["name"]
     } else {
         &mapinfos[&entry]["__symbol__name"]
@@ -351,7 +347,7 @@ pub fn read_map<P: AsRef<Path>>(
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("maps.txt");
 
-    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+    if processing_mode.is_default() && txt_output_path.exists() {
         println!("maps.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -374,7 +370,7 @@ pub fn read_map<P: AsRef<Path>>(
 
     let mut ignore_map: IndexMap<String, IgnoreEntry, GxBuildHasher> = IndexMap::default();
 
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         if txt_output_path.exists() {
             if ignore {
                 ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
@@ -438,7 +434,7 @@ pub fn read_map<P: AsRef<Path>>(
         let map_number: u16 = parse_map_number(&filename);
         let map_number_string: String = map_number.to_string();
 
-        let ignore_entry = ignore_map.get(&format!("<!-- File: map{map_number} -->"));
+        let ignore_entry: Option<&IgnoreEntry> = ignore_map.get(&format!("<!-- File: map{map_number} -->"));
 
         let map_number_comment: String = String::from("<!-- Map -->");
         let mut map_name_comment: String = String::new();
@@ -565,7 +561,7 @@ pub fn read_map<P: AsRef<Path>>(
             lines_pos += 1;
         }
 
-        let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type == EngineType::New {
+        let events_arr: Box<dyn Iterator<Item = &Value>> = if engine_type.is_new() {
             Box::new(obj[events_label].as_array().unwrap_log().iter().skip(1))
         } else {
             Box::new(
@@ -677,19 +673,19 @@ pub fn read_other<P: AsRef<Path>>(
         let txt_filename: String = basename.clone() + ".txt";
         let txt_output_path: &Path = &output_path.as_ref().join(txt_filename.clone());
 
-        if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+        if processing_mode.is_default() && txt_output_path.exists() {
             println!("{txt_filename} {FILE_ALREADY_EXISTS_MSG}",);
             continue;
         }
 
-        let ignore_entry = ignore_map.get(&format!("<!-- File: {basename} -->"));
+        let ignore_entry: Option<&IgnoreEntry> = ignore_map.get(&format!("<!-- File: {basename} -->"));
 
         let mut lines_set: IndexSetGx = IndexSet::default();
         let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *(&mut lines_set as *mut IndexSetGx) };
 
         let mut translation_map: IndexMapGx = IndexMap::default();
 
-        if processing_mode == ProcessingMode::Append {
+        if processing_mode.is_append() {
             if txt_output_path.exists() {
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
                 translation_map.extend(parse_translation(&translation, &txt_filename, false, true));
@@ -747,15 +743,15 @@ pub fn read_other<P: AsRef<Path>>(
                             trimmed.to_owned()
                         };
 
-                        let note_text: Option<&str> =
-                            if game_type == Some(GameType::Termina) && variable_type == Variable::Description {
-                                match obj.get(note_label) {
-                                    Some(value) => value.as_str(),
-                                    None => None,
-                                }
-                            } else {
-                                None
-                            };
+                        let note_text: Option<&str> = if game_type == Some(GameType::Termina) && variable_type.is_desc()
+                        {
+                            match obj.get(note_label) {
+                                Some(value) => value.as_str(),
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
 
                         let parsed: Option<String> = process_variable(
                             string,
@@ -793,7 +789,7 @@ pub fn read_other<P: AsRef<Path>>(
                                     );
                                 }
                             }
-                        } else if variable_type == Variable::Name {
+                        } else if variable_type.is_name() {
                             continue 'obj;
                         }
                     }
@@ -862,7 +858,11 @@ pub fn read_other<P: AsRef<Path>>(
                     .into_iter()
                     .map(|(original, translated)| format!("{original}{LINES_SEPARATOR}{translated}\n")),
             ),
-            _ => String::from_iter(lines_set.into_iter().map(|line: String| line + LINES_SEPARATOR + "\n")),
+            _ => String::from_iter(
+                lines_set
+                    .into_iter()
+                    .map(|line: String| format!("{line}{LINES_SEPARATOR}\n")),
+            ),
         };
 
         output_content.pop();
@@ -895,7 +895,7 @@ pub fn read_system<P: AsRef<Path>>(
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("system.txt");
 
-    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+    if processing_mode.is_default() && txt_output_path.exists() {
         println!("system.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -908,7 +908,7 @@ pub fn read_system<P: AsRef<Path>>(
 
     let mut translation_map: IndexMapGx = IndexMap::default();
 
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         if txt_output_path.exists() {
             if ignore {
                 ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
@@ -922,7 +922,7 @@ pub fn read_system<P: AsRef<Path>>(
         }
     }
 
-    let ignore_entry = ignore_map.get("<!-- File: system -->");
+    let ignore_entry: Option<&IgnoreEntry> = ignore_map.get("<!-- File: system -->");
 
     let mut parse_str = |value: &Value| {
         let mut string: String = {
@@ -959,7 +959,7 @@ pub fn read_system<P: AsRef<Path>>(
         lines_mut_ref.insert(string);
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-        if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
+        if processing_mode.is_append() && !translation_map.contains_key(string_ref) {
             translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
         }
     };
@@ -986,7 +986,7 @@ pub fn read_system<P: AsRef<Path>>(
 
     // Game terms vocabulary
     for (key, value) in obj[terms_label].as_object().unwrap_log() {
-        if engine_type != EngineType::New && !key.starts_with("__symbol__") {
+        if !engine_type.is_new() && !key.starts_with("__symbol__") {
             continue;
         }
 
@@ -1009,7 +1009,7 @@ pub fn read_system<P: AsRef<Path>>(
         }
     }
 
-    if engine_type != EngineType::New {
+    if !engine_type.is_new() {
         parse_str(&obj["__symbol__currency_unit"]);
     }
 
@@ -1088,7 +1088,7 @@ pub fn read_scripts<P: AsRef<Path>>(
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("scripts.txt");
 
-    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+    if processing_mode.is_default() && txt_output_path.exists() {
         println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -1098,7 +1098,7 @@ pub fn read_scripts<P: AsRef<Path>>(
     let mut lines_vec: Vec<String> = Vec::new();
     let mut translation_map: Vec<(String, String)> = Vec::new();
 
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         if txt_output_path.exists() {
             if ignore {
                 ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
@@ -1112,7 +1112,7 @@ pub fn read_scripts<P: AsRef<Path>>(
         }
     }
 
-    let ignore_entry = ignore_map.get("<!-- File: scripts -->");
+    let ignore_entry: Option<&IgnoreEntry> = ignore_map.get("<!-- File: scripts -->");
 
     let scripts_entries: Value = load(
         &read(scripts_file_path.as_ref()).unwrap_log(),
@@ -1160,7 +1160,7 @@ pub fn read_scripts<P: AsRef<Path>>(
 
     lines_vec.reserve_exact(extracted_strings.len());
 
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         translation_map.reserve_exact(extracted_strings.len());
     }
 
@@ -1194,7 +1194,7 @@ pub fn read_scripts<P: AsRef<Path>>(
         let last: &String = unsafe { lines_vec.last().unwrap_unchecked() };
         let pos: usize = lines_vec.len() - 1;
 
-        if processing_mode == ProcessingMode::Append && translation_map.get(pos).is_some_and(|x| *last != x.0) {
+        if processing_mode.is_append() && translation_map.get(pos).is_some_and(|x| *last != x.0) {
             translation_map.insert(pos, (last.to_owned(), String::new()));
         }
     }
@@ -1233,7 +1233,7 @@ pub fn read_plugins<P: AsRef<Path>>(
 ) {
     let txt_output_path: &Path = &output_path.as_ref().join("plugins.txt");
 
-    if processing_mode == ProcessingMode::Default && txt_output_path.exists() {
+    if processing_mode.is_default() && txt_output_path.exists() {
         println!("scripts.txt {FILE_ALREADY_EXISTS_MSG}");
         return;
     }
@@ -1243,7 +1243,7 @@ pub fn read_plugins<P: AsRef<Path>>(
     let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
     let translation: String;
 
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         if ignore {
             ignore_map = parse_ignore(output_path.as_ref().join(".rvpacker-ignore"));
         }

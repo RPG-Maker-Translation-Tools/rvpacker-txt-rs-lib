@@ -17,7 +17,7 @@ pub fn generate_json<P: AsRef<Path>>(
     engine_type: EngineType,
     processing_mode: ProcessingMode,
 ) {
-    if processing_mode == ProcessingMode::Append {
+    if processing_mode.is_append() {
         println!("{APPEND_MODE_IS_NOT_SUPPORTED}");
         return;
     }
