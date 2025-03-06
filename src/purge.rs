@@ -691,7 +691,7 @@ pub fn purge_system<P: AsRef<Path>>(
     let mut skip_indices: HashSet<usize, GxBuildHasher> = HashSet::default();
 
     if purge_empty {
-        for (i, (original, translation)) in translation_map.iter().enumerate() {
+        for (i, (original, translation)) in translation_map.iter().take(translation_map.len() - 1).enumerate() {
             if !original.starts_with("<!--") && translation.is_empty() {
                 if stat {
                     stat_vec.push((original.to_owned(), translation.to_owned()));
