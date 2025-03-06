@@ -80,21 +80,18 @@ fn parse_list<'a>(
                 if processing_mode.is_append() {
                     if map.contains_key(&parsed) {
                         let map_index: usize = unsafe { map.get_index_of(&parsed).unwrap_unchecked() };
-                        let set_index: usize = unsafe { set.get_index_of(&parsed).unwrap_unchecked() };
+                        let mut set_index: usize = unsafe { set.get_index_of(&parsed).unwrap_unchecked() };
 
                         if map_index < map.len() && set_index < map.len() {
-                            map.swap_indices(
-                                map_index,
-                                if maps_processing_mode.is_some() {
-                                    if set_index + 3 >= map.len() {
-                                        set_index + 2
-                                    } else {
-                                        set_index + 3
-                                    }
-                                } else {
-                                    set_index
-                                },
-                            );
+                            if maps_processing_mode.is_some() {
+                                set_index += 4;
+
+                                while set_index >= map.len() {
+                                    set_index -= 1
+                                }
+                            }
+
+                            map.swap_indices(map_index, set_index);
                         }
                     } else if (maps_processing_mode == Some(MapsProcessingMode::Separate)
                         || maps_processing_mode.is_none())
