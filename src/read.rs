@@ -781,25 +781,28 @@ pub fn read_other<P: AsRef<Path>>(
         else {
             // Skipping first element in array as it is null
             for obj in obj_arr.as_array().unwrap_log().iter().skip(1) {
+                let commonevent_name: &str = obj[&name_label].as_str().unwrap_log();
+
+                if !commonevent_name.is_empty() {
+                    let event_name_comment: String = format!("<!-- Event Name: {commonevent_name} -->");
+                    lines_set.insert(event_name_comment.clone());
+                    let pos: usize = lines_set.len() - 1;
+
+                    if processing_mode.is_append() && !translation_map.contains_key(&event_name_comment) {
+                        if pos <= translation_map.len() {
+                            translation_map.shift_insert(pos, event_name_comment, String::new());
+                        } else {
+                            translation_map.insert(event_name_comment, String::new());
+                        }
+                    }
+                }
+
                 // CommonEvents doesn't have pages, so we can just check if it's Troops
                 let pages_length: usize = if filename.starts_with("Tr") {
                     obj[pages_label].as_array().unwrap_log().len()
                 } else {
                     1
                 };
-
-                let commonevent_name: &str = obj[&name_label].as_str().unwrap_log();
-
-                if !commonevent_name.is_empty() {
-                    let event_name_comment: String = format!("<!-- Event Name: {commonevent_name} -->");
-                    lines_set.insert(event_name_comment.clone());
-
-                    if processing_mode == ProcessingMode::Append && !translation_map.contains_key(commonevent_name) {
-                        translation_map.shift_insert(lines_set.len() - 1, event_name_comment, String::new());
-                    } else {
-                        translation_map.insert(event_name_comment, String::new());
-                    }
-                }
 
                 for i in 0..pages_length {
                     let list: &Value = if pages_length != 1 {
