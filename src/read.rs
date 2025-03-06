@@ -772,6 +772,12 @@ pub fn read_other<P: AsRef<Path>>(
                             replaced.pop();
                             replaced.pop();
 
+                            if let Some(entry) = ignore_entry {
+                                if entry.contains(&replaced) {
+                                    continue;
+                                }
+                            }
+
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_mut_ref.last().unwrap_unchecked() }.as_str();
 
