@@ -76,20 +76,36 @@ fn parse_list<'a>(
                 *lines_pos += 1;
             } else {
                 let absent: bool = set.insert(parsed.clone());
-                let pos: usize = if maps_processing_mode == Some(MapsProcessingMode::Default) {
-                    *lines_pos
-                } else {
-                    set.len() - 1
-                };
 
-                if processing_mode == ProcessingMode::Append {
-                    if !map.contains_key(&parsed) {
-                        if maps_processing_mode == Some(MapsProcessingMode::Separate) && !set.contains(&parsed) {
-                            map.shift_insert(pos, parsed, String::new());
-                        } else if maps_processing_mode == Some(MapsProcessingMode::Default) && absent {
-                            map.shift_insert(pos, parsed, String::new());
-                            *lines_pos += 1;
+                if processing_mode.is_append() {
+                    if map.contains_key(&parsed) {
+                        let map_index: usize = unsafe { map.get_index_of(&parsed).unwrap_unchecked() };
+                        let set_index: usize = unsafe { set.get_index_of(&parsed).unwrap_unchecked() };
+
+                        if map_index < map.len() && set_index < map.len() {
+                            map.swap_indices(
+                                map_index,
+                                if maps_processing_mode.is_some() {
+                                    if set_index + 3 >= map.len() {
+                                        set_index + 2
+                                    } else {
+                                        set_index + 3
+                                    }
+                                } else {
+                                    set_index
+                                },
+                            );
                         }
+                    } else if (maps_processing_mode == Some(MapsProcessingMode::Separate)
+                        || maps_processing_mode.is_none())
+                        && !set.contains(&parsed)
+                    {
+                        let pos: usize = set.len() - 1;
+                        map.shift_insert(pos, parsed, String::new());
+                    } else if maps_processing_mode == Some(MapsProcessingMode::Default) && absent {
+                        let pos: usize = *lines_pos;
+                        map.shift_insert(pos, parsed, String::new());
+                        *lines_pos += 1;
                     }
                 } else if maps_processing_mode == Some(MapsProcessingMode::Default) {
                     if absent {
@@ -763,12 +779,19 @@ pub fn read_other<P: AsRef<Path>>(
                             lines_mut_ref.insert(replaced);
                             let string_ref: &str = unsafe { lines_mut_ref.last().unwrap_unchecked() }.as_str();
 
-                            if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
-                                translation_map.shift_insert(
-                                    lines_mut_ref.len() - 1,
-                                    string_ref.to_owned(),
-                                    String::new(),
-                                );
+                            if processing_mode.is_append() {
+                                if translation_map.contains_key(string_ref) {
+                                    translation_map.swap_indices(
+                                        translation_map.get_index_of(string_ref).unwrap(),
+                                        lines_mut_ref.len() - 1,
+                                    );
+                                } else {
+                                    translation_map.shift_insert(
+                                        lines_mut_ref.len() - 1,
+                                        string_ref.to_owned(),
+                                        String::new(),
+                                    );
+                                }
                             }
                         } else if variable_type == Variable::Name {
                             continue 'obj;
@@ -1016,8 +1039,15 @@ pub fn read_system<P: AsRef<Path>>(
         lines_mut_ref.insert(game_title_string);
         let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-        if processing_mode == ProcessingMode::Append && !translation_map.contains_key(string_ref) {
-            translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+        if processing_mode.is_append() {
+            if translation_map.contains_key(string_ref) {
+                translation_map.swap_indices(
+                    translation_map.get_index_of(string_ref).unwrap(),
+                    lines_mut_ref.len() - 1,
+                );
+            } else {
+                translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+            }
         }
     }
 
