@@ -84,8 +84,10 @@ fn parse_list<'a>(
 
                         if map_index < map.len() && set_index < map.len() {
                             if maps_processing_mode.is_some() {
-                                set_index += 4;
+                                // counting map comments
+                                set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
 
+                                // some comments may be missing in the map, so we subtract
                                 while set_index >= map.len() {
                                     set_index -= 1
                                 }
