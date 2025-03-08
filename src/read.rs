@@ -76,24 +76,40 @@ fn parse_list<'a>(
                 *lines_pos += 1;
             } else {
                 let absent: bool = set.insert(parsed.clone());
+                if maps_processing_mode == Some(MapsProcessingMode::Default) && absent {
+                    *lines_pos += 1;
+                }
 
                 if processing_mode.is_append() {
                     if map.contains_key(&parsed) {
                         let map_index: usize = unsafe { map.get_index_of(&parsed).unwrap_unchecked() };
-                        let mut set_index: usize = unsafe { set.get_index_of(&parsed).unwrap_unchecked() };
+                        let mut set_index: usize = if maps_processing_mode == Some(MapsProcessingMode::Separate)
+                            || maps_processing_mode.is_none()
+                        {
+                            unsafe { set.get_index_of(&parsed).unwrap_unchecked() }
+                        } else {
+                            if !absent {
+                                return;
+                            }
 
-                        if map_index < map.len() && set_index < map.len() {
-                            if maps_processing_mode.is_some() {
-                                // counting map comments
-                                set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
+                            *lines_pos
+                        };
+
+                        if map_index < map.len() && set_index < set.len() {
+                            if let Some(mode) = maps_processing_mode {
+                                // counting starting comments, three to four
+                                if mode.is_separate() {
+                                    set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
+                                }
 
                                 // some comments may be missing in the map, so we subtract
-                                while set_index >= map.len() {
-                                    set_index -= 1
+                                let map_len: usize = map.len();
+                                if set_index >= map_len {
+                                    set_index = map_len - 1;
                                 }
                             }
 
-                            map.swap_indices(map_index, set_index);
+                            map.swap_indices(set_index, map_index);
                         }
                     } else if (maps_processing_mode == Some(MapsProcessingMode::Separate)
                         || maps_processing_mode.is_none())
@@ -102,9 +118,8 @@ fn parse_list<'a>(
                         let pos: usize = set.len() - 1;
                         map.shift_insert(pos, parsed, String::new());
                     } else if maps_processing_mode == Some(MapsProcessingMode::Default) && absent {
-                        let pos: usize = *lines_pos;
+                        let pos: usize = *lines_pos - 1;
                         map.shift_insert(pos, parsed, String::new());
-                        *lines_pos += 1;
                     }
                 } else if maps_processing_mode == Some(MapsProcessingMode::Default) {
                     if absent {
@@ -240,24 +255,21 @@ fn find_starting_comment<'a, I: Iterator<Item = (&'a String, &'a String)>>(
 fn process_map_comments(
     translation_map: &mut IndexMapGx,
     map_number_comment_index: &mut usize,
-    map_name_comment: &str,
-    map_display_name_comment: &str,
     lines_pos: &mut usize,
+    map_name_comment: String,
+    map_display_name_comment: String,
 ) {
-    if !map_name_comment.is_empty() && !translation_map.contains_key(map_name_comment) {
+    if !map_name_comment.is_empty() && !translation_map.contains_key(&map_name_comment) {
         if let Some(index) = find_starting_comment(translation_map.iter(), *lines_pos, "<!-- Map Name") {
             translation_map.shift_remove_index(index);
         }
 
-        translation_map.shift_insert(
-            *map_number_comment_index + 1,
-            map_name_comment.to_string(),
-            String::new(),
-        );
         *map_number_comment_index += 1;
+        translation_map.shift_insert(*map_number_comment_index, map_name_comment.to_string(), String::new());
+        *lines_pos += 1;
     }
 
-    if !map_display_name_comment.is_empty() && !translation_map.contains_key(map_display_name_comment) {
+    if !map_display_name_comment.is_empty() && !translation_map.contains_key(&map_display_name_comment) {
         let mut translation: String = String::new();
 
         if let Some(index) = find_starting_comment(translation_map.iter(), *lines_pos, "<!-- In-game") {
@@ -266,12 +278,12 @@ fn process_map_comments(
             }
         }
 
+        *map_number_comment_index += 1;
         translation_map.shift_insert(
-            *map_number_comment_index + 1,
+            *map_number_comment_index,
             map_display_name_comment.to_string(),
             translation,
         );
-        *map_number_comment_index += 1;
         *lines_pos += 1;
     }
 }
@@ -280,24 +292,22 @@ fn process_map_comments(
 fn process_map_comments_vec(
     translation_map_vec: &mut Vec<(String, String)>,
     map_number_comment_index: &mut usize,
-    lines_pos: usize,
-    map_name_comment: &str,
-    map_display_name_comment: &str,
+    lines_pos: &mut usize,
+    map_name_comment: String,
+    map_display_name_comment: String,
 ) {
     if !map_name_comment.is_empty() {
         if let Some(index) = find_starting_comment(
             translation_map_vec.iter().map(|(a, b)| (a, b)),
-            lines_pos,
+            *lines_pos,
             "<!-- Map Name",
         ) {
             translation_map_vec.remove(index);
         }
 
-        translation_map_vec.insert(
-            *map_number_comment_index + 1,
-            (map_name_comment.to_string(), String::new()),
-        );
         *map_number_comment_index += 1;
+        translation_map_vec.insert(*map_number_comment_index, (map_name_comment, String::new()));
+        *lines_pos += 1;
     }
 
     if !map_display_name_comment.is_empty() {
@@ -305,7 +315,7 @@ fn process_map_comments_vec(
 
         if let Some(index) = find_starting_comment(
             translation_map_vec.iter().map(|(a, b)| (a, b)),
-            lines_pos,
+            *lines_pos,
             "<!-- In-game",
         ) {
             if translation_map_vec.get(index).is_some() {
@@ -314,11 +324,9 @@ fn process_map_comments_vec(
             }
         }
 
-        translation_map_vec.insert(
-            *map_number_comment_index + 1,
-            (map_display_name_comment.to_string(), translation),
-        );
         *map_number_comment_index += 1;
+        translation_map_vec.insert(*map_number_comment_index, (map_display_name_comment, translation));
+        *lines_pos += 1;
     }
 }
 
@@ -486,7 +494,12 @@ pub fn read_map<P: AsRef<Path>>(
             }
             (ProcessingMode::Default | ProcessingMode::Force, MapsProcessingMode::Preserve) => {
                 translation_map_vec.push((map_number_comment, map_number_string));
-                translation_map_vec.push((map_name_comment, String::new()));
+                lines_pos += 1;
+
+                if !map_name_comment.is_empty() {
+                    translation_map_vec.push((map_name_comment, String::new()));
+                    lines_pos += 1;
+                }
 
                 if !map_display_name_comment.is_empty() {
                     translation_map_vec.push((map_display_name_comment, String::new()));
@@ -494,7 +507,7 @@ pub fn read_map<P: AsRef<Path>>(
                 }
 
                 translation_map_vec.push((order, order_number));
-                lines_pos += 3;
+                lines_pos += 1;
             }
             (ProcessingMode::Append, MapsProcessingMode::Default | MapsProcessingMode::Separate) => {
                 match maps_processing_mode {
@@ -515,13 +528,14 @@ pub fn read_map<P: AsRef<Path>>(
                     .take(4)
                     .position(|(k, _)| k == "<!-- Map -->")
                     .unwrap_log();
+                lines_pos += 1;
 
                 process_map_comments(
                     translation_map,
                     &mut map_number_comment_index,
-                    &map_name_comment,
-                    &map_display_name_comment,
                     &mut lines_pos,
+                    map_name_comment,
+                    map_display_name_comment,
                 );
 
                 if let Some(x) = translation_map.get(&order) {
@@ -531,8 +545,7 @@ pub fn read_map<P: AsRef<Path>>(
                 } else {
                     translation_map.shift_insert(map_number_comment_index + 1, order, order_number);
                 }
-
-                lines_pos += 3;
+                lines_pos += 1;
             }
             (ProcessingMode::Append, MapsProcessingMode::Preserve) => {
                 let mut map_number_comment_index: usize = translation_map_vec
@@ -541,17 +554,18 @@ pub fn read_map<P: AsRef<Path>>(
                     .take(4)
                     .position(|(k, _)| k == "<!-- Map -->")
                     .unwrap_log();
+                lines_pos += 1;
 
                 process_map_comments_vec(
                     &mut translation_map_vec,
                     &mut map_number_comment_index,
-                    lines_pos,
-                    &map_name_comment,
-                    &map_display_name_comment,
+                    &mut lines_pos,
+                    map_name_comment,
+                    map_display_name_comment,
                 );
 
                 translation_map_vec.insert(map_number_comment_index + 1, (order, order_number));
-                lines_pos += 3;
+                lines_pos += 1;
             }
         }
 
