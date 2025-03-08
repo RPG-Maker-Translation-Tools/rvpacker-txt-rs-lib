@@ -95,22 +95,18 @@ fn parse_list<'a>(
                             *lines_pos
                         };
 
-                        if map_index < map.len() && set_index < set.len() {
-                            if let Some(mode) = maps_processing_mode {
-                                // counting starting comments, three to four
-                                if mode.is_separate() {
-                                    set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
-                                }
-
-                                // some comments may be missing in the map, so we subtract
-                                let map_len: usize = map.len();
-                                if set_index >= map_len {
-                                    set_index = map_len - 1;
-                                }
-                            }
-
-                            map.swap_indices(set_index, map_index);
+                        if maps_processing_mode == Some(MapsProcessingMode::Separate) {
+                            // counting starting comments, three to four
+                            set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
                         }
+
+                        // just prevent the fucking panic
+                        let map_len: usize = map.len();
+                        if set_index >= map_len {
+                            set_index = map_len - 1;
+                        }
+
+                        map.swap_indices(set_index, map_index);
                     } else if (maps_processing_mode == Some(MapsProcessingMode::Separate)
                         || maps_processing_mode.is_none())
                         && !set.contains(&parsed)
