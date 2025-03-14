@@ -331,14 +331,6 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
         self
     }
 
-    /// Sets the engine type.
-    ///
-    /// Must be the same value, as in previous read.
-    pub fn engine_type(mut self, engine_type: EngineType) -> Self {
-        self.engine_type = engine_type;
-        self
-    }
-
     /// Sets whether to trim strings.
     ///
     /// Must be the same value, as in previous read.
@@ -612,14 +604,6 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
         self
     }
 
-    /// Sets the engine type.
-    ///
-    /// Must be the same value, as in previous read.
-    pub fn engine_type(mut self, engine_type: EngineType) -> Self {
-        self.engine_type = engine_type;
-        self
-    }
-
     /// Sets whether to trim strings.
     ///
     /// Must be the same value, as in previous read.
@@ -883,14 +867,6 @@ impl<P: AsRef<Path>> SystemWriter<P> {
     /// When enabled, the struct will print information about files being processed.
     pub fn logging(mut self, logging: bool) -> Self {
         self.logging = logging;
-        self
-    }
-
-    /// Sets the engine type.
-    ///
-    /// Must be the same value, as in previous read.
-    pub fn engine_type(mut self, engine_type: EngineType) -> Self {
-        self.engine_type = engine_type;
         self
     }
 
@@ -1211,14 +1187,6 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// When enabled, the struct will print information about files being processed.
     pub fn logging(mut self, logging: bool) -> Self {
         self.logging = logging;
-        self
-    }
-
-    /// Sets the engine type.
-    ///
-    /// Must be the same value, as in previous read.
-    pub fn engine_type(mut self, engine_type: EngineType) -> Self {
-        self.engine_type = engine_type;
         self
     }
 
