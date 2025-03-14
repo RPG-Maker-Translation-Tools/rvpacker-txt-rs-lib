@@ -1725,7 +1725,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
 
         if self.logging {
             println!(
-                "{PARSED_FILE_MSG} Scripts{}",
+                "{PARSED_FILE_MSG} Scripts.{}",
                 self.scripts_file_path.as_ref().extension().unwrap().to_str().unwrap()
             )
         }
