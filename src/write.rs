@@ -431,9 +431,7 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
                 }
             }
 
-            if !translation_map.is_empty() {
-                translation_maps.insert(map_number, translation_map);
-            }
+            translation_maps.entry(map_number).or_insert(translation_map);
 
             (names_map, translation_deque, translation_maps)
         };
