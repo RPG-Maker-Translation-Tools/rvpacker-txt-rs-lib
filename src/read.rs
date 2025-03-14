@@ -1501,7 +1501,6 @@ pub struct ScriptReader<P: AsRef<Path>> {
     output_path: P,
     romanize: bool,
     logging: bool,
-    engine_type: EngineType,
     processing_mode: ProcessingMode,
     ignore: bool,
 }
@@ -1514,8 +1513,8 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// - `scripts_file_path` - Path to the `Scripts` file
     /// - `output_path` - Path to the directory where the output `.txt` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(scripts_file_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(scripts_file_path, output_path, engine_type)
+    pub fn new(scripts_file_path: P, output_path: P) -> Self {
+        Self::default(scripts_file_path, output_path)
     }
 
     /// Creates a new `ScriptReader` with default values.
@@ -1531,13 +1530,12 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// - `scripts_file_path` - Path to the `Scripts` file
     /// - `output_path` - Path to the directory where the output `.txt` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(scripts_file_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(scripts_file_path: P, output_path: P) -> Self {
         Self {
             scripts_file_path,
             output_path,
             romanize: false,
             logging: false,
-            engine_type,
             processing_mode: ProcessingMode::Default,
             ignore: false,
         }
@@ -1727,7 +1725,10 @@ impl<P: AsRef<Path>> ScriptReader<P> {
         write(txt_output_path, output_content).unwrap_log();
 
         if self.logging {
-            println!("{PARSED_FILE_MSG} Scripts{}", determine_extension(self.engine_type))
+            println!(
+                "{PARSED_FILE_MSG} Scripts{}",
+                self.scripts_file_path.as_ref().extension().unwrap().to_str().unwrap()
+            )
         }
     }
 }
