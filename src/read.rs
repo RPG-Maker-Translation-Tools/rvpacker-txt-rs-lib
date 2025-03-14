@@ -1590,8 +1590,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     ///
     /// let reader = ScriptReader::new(
     ///     Path::new("Data/Scripts.rvdata"),
-    ///     Path::new("translation"),
-    ///     EngineType::VX
+    ///     Path::new("translation")
     /// );
     ///
     /// reader.read();
