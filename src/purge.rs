@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 #[cfg(feature = "log")]
 use crate::println;
 use crate::{
@@ -31,32 +30,15 @@ use std::{
 
 /// Writes the ignore map to a `.rvpacker-ignore` file.
 ///
-/// This function takes an `IgnoreMap` containing file patterns and lines to ignore
+/// This function takes an `ignore_map` containing file patterns and lines to ignore
 /// during translation processing, and writes it to a `.rvpacker-ignore` file at the
-/// specified output path.
+/// specified output path. Use to output the `.rvpacker-ignore` file after performing
+/// purges with `create_ignore` argument.
 ///
 /// # Parameters
 ///
 /// - `ignore_map` - A map of file patterns to sets of lines to ignore
 /// - `output_path` - The directory where the `.rvpacker-ignore` file will be written
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// use rvpacker_txt_rs_lib::purge::write_ignore;
-/// use rvpacker_txt_rs_lib::types::IgnoreMap;
-/// use indexmap::IndexMap;
-/// use std::collections::HashSet;
-/// use gxhash::GxBuildHasher;
-///
-/// let mut ignore_map: IgnoreMap = IndexMap::default();
-/// let mut entry = HashSet::with_hasher(GxBuildHasher::default());
-/// entry.insert("Line to ignore".to_string());
-/// ignore_map.insert("<!-- File: map1 -->".to_string(), entry);
-///
-/// write_ignore(ignore_map, Path::new("output"));
-/// ```
 #[inline]
 pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
     use std::fmt::Write;
@@ -81,27 +63,13 @@ pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
 /// Writes statistics about purged lines to a `stat.txt` file.
 ///
 /// This function takes a vector of tuples containing original text and its translation,
-/// and writes them to a `stat.txt` file at the specified output path. This is typically
-/// used to record which lines were purged during the purging process.
+/// and writes them to a `stat.txt` file at the specified output path. Use to output
+/// the `stat.txt` file after performing purges with `stat` argument.
 ///
 /// # Parameters
 ///
 /// - `stat_vec` - A vector of tuples containing (original, translation) pairs
 /// - `output_path` - The directory where the `stat.txt` file will be written
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// use rvpacker_txt_rs_lib::purge::write_stat;
-///
-/// let stats = vec![
-///     ("Original text".to_string(), "Translation".to_string()),
-///     ("Another line".to_string(), "".to_string()),
-/// ];
-///
-/// write_stat(stats, Path::new("output"));
-/// ```
 #[inline]
 pub fn write_stat<P: AsRef<Path>>(stat_vec: Vec<(String, String)>, output_path: P) {
     write(
@@ -115,6 +83,7 @@ pub fn write_stat<P: AsRef<Path>>(stat_vec: Vec<(String, String)>, output_path: 
     .unwrap_log();
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn parse_list(
     list: &Array,
@@ -262,7 +231,7 @@ pub struct MapPurger<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> MapPurger<P> {
-    /// Creates a new `MapPurger` with the given parameters.
+    /// Creates a new `MapPurger` with default values.
     ///
     /// # Parameters
     ///
@@ -389,7 +358,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = MapPurger::new(
-    ///     Path::new("original/data"),
+    ///     Path::new("data"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// )
@@ -649,7 +618,6 @@ impl<P: AsRef<Path>> MapPurger<P> {
 ///
 /// - `original_path` - Path to the directory containing the original data files
 /// - `output_path` - Path to the directory containing the translation files
-/// - `maps_processing_mode` - Controls how maps are processed
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `game_type` - Optional specific game type for specialized processing
@@ -661,7 +629,6 @@ impl<P: AsRef<Path>> MapPurger<P> {
 pub struct OtherPurger<P: AsRef<Path>> {
     original_path: P,
     output_path: P,
-    maps_processing_mode: MapsProcessingMode,
     romanize: bool,
     logging: bool,
     game_type: Option<GameType>,
@@ -673,7 +640,7 @@ pub struct OtherPurger<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> OtherPurger<P> {
-    /// Creates a new `OtherPurger` with the given parameters.
+    /// Creates a new `OtherPurger` with default values.
     ///
     /// # Parameters
     ///
@@ -709,7 +676,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
             romanize: false,
             logging: false,
             game_type: None,
-            maps_processing_mode: MapsProcessingMode::Default,
             stat: false,
             leave_filled: false,
             create_ignore: false,
@@ -721,10 +687,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     ///
     /// When enabled, non-Latin text (like Japanese, Chinese, etc.) will be
     /// converted to Latin characters where possible.
-    ///
-    /// # Parameters
-    ///
-    /// - `romanize` - Whether to enable romanization
     pub fn romanize(mut self, romanize: bool) -> Self {
         self.romanize = romanize;
         self
@@ -733,10 +695,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// Sets whether to log processing information.
     ///
     /// When enabled, the purger will log information about the files being processed.
-    ///
-    /// # Parameters
-    ///
-    /// - `logging` - Whether to enable logging
     pub fn logging(mut self, logging: bool) -> Self {
         self.logging = logging;
         self
@@ -746,27 +704,8 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     ///
     /// Some games may require special handling. This parameter allows specifying
     /// a particular game type for customized processing.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - The game type to use for specialized processing
     pub fn game_type(mut self, game_type: Option<GameType>) -> Self {
         self.game_type = game_type;
-        self
-    }
-
-    /// Sets the maps processing mode.
-    ///
-    /// This controls how maps are processed:
-    /// - `Default`: Process all maps into a single file with standard ordering
-    /// - `Separate`: Process each map separately with its own section
-    /// - `Preserve`: Preserve the exact structure of the original maps
-    ///
-    /// # Parameters
-    ///
-    /// - `maps_processing_mode` - The processing mode to use
-    pub fn maps_processing_mode(mut self, maps_processing_mode: MapsProcessingMode) -> Self {
-        self.maps_processing_mode = maps_processing_mode;
         self
     }
 
@@ -774,10 +713,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     ///
     /// When enabled, the purger will generate statistics about what would be purged
     /// without actually modifying any files.
-    ///
-    /// # Parameters
-    ///
-    /// - `stat` - Whether to enable statistics mode
     pub fn stat(mut self, stat: bool) -> Self {
         self.stat = stat;
         self
@@ -787,10 +722,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     ///
     /// When enabled, translation that have content will not be purged even if
     /// they're no longer used in the game.
-    ///
-    /// # Parameters
-    ///
-    /// - `leave_filled` - Whether to leave filled translation
     pub fn leave_filled(mut self, leave_filled: bool) -> Self {
         self.leave_filled = leave_filled;
         self
@@ -800,10 +731,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     ///
     /// When enabled, the purger will create a `.rvpacker-ignore` file containing
     /// entries for all purged translation.
-    ///
-    /// # Parameters
-    ///
-    /// - `create_ignore` - Whether to create an ignore file
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.create_ignore = create_ignore;
         self
@@ -812,10 +739,6 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// Sets whether to purge empty translation.
     ///
     /// When enabled, translation that are empty will be purged.
-    ///
-    /// # Parameters
-    ///
-    /// - `purge_empty` - Whether to purge empty translation
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -837,7 +760,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = OtherPurger::new(
-    ///     Path::new("original/data"),
+    ///     Path::new("data"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// )
@@ -1117,7 +1040,7 @@ pub struct SystemPurger<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> SystemPurger<P> {
-    /// Creates a new `SystemPurger` with the given parameters.
+    /// Creates a new `SystemPurger` with default values.
     ///
     /// # Parameters
     ///
@@ -1224,7 +1147,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = SystemPurger::new(
-    ///     Path::new("original/data/System.json"),
+    ///     Path::new("data/System.json"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// )
@@ -1466,7 +1389,7 @@ pub struct PluginPurger<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> PluginPurger<P> {
-    /// Creates a new `PluginPurger` with the given parameters.
+    /// Creates a new `PluginPurger` with default values.
     ///
     /// # Parameters
     ///
@@ -1570,7 +1493,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     /// use rvpacker_txt_rs_lib::purge::PluginPurger;
     ///
     /// let purger = PluginPurger::new(
-    ///     Path::new("original/js/plugins.js"),
+    ///     Path::new("js/plugins.js"),
     ///     Path::new("translation")
     /// )
     /// .logging(true)
@@ -1722,7 +1645,7 @@ pub struct ScriptPurger<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> ScriptPurger<P> {
-    /// Creates a new `ScriptPurger` with the given parameters.
+    /// Creates a new `ScriptPurger` with default values.
     ///
     /// # Parameters
     ///
@@ -1825,7 +1748,7 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
     /// use rvpacker_txt_rs_lib::purge::ScriptPurger;
     ///
     /// let purger = ScriptPurger::new(
-    ///     Path::new("original/data/Scripts.rxdata"),
+    ///     Path::new("data/Scripts.rxdata"),
     ///     Path::new("translation")
     /// )
     /// .logging(true)

@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 #[cfg(feature = "log")]
 use crate::{eprintln, println};
 use crate::{
@@ -32,6 +31,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn process_parameter_write(
     code: Code,
@@ -64,6 +64,7 @@ fn process_parameter_write(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn write_list(
     list: &mut Array,
@@ -252,8 +253,8 @@ fn write_list(
 /// This struct handles the process of reading translation from a `maps.txt` file and applying them
 /// to the original map files, producing new map files with the translated text.
 pub struct MapWriter<P: AsRef<Path> + Sync> {
-    maps_path: P,
     original_path: P,
+    translation_path: P,
     output_path: P,
     maps_processing_mode: MapsProcessingMode,
     romanize: bool,
@@ -268,26 +269,26 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
     ///
     /// # Arguments
     ///
-    /// - `maps_path` - Path to the directory containing the `maps.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `original_path` - Path to the directory containing the original map files
     /// - `output_path` - Path to the directory where translated map files will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(maps_path: P, original_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(maps_path, original_path, output_path, engine_type)
+    pub fn new(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
+        Self::default(original_path, translation_path, output_path, engine_type)
     }
 
     /// Creates a new MapWriter instance with default values.
     ///
     /// # Arguments
     ///
-    /// - `maps_path` - Path to the directory containing the `maps.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `original_path` - Path to the directory containing the original map files
     /// - `output_path` - Path to the directory where translated map files will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(maps_path: P, original_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
         Self {
-            maps_path,
             original_path,
+            translation_path,
             output_path,
             maps_processing_mode: MapsProcessingMode::Default,
             romanize: false,
@@ -357,8 +358,8 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let writer = MapWriter::new(
-    ///     "translation/maps",
-    ///     "original",
+    ///     "data",
+    ///     "translation",
     ///     "output/data",
     ///     EngineType::New
     /// )
@@ -369,7 +370,7 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
     /// ```
     #[inline(always)]
     pub fn write(self) {
-        let translation: String = read_to_string(self.maps_path.as_ref().join("maps.txt")).unwrap_log();
+        let translation: String = read_to_string(self.translation_path.as_ref().join("maps.txt")).unwrap_log();
 
         let (names_map, translation_deque, translation_maps) = {
             // Allocated when maps processing mode is PRESERVE.
@@ -543,8 +544,8 @@ impl<P: AsRef<Path> + Sync> MapWriter<P> {
 /// to the original data files (like items, actors, classes, etc.), producing new files with
 /// the translated text.
 pub struct OtherWriter<P: AsRef<Path> + Sync> {
-    other_path: P,
     original_path: P,
+    translation_path: P,
     output_path: P,
     romanize: bool,
     logging: bool,
@@ -558,28 +559,26 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
     ///
     /// # Arguments
     ///
-    /// - `other_path` - Path to the directory containing the `.txt` files with translation
     /// - `original_path` - Path to the directory containing the original data files
+    /// - `translation_path` - Path to the directory containing the `.txt` files with translation
     /// - `output_path` - Path to the directory where translated data files will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(other_path: P, original_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(other_path, original_path, output_path, engine_type)
+    pub fn new(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
+        Self::default(original_path, translation_path, output_path, engine_type)
     }
 
     /// Creates a new `OtherWriter` instance with default values.
     ///
-    /// This is an alias for `new()` that explicitly shows it's creating an instance with default values.
-    ///
     /// # Arguments
     ///
-    /// - `other_path` - Path to the directory containing the `.txt` files with translation
     /// - `original_path` - Path to the directory containing the original data files
+    /// - `translation_path` - Path to the directory containing the `.txt` files with translation
     /// - `output_path` - Path to the directory where translated data files will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(other_path: P, original_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
         Self {
-            other_path,
             original_path,
+            translation_path,
             output_path,
             romanize: false,
             logging: false,
@@ -640,8 +639,8 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let writer = OtherWriter::new(
-    ///     "translation/data",
-    ///     "original/data",
+    ///     "data",
+    ///     "translation",
     ///     "output/data",
     ///     EngineType::New
     /// )
@@ -687,7 +686,7 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
                 &(unsafe { filename.rsplit_once('.').unwrap_unchecked() }.0.to_owned() + ".txt").to_lowercase();
 
             let translation_map: HashMapGx = HashMap::from_iter(parse_translation(
-                &read_to_string(self.other_path.as_ref().join(txt_filename)).unwrap_log(),
+                &read_to_string(self.translation_path.as_ref().join(txt_filename)).unwrap_log(),
                 txt_filename,
                 true,
                 true,
@@ -830,7 +829,7 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
 /// to the original `System` file, producing a new file with the translated text.
 pub struct SystemWriter<P: AsRef<Path>> {
     system_file_path: P,
-    other_path: P,
+    translation_path: P,
     output_path: P,
     romanize: bool,
     logging: bool,
@@ -844,11 +843,11 @@ impl<P: AsRef<Path>> SystemWriter<P> {
     /// # Arguments
     ///
     /// - `system_file_path` - Path to the original `System` file
-    /// - `other_path` - Path to the directory containing the `system.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `system.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `System` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(system_file_path: P, other_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(system_file_path, other_path, output_path, engine_type)
+    pub fn new(system_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
+        Self::default(system_file_path, translation_path, output_path, engine_type)
     }
 
     /// Creates a new `SystemWriter` instance with default values.
@@ -856,13 +855,13 @@ impl<P: AsRef<Path>> SystemWriter<P> {
     /// # Arguments
     ///
     /// - `system_file_path` - Path to the original `System` file
-    /// - `other_path` - Path to the directory containing the `system.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `system.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `System` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(system_file_path: P, other_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(system_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
         Self {
             system_file_path,
-            other_path,
+            translation_path,
             output_path,
             romanize: false,
             logging: false,
@@ -914,8 +913,8 @@ impl<P: AsRef<Path>> SystemWriter<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let writer = SystemWriter::new(
-    ///     "original/data/System.json",
-    ///     "translation/data",
+    ///     "data/System.json",
+    ///     "translation",
     ///     "output/data",
     ///     EngineType::New
     /// )
@@ -926,7 +925,7 @@ impl<P: AsRef<Path>> SystemWriter<P> {
     #[inline(always)]
     pub fn write(self) {
         let (translation_map, game_title): (HashMapGx, String) = {
-            let translation: String = read_to_string(self.other_path.as_ref().join("system.txt")).unwrap_log();
+            let translation: String = read_to_string(self.translation_path.as_ref().join("system.txt")).unwrap_log();
             let game_title: String = translation[translation.rfind(LINES_SEPARATOR).unwrap_log() + 3..].to_owned();
             (
                 HashMap::from_iter(parse_translation(&translation, "system.txt", true, true)),
@@ -1041,7 +1040,7 @@ impl<P: AsRef<Path>> SystemWriter<P> {
 /// to the original `plugins.js` file, producing a new file with the translated text.
 pub struct PluginWriter<P: AsRef<Path>> {
     plugins_file_path: P,
-    plugins_path: P,
+    translation_path: P,
     output_path: P,
     logging: bool,
     romanize: bool,
@@ -1053,10 +1052,10 @@ impl<P: AsRef<Path>> PluginWriter<P> {
     /// # Arguments
     ///
     /// - `plugins_file_path` - Path to the original `plugins.js` file
-    /// - `plugins_path` - Path to the directory containing the `plugins.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `plugins.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `plugins.js` file will be written
-    pub fn new(plugins_file_path: P, plugins_path: P, output_path: P) -> Self {
-        Self::default(plugins_file_path, plugins_path, output_path)
+    pub fn new(plugins_file_path: P, translation_path: P, output_path: P) -> Self {
+        Self::default(plugins_file_path, translation_path, output_path)
     }
 
     /// Creates a new `PluginWriter` instance with default values.
@@ -1064,12 +1063,12 @@ impl<P: AsRef<Path>> PluginWriter<P> {
     /// # Arguments
     ///
     /// - `plugins_file_path` - Path to the original `plugins.js` file
-    /// - `other_path` - Path to the directory containing the `plugins.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `plugins.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `plugins.js` file will be written
-    pub fn default(plugins_file_path: P, plugins_path: P, output_path: P) -> Self {
+    pub fn default(plugins_file_path: P, translation_path: P, output_path: P) -> Self {
         Self {
             plugins_file_path,
-            plugins_path,
+            translation_path,
             output_path,
             logging: false,
             romanize: false,
@@ -1102,8 +1101,8 @@ impl<P: AsRef<Path>> PluginWriter<P> {
     /// use rvpacker_txt_rs_lib::write::PluginWriter;
     ///
     /// let writer = PluginWriter::new(
-    ///     "original/js/plugins.js",
-    ///     "translation/data",
+    ///     "js/plugins.js",
+    ///     "translation",
     ///     "output/js"
     /// )
     /// .logging(true);
@@ -1113,7 +1112,7 @@ impl<P: AsRef<Path>> PluginWriter<P> {
     #[inline(always)]
     pub fn write(self) {
         let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
-            &read_to_string(self.plugins_path.as_ref().join("plugins.txt")).unwrap_log(),
+            &read_to_string(self.translation_path.as_ref().join("plugins.txt")).unwrap_log(),
             "plugins.txt",
             true,
             false,
@@ -1160,7 +1159,7 @@ impl<P: AsRef<Path>> PluginWriter<P> {
 /// to the original `Scripts` file, producing a new file with the translated text.
 pub struct ScriptWriter<P: AsRef<Path>> {
     scripts_file_path: P,
-    other_path: P,
+    translation_path: P,
     output_path: P,
     romanize: bool,
     logging: bool,
@@ -1173,11 +1172,11 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// # Arguments
     ///
     /// - `scripts_file_path` - Path to the original `Scripts` file
-    /// - `other_path` - Path to the directory containing the `scripts.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `scripts.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `Scripts` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(scripts_file_path: P, other_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(scripts_file_path, other_path, output_path, engine_type)
+    pub fn new(scripts_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
+        Self::default(scripts_file_path, translation_path, output_path, engine_type)
     }
 
     /// Creates a new `ScriptWriter` instance with default values.
@@ -1185,13 +1184,13 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// # Arguments
     ///
     /// - `scripts_file_path` - Path to the original `Scripts` file
-    /// - `other_path` - Path to the directory containing the `scripts.txt` file with translation
+    /// - `translation_path` - Path to the directory containing the `scripts.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `Scripts` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(scripts_file_path: P, other_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(scripts_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
         Self {
             scripts_file_path,
-            other_path,
+            translation_path,
             output_path,
             romanize: false,
             logging: false,
@@ -1234,7 +1233,7 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let writer = ScriptWriter::new(
-    ///     "original/data/Scripts.rvdata2",
+    ///     "data/Scripts.rvdata2",
     ///     "translation",
     ///     "output/data",
     ///     EngineType::VX
@@ -1246,7 +1245,7 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     #[inline(always)]
     pub fn write(self) {
         let translation_map: HashMapGx = HashMapGx::from_iter(parse_translation(
-            &read_to_string(self.other_path.as_ref().join("scripts.txt")).unwrap_log(),
+            &read_to_string(self.translation_path.as_ref().join("scripts.txt")).unwrap_log(),
             "scripts.txt",
             true,
             false,

@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_arguments)]
 #[cfg(feature = "log")]
 use crate::println;
 use crate::{
@@ -33,6 +32,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn parse_list<'a>(
     list: &Array,
@@ -336,13 +336,13 @@ fn process_map_comments_vec(
 ///
 /// - `original_path` - Path to the directory containing the original map files
 /// - `output_path` - Path to the directory where the output `.txt` files will be written
-/// - `maps_processing_mode` - Controls how maps are processed (Default, Separate, or Preserve)
+/// - `maps_processing_mode` - Controls how maps are processed
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `game_type` - Optional specific game type for specialized processing
 /// - `engine_type` - The RPG Maker engine type
 /// - `processing_mode` - Controls how files are processed
-/// - `ignore` - Whether to ignore entries specified in .rvpacker-ignore
+/// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 /// - `trim` - Whether to trim whitespace from extracted strings
 pub struct MapReader<P: AsRef<Path>> {
     original_path: P,
@@ -358,7 +358,7 @@ pub struct MapReader<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> MapReader<P> {
-    /// Creates a new MapReader with the given parameters.
+    /// Creates a new MapReader with default values.
     ///
     /// # Parameters
     ///
@@ -448,7 +448,7 @@ impl<P: AsRef<Path>> MapReader<P> {
         self
     }
 
-    /// Sets whether to ignore entries specified in .rvpacker-ignore.
+    /// Sets whether to ignore entries specified in `.rvpacker-ignore`.
     ///
     /// When enabled, the reader will skip entries that match patterns in the
     /// `.rvpacker-ignore` file.
@@ -479,7 +479,7 @@ impl<P: AsRef<Path>> MapReader<P> {
     /// use rvpacker_txt_rs_lib::{read::MapReader, types::EngineType};
     ///
     /// let reader = MapReader::new(
-    ///     Path::new("game/data"),
+    ///     Path::new("data"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// );
@@ -777,8 +777,8 @@ impl<P: AsRef<Path>> MapReader<P> {
 
 /// A struct for reading non-map files and parsing them into `.txt` files.
 ///
-/// This reader extracts translatable text from RPG Maker data files (like Items, Actors,
-/// CommonEvents, etc.) and writes them to structured text files that can be used for
+/// This reader extracts translatable text from RPG Maker data files (like `Items`, `Actors`,
+/// `CommonEvents`, etc.) and writes them to structured text files that can be used for
 /// translation purposes. It handles different engine types and processing modes.
 ///
 /// # Fields
@@ -790,7 +790,7 @@ impl<P: AsRef<Path>> MapReader<P> {
 /// - `game_type` - Optional specific game type for specialized processing
 /// - `processing_mode` - Controls how files are processed
 /// - `engine_type` - The RPG Maker engine type
-/// - `ignore` - Whether to ignore entries specified in .rvpacker-ignore
+/// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 /// - `trim` - Whether to trim whitespace from extracted strings
 pub struct OtherReader<P: AsRef<Path>> {
     original_path: P,
@@ -805,7 +805,7 @@ pub struct OtherReader<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> OtherReader<P> {
-    /// Creates a new OtherReader with the given parameters.
+    /// Creates a new `OtherReader` with default values.
     ///
     /// # Parameters
     ///
@@ -816,7 +816,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
         Self::default(original_path, output_path, engine_type)
     }
 
-    /// Creates a new OtherReader with default values.
+    /// Creates a new `OtherReader` with default values.
     ///
     /// Default values are:
     /// - `romanize`: `false`
@@ -882,7 +882,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
         self
     }
 
-    /// Sets whether to ignore entries specified in .rvpacker-ignore.
+    /// Sets whether to ignore entries specified in `.rvpacker-ignore`.
     ///
     /// When enabled, the reader will skip entries that match patterns in the
     /// `.rvpacker-ignore` file.
@@ -914,7 +914,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
     /// use rvpacker_txt_rs_lib::{read::OtherReader, types::EngineType};
     ///
     /// let reader = OtherReader::new(
-    ///     Path::new("game/data"),
+    ///     Path::new("data"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// );
@@ -1192,7 +1192,7 @@ pub struct SystemReader<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> SystemReader<P> {
-    /// Creates a new `SystemReader` with the given parameters.
+    /// Creates a new `SystemReader` with default values.
     ///
     /// # Parameters
     ///
@@ -1290,7 +1290,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
     /// use rvpacker_txt_rs_lib::{read::SystemReader, types::EngineType};
     ///
     /// let reader = SystemReader::new(
-    ///     Path::new("game/data/System.json"),
+    ///     Path::new("data/System.json"),
     ///     Path::new("translation"),
     ///     EngineType::New
     /// );
@@ -1441,7 +1441,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
                 }
             };
 
-            // We aren't checking if game_title_string is empty because VX and XP don't include game title in `System`file, and we still need it last
+            // We aren't checking if game_title_string is empty because VX and XP don't include game title in `System` file, and we still need it last
 
             if self.romanize {
                 game_title_string = romanize_string(game_title_string)
@@ -1484,7 +1484,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
 /// A struct for reading `Scripts` file and parsing it into a `.txt` file.
 ///
 /// This reader extracts translatable text from RPG Maker script files (which contain
-/// Ruby code in older RPG Maker versions like XP and VX) and writes it to a structured
+/// Ruby code in older RPG Maker versions) and writes it to a structured
 /// text file that can be used for translation purposes.
 ///
 /// # Fields
@@ -1495,7 +1495,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
 /// - `logging` - Whether to log processing information
 /// - `engine_type` - The RPG Maker engine type
 /// - `processing_mode` - Controls how files are processed
-/// - `ignore` - Whether to ignore entries specified in .rvpacker-ignore
+/// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 pub struct ScriptReader<P: AsRef<Path>> {
     scripts_file_path: P,
     output_path: P,
@@ -1507,7 +1507,7 @@ pub struct ScriptReader<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> ScriptReader<P> {
-    /// Creates a new `ScriptReader` with the given parameters.
+    /// Creates a new `ScriptReader` with default values.
     ///
     /// # Parameters
     ///
@@ -1528,7 +1528,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     ///
     /// # Parameters
     ///
-    /// - `scripts_file_path` - Path to the `Scripts` file (Scripts.rxdata/Scripts.rvdata)
+    /// - `scripts_file_path` - Path to the `Scripts` file
     /// - `output_path` - Path to the directory where the output `.txt` file will be written
     /// - `engine_type` - The RPG Maker engine type
     pub fn default(scripts_file_path: P, output_path: P, engine_type: EngineType) -> Self {
@@ -1571,7 +1571,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
         self
     }
 
-    /// Sets whether to ignore entries specified in .rvpacker-ignore.
+    /// Sets whether to ignore entries specified in `.rvpacker-ignore`.
     ///
     /// When enabled, the reader will skip entries that match patterns in the
     /// `.rvpacker-ignore` file.
@@ -1591,7 +1591,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// use rvpacker_txt_rs_lib::{read::ScriptReader, types::EngineType};
     ///
     /// let reader = ScriptReader::new(
-    ///     Path::new("game/Data/Scripts.rvdata"),
+    ///     Path::new("Data/Scripts.rvdata"),
     ///     Path::new("translation"),
     ///     EngineType::VX
     /// );
@@ -1745,7 +1745,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `processing_mode` - Controls how files are processed
-/// - `ignore` - Whether to ignore entries specified in .rvpacker-ignore
+/// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 pub struct PluginReader<P: AsRef<Path>> {
     plugins_file_path: P,
     output_path: P,
@@ -1756,7 +1756,7 @@ pub struct PluginReader<P: AsRef<Path>> {
 }
 
 impl<P: AsRef<Path>> PluginReader<P> {
-    /// Creates a new `PluginReader` with the given parameters.
+    /// Creates a new `PluginReader` with default values.
     ///
     /// # Parameters
     ///
@@ -1838,7 +1838,7 @@ impl<P: AsRef<Path>> PluginReader<P> {
     /// use rvpacker_txt_rs_lib::read::PluginReader;
     ///
     /// let reader = PluginReader::new(
-    ///     Path::new("game/js/plugins.js"),
+    ///     Path::new("js/plugins.js"),
     ///     Path::new("translation")
     /// );
     ///
