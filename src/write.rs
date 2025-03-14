@@ -52,8 +52,9 @@ fn process_parameter_write(
 
     if let Some(mut translated) = translated {
         if code.is_shop() {
-            let left: &str = unsafe { parameter.split_once('=').unwrap_unchecked().0 };
-            translated = format!("{left}=\"{translated}\"");
+            if let Some((left, _)) = parameter.split_once('=') {
+                translated = format!("{left}=\"{translated}\"");
+            }
         }
 
         *value = if engine_type.is_new() {
