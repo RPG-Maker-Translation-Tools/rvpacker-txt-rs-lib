@@ -395,7 +395,7 @@ pub fn traverse_json(
     value: &mut Value,
     lines: &mut Option<&mut Vec<String>>,
     map: &mut Option<&mut VecDeque<(String, String)>>,
-    set: &Option<&HashSet<String, GxBuildHasher>>,
+    set: Option<&HashSet<String, GxBuildHasher>>,
     write: bool,
     romanize: bool,
     processing_mode: ProcessingMode,
