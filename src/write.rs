@@ -1200,8 +1200,7 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// let writer = ScriptWriter::new(
     ///     "data/Scripts.rvdata2",
     ///     "translation",
-    ///     "output/data",
-    ///     EngineType::VX
+    ///     "output/data"
     /// )
     /// .logging(true);
     ///
