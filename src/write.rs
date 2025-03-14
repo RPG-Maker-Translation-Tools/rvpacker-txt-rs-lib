@@ -2,9 +2,9 @@
 use crate::{eprintln, println};
 use crate::{
     functions::{
-        determine_extension, extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data,
-        get_other_labels, get_system_labels, is_allowed_code, is_bad_code, parse_map_number, parse_rpgm_file,
-        parse_translation, process_parameter, process_variable, romanize_string, traverse_json,
+        extract_strings, filter_maps, filter_other, get_maps_labels, get_object_data, get_other_labels,
+        get_system_labels, is_allowed_code, is_bad_code, parse_map_number, parse_rpgm_file, parse_translation,
+        process_parameter, process_variable, romanize_string, traverse_json,
     },
     statics::{
         localization::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG, WROTE_FILE_MSG},
@@ -1138,7 +1138,6 @@ pub struct ScriptWriter<P: AsRef<Path>> {
     output_path: P,
     romanize: bool,
     logging: bool,
-    engine_type: EngineType,
 }
 
 impl<P: AsRef<Path>> ScriptWriter<P> {
@@ -1150,8 +1149,8 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// - `translation_path` - Path to the directory containing the `scripts.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `Scripts` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(scripts_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(scripts_file_path, translation_path, output_path, engine_type)
+    pub fn new(scripts_file_path: P, translation_path: P, output_path: P) -> Self {
+        Self::default(scripts_file_path, translation_path, output_path)
     }
 
     /// Creates a new `ScriptWriter` instance with default values.
@@ -1162,14 +1161,13 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
     /// - `translation_path` - Path to the directory containing the `scripts.txt` file with translation
     /// - `output_path` - Path to the directory where the translated `Scripts` file will be written
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(scripts_file_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(scripts_file_path: P, translation_path: P, output_path: P) -> Self {
         Self {
             scripts_file_path,
             translation_path,
             output_path,
             romanize: false,
             logging: false,
-            engine_type,
         }
     }
 
@@ -1277,16 +1275,16 @@ impl<P: AsRef<Path>> ScriptWriter<P> {
                 };
             });
 
+        let extension = self.scripts_file_path.as_ref().extension().unwrap().to_str().unwrap();
+
         write(
-            self.output_path
-                .as_ref()
-                .join(String::from("Scripts") + determine_extension(self.engine_type)),
+            self.output_path.as_ref().join(String::from("Scripts.") + extension),
             dump(script_entries, None),
         )
         .unwrap_log();
 
         if self.logging {
-            println!("{WROTE_FILE_MSG} Scripts{}", determine_extension(self.engine_type));
+            println!("{WROTE_FILE_MSG} Scripts.{}", extension);
         }
     }
 }
