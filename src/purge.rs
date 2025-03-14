@@ -318,7 +318,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
 
     /// Sets whether to leave filled translation even if they're unused.
     ///
-    /// When enabled, translation that have content will not be purged even if
+    /// When enabled, translation fields that have content will not be purged even if
     /// they're no longer used in the game.
     pub fn leave_filled(mut self, leave_filled: bool) -> Self {
         self.leave_filled = leave_filled;
@@ -336,7 +336,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation that are empty will be purged.
+    /// When enabled, translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -720,7 +720,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 
     /// Sets whether to leave filled translation even if they're unused.
     ///
-    /// When enabled, translation that have content will not be purged even if
+    /// When enabled, translation fields that have content will not be purged even if
     /// they're no longer used in the game.
     pub fn leave_filled(mut self, leave_filled: bool) -> Self {
         self.leave_filled = leave_filled;
@@ -738,7 +738,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation that are empty will be purged.
+    /// When enabled, translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -1107,7 +1107,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
 
     /// Sets whether to leave filled translation even if they're unused.
     ///
-    /// When enabled, translation that have content will not be purged even if
+    /// When enabled, translation fields that have content will not be purged even if
     /// they're no longer used in the game.
     pub fn leave_filled(mut self, leave_filled: bool) -> Self {
         self.leave_filled = leave_filled;
@@ -1125,7 +1125,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation that are empty will be purged.
+    /// When enabled, translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -1428,8 +1428,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 
     /// Sets whether to romanize text.
     ///
-    /// When enabled, non-Latin text (like Japanese, Chinese, etc.) will be
-    /// converted to Latin characters where possible.
+    /// Must be the same value, as in previous read.
     pub fn romanize(mut self, romanize: bool) -> Self {
         self.romanize = romanize;
         self
@@ -1454,7 +1453,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 
     /// Sets whether to leave filled translation even if they're unused.
     ///
-    /// When enabled, translation that have content will not be purged even if
+    /// When enabled, translation fields that have content will not be purged even if
     /// they're no longer used in the game.
     pub fn leave_filled(mut self, leave_filled: bool) -> Self {
         self.leave_filled = leave_filled;
@@ -1472,13 +1471,13 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation that are empty will be purged.
+    /// When enabled, translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
     }
 
-    /// This method analyzes the plugins.js file and its translation, removing unused
+    /// This method analyzes the `plugins.js` file and its translation, removing unused
     /// or empty translation based on the configured settings.
     ///
     /// # Parameters
