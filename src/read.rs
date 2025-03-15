@@ -48,6 +48,7 @@ fn parse_list<'a>(
     maps_processing_mode: Option<MapsProcessingMode>,
     ignore_entry: Option<&IgnoreEntry>,
     trim: bool,
+    sort: bool,
 ) {
     let mut in_sequence: bool = false;
 
@@ -83,31 +84,33 @@ fn parse_list<'a>(
 
                 if processing_mode.is_append() {
                     if map.contains_key(&parsed) {
-                        let map_index: usize = unsafe { map.get_index_of(&parsed).unwrap_unchecked() };
-                        let mut set_index: usize = if maps_processing_mode == Some(MapsProcessingMode::Separate)
-                            || maps_processing_mode.is_none()
-                        {
-                            unsafe { set.get_index_of(&parsed).unwrap_unchecked() }
-                        } else {
-                            if !absent {
-                                return;
+                        if sort {
+                            let map_index: usize = unsafe { map.get_index_of(&parsed).unwrap_unchecked() };
+                            let mut set_index: usize = if maps_processing_mode == Some(MapsProcessingMode::Separate)
+                                || maps_processing_mode.is_none()
+                            {
+                                unsafe { set.get_index_of(&parsed).unwrap_unchecked() }
+                            } else {
+                                if !absent {
+                                    return;
+                                }
+
+                                *lines_pos
+                            };
+
+                            if maps_processing_mode == Some(MapsProcessingMode::Separate) {
+                                // counting starting comments, three to four
+                                set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
                             }
 
-                            *lines_pos
-                        };
+                            // just prevent the fucking panic
+                            let map_len: usize = map.len();
+                            if set_index >= map_len {
+                                set_index = map_len - 1;
+                            }
 
-                        if maps_processing_mode == Some(MapsProcessingMode::Separate) {
-                            // counting starting comments, three to four
-                            set_index += map.iter().take(4).filter(|(k, _)| k.starts_with("<!--")).count();
+                            map.swap_indices(set_index, map_index);
                         }
-
-                        // just prevent the fucking panic
-                        let map_len: usize = map.len();
-                        if set_index >= map_len {
-                            set_index = map_len - 1;
-                        }
-
-                        map.swap_indices(set_index, map_index);
                     } else if (maps_processing_mode == Some(MapsProcessingMode::Separate)
                         || maps_processing_mode.is_none())
                         && !set.contains(&parsed)
@@ -344,6 +347,7 @@ fn process_map_comments_vec(
 /// - `processing_mode` - Controls how files are processed
 /// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 /// - `trim` - Whether to trim whitespace from extracted strings
+/// - `sort` - Whether to sort entries on `Append` processing mode
 pub struct MapReader<P: AsRef<Path>> {
     original_path: P,
     output_path: P,
@@ -355,6 +359,7 @@ pub struct MapReader<P: AsRef<Path>> {
     processing_mode: ProcessingMode,
     ignore: bool,
     trim: bool,
+    sort: bool,
 }
 
 impl<P: AsRef<Path>> MapReader<P> {
@@ -379,6 +384,7 @@ impl<P: AsRef<Path>> MapReader<P> {
     /// - `processing_mode`: `ProcessingMode::Default`
     /// - `ignore`: `false`
     /// - `trim`: `false`
+    /// - `sort`: `false`
     ///
     /// # Parameters
     ///
@@ -397,6 +403,7 @@ impl<P: AsRef<Path>> MapReader<P> {
             processing_mode: ProcessingMode::Default,
             ignore: false,
             trim: false,
+            sort: false,
         }
     }
 
@@ -465,6 +472,16 @@ impl<P: AsRef<Path>> MapReader<P> {
     /// In some cases, could lead to non-working writing, or incorrect displaying of text in-game.
     pub fn trim(mut self, trim: bool) -> Self {
         self.trim = trim;
+        self
+    }
+
+    /// Sets whether to sort translation entries.
+    ///
+    /// When enabled and `processing_mode` is `Append`, will
+    /// sort the translation entries by their chronological order
+    /// in-game.
+    pub fn sort(mut self, sort: bool) -> Self {
+        self.sort = sort;
         self
     }
 
@@ -743,6 +760,7 @@ impl<P: AsRef<Path>> MapReader<P> {
                         Some(self.maps_processing_mode),
                         ignore_entry,
                         self.trim,
+                        self.sort,
                     );
                 }
             }
@@ -792,6 +810,7 @@ impl<P: AsRef<Path>> MapReader<P> {
 /// - `engine_type` - The RPG Maker engine type
 /// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 /// - `trim` - Whether to trim whitespace from extracted strings
+/// - `sort` - Whether to sort entries on `Append` processing mode
 pub struct OtherReader<P: AsRef<Path>> {
     original_path: P,
     output_path: P,
@@ -802,6 +821,7 @@ pub struct OtherReader<P: AsRef<Path>> {
     engine_type: EngineType,
     ignore: bool,
     trim: bool,
+    sort: bool,
 }
 
 impl<P: AsRef<Path>> OtherReader<P> {
@@ -825,6 +845,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
     /// - `processing_mode`: `ProcessingMode::Default`
     /// - `ignore`: `false`
     /// - `trim`: `false`
+    /// - `sort`: `false`
     ///
     /// # Parameters
     ///
@@ -842,6 +863,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
             engine_type,
             ignore: false,
             trim: false,
+            sort: false,
         }
     }
 
@@ -899,6 +921,16 @@ impl<P: AsRef<Path>> OtherReader<P> {
     /// In some cases, could lead to non-working writing, or incorrect displaying of text in-game.
     pub fn trim(mut self, trim: bool) -> Self {
         self.trim = trim;
+        self
+    }
+
+    /// Sets whether to sort translation entries.
+    ///
+    /// When enabled and `processing_mode` is `Append`, will
+    /// sort the translation entries by their chronological order
+    /// in-game.
+    pub fn sort(mut self, sort: bool) -> Self {
+        self.sort = sort;
         self
     }
 
@@ -1064,10 +1096,12 @@ impl<P: AsRef<Path>> OtherReader<P> {
 
                                 if self.processing_mode.is_append() {
                                     if translation_map.contains_key(string_ref) {
-                                        translation_map.swap_indices(
-                                            translation_map.get_index_of(string_ref).unwrap(),
-                                            lines_mut_ref.len() - 1,
-                                        );
+                                        if self.sort {
+                                            translation_map.swap_indices(
+                                                translation_map.get_index_of(string_ref).unwrap(),
+                                                lines_mut_ref.len() - 1,
+                                            );
+                                        }
                                     } else {
                                         translation_map.shift_insert(
                                             lines_mut_ref.len() - 1,
@@ -1135,6 +1169,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
                             None,
                             ignore_entry,
                             self.trim,
+                            self.sort,
                         );
                     }
                 }
@@ -1180,6 +1215,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
 /// - `engine_type` - The RPG Maker engine type
 /// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
 /// - `trim` - Whether to trim whitespace from extracted strings
+/// - `sort` - Whether to sort entries on `Append` processing mode
 pub struct SystemReader<P: AsRef<Path>> {
     system_file_path: P,
     output_path: P,
@@ -1189,6 +1225,7 @@ pub struct SystemReader<P: AsRef<Path>> {
     engine_type: EngineType,
     ignore: bool,
     trim: bool,
+    sort: bool,
 }
 
 impl<P: AsRef<Path>> SystemReader<P> {
@@ -1211,6 +1248,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
     /// - `processing_mode`: `ProcessingMode::Default`
     /// - `ignore`: `false`
     /// - `trim`: `false`
+    /// - `sort`: `false`
     ///
     /// # Parameters
     ///
@@ -1227,6 +1265,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
             engine_type,
             ignore: false,
             trim: false,
+            sort: false,
         }
     }
 
@@ -1275,6 +1314,16 @@ impl<P: AsRef<Path>> SystemReader<P> {
     /// In some cases, could lead to non-working writing, or incorrect displaying of text in-game.
     pub fn trim(mut self, trim: bool) -> Self {
         self.trim = trim;
+        self
+    }
+
+    /// Sets whether to sort translation entries.
+    ///
+    /// When enabled and `processing_mode` is `Append`, will
+    /// sort the translation entries by their chronological order
+    /// in-game.
+    pub fn sort(mut self, sort: bool) -> Self {
+        self.sort = sort;
         self
     }
 
@@ -1364,8 +1413,17 @@ impl<P: AsRef<Path>> SystemReader<P> {
             lines_mut_ref.insert(string);
             let string_ref: &str = unsafe { lines_ref.last().unwrap_unchecked() }.as_str();
 
-            if self.processing_mode.is_append() && !translation_map.contains_key(string_ref) {
-                translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+            if self.processing_mode.is_append() {
+                if translation_map.contains_key(string_ref) {
+                    if self.trim {
+                        translation_map.swap_indices(
+                            translation_map.get_index_of(string_ref).unwrap(),
+                            lines_mut_ref.len() - 1,
+                        );
+                    }
+                } else {
+                    translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
+                };
             }
         };
 
@@ -1452,10 +1510,12 @@ impl<P: AsRef<Path>> SystemReader<P> {
 
             if self.processing_mode.is_append() {
                 if translation_map.contains_key(string_ref) {
-                    translation_map.swap_indices(
-                        translation_map.get_index_of(string_ref).unwrap(),
-                        lines_mut_ref.len() - 1,
-                    );
+                    if self.sort {
+                        translation_map.swap_indices(
+                            translation_map.get_index_of(string_ref).unwrap(),
+                            lines_mut_ref.len() - 1,
+                        );
+                    }
                 } else {
                     translation_map.shift_insert(lines_ref.len() - 1, string_ref.to_owned(), String::new());
                 }
@@ -1493,9 +1553,9 @@ impl<P: AsRef<Path>> SystemReader<P> {
 /// - `output_path` - Path to the directory where the output `.txt` file will be written
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
-/// - `engine_type` - The RPG Maker engine type
 /// - `processing_mode` - Controls how files are processed
 /// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
+/// - `sort` - Whether to sort entries on `Append` processing mode
 pub struct ScriptReader<P: AsRef<Path>> {
     scripts_file_path: P,
     output_path: P,
@@ -1503,6 +1563,7 @@ pub struct ScriptReader<P: AsRef<Path>> {
     logging: bool,
     processing_mode: ProcessingMode,
     ignore: bool,
+    sort: bool,
 }
 
 impl<P: AsRef<Path>> ScriptReader<P> {
@@ -1524,6 +1585,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// - `logging`: `false`
     /// - `processing_mode`: `ProcessingMode::Default`
     /// - `ignore`: `false`
+    /// - `sort`: `false`
     ///
     /// # Parameters
     ///
@@ -1538,6 +1600,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
             logging: false,
             processing_mode: ProcessingMode::Default,
             ignore: false,
+            sort: false,
         }
     }
 
@@ -1575,6 +1638,16 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// `.rvpacker-ignore` file.
     pub fn ignore(mut self, ignore: bool) -> Self {
         self.ignore = ignore;
+        self
+    }
+
+    /// Sets whether to sort translation entries.
+    ///
+    /// When enabled and `processing_mode` is `Append`, will
+    /// sort the translation entries by their chronological order
+    /// in-game.
+    pub fn sort(mut self, sort: bool) -> Self {
+        self.sort = sort;
         self
     }
 
@@ -1746,6 +1819,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
 /// - `logging` - Whether to log processing information
 /// - `processing_mode` - Controls how files are processed
 /// - `ignore` - Whether to ignore entries specified in `.rvpacker-ignore`
+/// - `sort` - Whether to sort entries on `Append` processing mode
 pub struct PluginReader<P: AsRef<Path>> {
     plugins_file_path: P,
     output_path: P,
@@ -1753,6 +1827,7 @@ pub struct PluginReader<P: AsRef<Path>> {
     logging: bool,
     processing_mode: ProcessingMode,
     ignore: bool,
+    sort: bool,
 }
 
 impl<P: AsRef<Path>> PluginReader<P> {
@@ -1773,6 +1848,7 @@ impl<P: AsRef<Path>> PluginReader<P> {
     /// - `logging`: `false`
     /// - `processing_mode`: `ProcessingMode::Default`
     /// - `ignore`: `false`
+    /// - `sort`: `false`
     ///
     /// # Parameters
     ///
@@ -1786,6 +1862,7 @@ impl<P: AsRef<Path>> PluginReader<P> {
             logging: false,
             processing_mode: ProcessingMode::Default,
             ignore: false,
+            sort: false,
         }
     }
 
@@ -1823,6 +1900,16 @@ impl<P: AsRef<Path>> PluginReader<P> {
     /// `.rvpacker-ignore` file.
     pub fn ignore(mut self, ignore: bool) -> Self {
         self.ignore = ignore;
+        self
+    }
+
+    /// Sets whether to sort translation entries.
+    ///
+    /// When enabled and `processing_mode` is `Append`, will
+    /// sort the translation entries by their chronological order
+    /// in-game.
+    pub fn sort(mut self, sort: bool) -> Self {
+        self.sort = sort;
         self
     }
 
