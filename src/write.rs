@@ -266,24 +266,24 @@ pub struct MapWriter<P: AsRef<Path> + Sync> {
 }
 
 impl<P: AsRef<Path> + Sync> MapWriter<P> {
-    /// Creates a new MapWriter instance with default values.
+    /// Creates a new `MapWriter` instance with default values.
     ///
     /// # Arguments
     ///
-    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `original_path` - Path to the directory containing the original map files
+    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `output_path` - Path to the directory where translated map files will be written
     /// - `engine_type` - The RPG Maker engine type
     pub fn new(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {
         Self::default(original_path, translation_path, output_path, engine_type)
     }
 
-    /// Creates a new MapWriter instance with default values.
+    /// Creates a new `MapWriter` instance with default values.
     ///
     /// # Arguments
     ///
-    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `original_path` - Path to the directory containing the original map files
+    /// - `translation_path` - Path to the directory containing the `maps.txt` file with translation
     /// - `output_path` - Path to the directory where translated map files will be written
     /// - `engine_type` - The RPG Maker engine type
     pub fn default(original_path: P, translation_path: P, output_path: P, engine_type: EngineType) -> Self {

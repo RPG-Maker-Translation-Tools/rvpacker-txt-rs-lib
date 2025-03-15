@@ -1082,8 +1082,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
                                         |x: &str| if self.trim { x.trim_replace() } else { x.to_owned() } + NEW_LINE,
                                     ));
 
-                                replaced.pop();
-                                replaced.pop();
+                                replaced.drain(replaced.len() - 2..);
 
                                 if let Some(entry) = ignore_entry {
                                     if entry.contains(&replaced) {
@@ -1696,7 +1695,7 @@ impl<P: AsRef<Path>> ScriptReader<P> {
             }
         }
 
-        let ignore_entry: Option<&IgnoreEntry> = ignore_map.get("<!-- File: `Scripts` -->");
+        let ignore_entry: Option<&IgnoreEntry> = ignore_map.get("<!-- File: Scripts -->");
 
         let scripts_entries: Value = load(
             &read(self.scripts_file_path.as_ref()).unwrap_log(),

@@ -38,9 +38,9 @@ use std::{
 /// # Parameters
 ///
 /// - `ignore_map` - A map of file patterns to sets of lines to ignore
-/// - `output_path` - The directory where the `.rvpacker-ignore` file will be written
+/// - `translation_path` - The directory where the `.rvpacker-ignore` file will be written
 #[inline]
-pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
+pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, translation_path: P) {
     use std::fmt::Write;
 
     let contents: String = ignore_map.into_iter().fold(String::new(), |mut output, (file, lines)| {
@@ -57,7 +57,7 @@ pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
         output
     });
 
-    write(output_path.as_ref().join(".rvpacker-ignore"), contents).unwrap();
+    write(translation_path.as_ref().join(".rvpacker-ignore"), contents).unwrap();
 }
 
 /// Writes statistics about purged lines to a `stat.txt` file.
@@ -69,11 +69,11 @@ pub fn write_ignore<P: AsRef<Path>>(ignore_map: IgnoreMap, output_path: P) {
 /// # Parameters
 ///
 /// - `stat_vec` - A vector of tuples containing (original, translation) pairs
-/// - `output_path` - The directory where the `stat.txt` file will be written
+/// - `translation_path` - The directory where the `stat.txt` file will be written
 #[inline]
-pub fn write_stat<P: AsRef<Path>>(stat_vec: Vec<(String, String)>, output_path: P) {
+pub fn write_stat<P: AsRef<Path>>(stat_vec: Vec<(String, String)>, translation_path: P) {
     write(
-        output_path.as_ref().join("stat.txt"),
+        translation_path.as_ref().join("stat.txt"),
         String::from_iter(
             stat_vec
                 .into_iter()
@@ -94,6 +94,7 @@ fn parse_list(
     set_mut_ref: &mut IndexSetGx,
     mut translation_map_vec: Option<&mut Vec<(String, String)>>,
     maps_processing_mode: Option<MapsProcessingMode>,
+    trim: bool,
 ) {
     let mut in_sequence: bool = false;
 
@@ -154,22 +155,21 @@ fn parse_list(
             for i in 0..value.as_array().unwrap_log().len() {
                 let mut buf: Vec<u8> = Vec::new();
 
-                let subparameter_string: &str = value[i]
-                    .as_str()
-                    .unwrap_or_else(|| match value[i].as_object() {
-                        Some(obj) => {
-                            buf = get_object_data(obj);
-                            unsafe { std::str::from_utf8_unchecked(&buf) }
-                        }
-                        None => unreachable!(),
-                    })
-                    .trim();
+                let subparameter_string: &str = value[i].as_str().unwrap_or_else(|| match value[i].as_object() {
+                    Some(obj) => {
+                        buf = get_object_data(obj);
+                        unsafe { std::str::from_utf8_unchecked(&buf) }
+                    }
+                    None => unreachable!(),
+                });
 
-                if subparameter_string.is_empty() {
+                let trimmed = subparameter_string.trim();
+
+                if trimmed.is_empty() {
                     continue;
                 }
 
-                process_parameter(code, subparameter_string);
+                process_parameter(code, if trim { trimmed } else { subparameter_string });
             }
         } else {
             let parameter_string: &str = value
@@ -206,7 +206,7 @@ fn parse_list(
 /// # Fields
 ///
 /// - `original_path` - Path to the directory containing the original map files
-/// - `output_path` - Path to the directory containing the translation files
+/// - `translation_path` - Path to the directory containing the translation files
 /// - `maps_processing_mode` - Controls how maps are processed
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
@@ -216,9 +216,10 @@ fn parse_list(
 /// - `leave_filled` - Whether to leave filled translation even if they're unused
 /// - `purge_empty` - Whether to purge empty translation
 /// - `create_ignore` - Whether to create an ignore file for purged entries
+/// - `trim` - Whether to trim whitespace from strings
 pub struct MapPurger<P: AsRef<Path>> {
     original_path: P,
-    output_path: P,
+    translation_path: P,
     maps_processing_mode: MapsProcessingMode,
     romanize: bool,
     logging: bool,
@@ -228,6 +229,7 @@ pub struct MapPurger<P: AsRef<Path>> {
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    trim: bool,
 }
 
 impl<P: AsRef<Path>> MapPurger<P> {
@@ -236,10 +238,10 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// # Parameters
     ///
     /// - `original_path` - Path to the directory containing the original map files
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(original_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(original_path, output_path, engine_type)
+    pub fn new(original_path: P, translation_path: P, engine_type: EngineType) -> Self {
+        Self::default(original_path, translation_path, engine_type)
     }
 
     /// Creates a new `MapPurger` with default values.
@@ -253,16 +255,17 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// - `leave_filled`: `false`
     /// - `create_ignore`: `false`
     /// - `purge_empty`: `false`
+    /// - `trim`: `false`
     ///
     /// # Parameters
     ///
     /// - `original_path` - Path to the directory containing the original map files
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(original_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(original_path: P, translation_path: P, engine_type: EngineType) -> Self {
         Self {
             original_path,
-            output_path,
+            translation_path,
             engine_type,
             romanize: false,
             logging: false,
@@ -272,6 +275,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
             leave_filled: false,
             create_ignore: false,
             purge_empty: false,
+            trim: false,
         }
     }
 
@@ -288,6 +292,14 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// When enabled, the purger will log information about the files being processed.
     pub fn logging(mut self, logging: bool) -> Self {
         self.logging = logging;
+        self
+    }
+
+    /// Sets whether to trim whitespace from strings.
+    ///
+    /// Must be the same value, as in previous read.
+    pub fn trim(mut self, trim: bool) -> Self {
+        self.trim = trim;
         self
     }
 
@@ -328,7 +340,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// Sets whether to create an ignore file for purged entries.
     ///
     /// When enabled, the purger will create a `.rvpacker-ignore` file containing
-    /// entries for all purged translation.
+    /// entries for all purged entries.
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.create_ignore = create_ignore;
         self
@@ -336,7 +348,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation fields that are empty will be purged.
+    /// When enabled, only translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -358,8 +370,8 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = MapPurger::new(
-    ///     Path::new("data"),
-    ///     Path::new("translation"),
+    ///     "data",
+    ///     "translation",
     ///     EngineType::New
     /// )
     /// .logging(true)
@@ -369,7 +381,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
     /// ```
     #[inline(always)]
     pub fn purge(self, mut ignore_map: Option<&mut IgnoreMap>, mut stat_vec: Option<&mut Vec<(String, String)>>) {
-        let txt_file_path: &Path = &self.output_path.as_ref().join("maps.txt");
+        let txt_file_path: &Path = &self.translation_path.as_ref().join("maps.txt");
 
         // Allocated when maps processing mode is DEFAULT or SEPARATE.
         let mut lines_set: IndexSetGx = IndexSet::default();
@@ -536,6 +548,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
                             unsafe { &mut *(&mut lines_set as *mut IndexSetGx) },
                             Some(&mut new_translation_map_vec),
                             Some(self.maps_processing_mode),
+                            self.trim,
                         );
                     }
                 }
@@ -617,7 +630,7 @@ impl<P: AsRef<Path>> MapPurger<P> {
 /// # Fields
 ///
 /// - `original_path` - Path to the directory containing the original data files
-/// - `output_path` - Path to the directory containing the translation files
+/// - `translation_path` - Path to the directory containing the translation files
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `game_type` - Optional specific game type for specialized processing
@@ -626,9 +639,10 @@ impl<P: AsRef<Path>> MapPurger<P> {
 /// - `leave_filled` - Whether to leave filled translation even if they're unused
 /// - `purge_empty` - Whether to purge empty translation
 /// - `create_ignore` - Whether to create an ignore file for purged entries
+/// - `trim` - Whether to trim whitespace from strings
 pub struct OtherPurger<P: AsRef<Path>> {
     original_path: P,
-    output_path: P,
+    translation_path: P,
     romanize: bool,
     logging: bool,
     game_type: Option<GameType>,
@@ -637,6 +651,7 @@ pub struct OtherPurger<P: AsRef<Path>> {
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    trim: bool,
 }
 
 impl<P: AsRef<Path>> OtherPurger<P> {
@@ -645,10 +660,10 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// # Parameters
     ///
     /// - `original_path` - Path to the directory containing the original data files
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(original_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(original_path, output_path, engine_type)
+    pub fn new(original_path: P, translation_path: P, engine_type: EngineType) -> Self {
+        Self::default(original_path, translation_path, engine_type)
     }
 
     /// Creates a new `OtherPurger` with default values.
@@ -662,16 +677,17 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// - `leave_filled`: `false`
     /// - `create_ignore`: `false`
     /// - `purge_empty`: `false`
+    /// - `trim`: `false`
     ///
     /// # Parameters
     ///
     /// - `original_path` - Path to the directory containing the original data files
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(original_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(original_path: P, translation_path: P, engine_type: EngineType) -> Self {
         Self {
             original_path,
-            output_path,
+            translation_path,
             engine_type,
             romanize: false,
             logging: false,
@@ -680,13 +696,13 @@ impl<P: AsRef<Path>> OtherPurger<P> {
             leave_filled: false,
             create_ignore: false,
             purge_empty: false,
+            trim: false,
         }
     }
 
     /// Sets whether to romanize text.
     ///
-    /// When enabled, non-Latin text (like Japanese, Chinese, etc.) will be
-    /// converted to Latin characters where possible.
+    /// Must be the same value, as in previous read.
     pub fn romanize(mut self, romanize: bool) -> Self {
         self.romanize = romanize;
         self
@@ -702,10 +718,17 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 
     /// Sets the game type for specialized processing.
     ///
-    /// Some games may require special handling. This parameter allows specifying
-    /// a particular game type for customized processing.
+    /// Must be the same value, as in previous read.
     pub fn game_type(mut self, game_type: Option<GameType>) -> Self {
         self.game_type = game_type;
+        self
+    }
+
+    /// Sets whether to trim whitespace from strings.
+    ///
+    /// Must be the same value, as in previous read.
+    pub fn trim(mut self, trim: bool) -> Self {
+        self.trim = trim;
         self
     }
 
@@ -730,7 +753,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// Sets whether to create an ignore file for purged entries.
     ///
     /// When enabled, the purger will create a `.rvpacker-ignore` file containing
-    /// entries for all purged translation.
+    /// entries for all purged entries.
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.create_ignore = create_ignore;
         self
@@ -738,7 +761,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation fields that are empty will be purged.
+    /// When enabled, only translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -760,8 +783,8 @@ impl<P: AsRef<Path>> OtherPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = OtherPurger::new(
-    ///     Path::new("data"),
-    ///     Path::new("translation"),
+    ///     "data",
+    ///     "translation",
     ///     EngineType::New
     /// )
     /// .logging(true)
@@ -794,7 +817,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
         {
             let basename: String = filename.rsplit_once('.').unwrap_log().0.to_owned().to_lowercase();
             let txt_filename: String = basename.clone() + ".txt";
-            let txt_output_path: &Path = &self.output_path.as_ref().join(txt_filename.clone());
+            let txt_output_path: &Path = &self.translation_path.as_ref().join(txt_filename.clone());
 
             let mut lines: IndexSetGx = IndexSet::default();
             let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *(&mut lines as *mut IndexSetGx) };
@@ -888,7 +911,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
                                         continue;
                                     }
 
-                                    trimmed.to_owned()
+                                    if self.trim { trimmed } else { str }.to_owned()
                                 };
 
                                 let note_text: Option<&str> =
@@ -914,13 +937,11 @@ impl<P: AsRef<Path>> OtherPurger<P> {
                                 );
 
                                 if let Some(parsed) = parsed {
-                                    let mut replaced: String = String::from_iter(
-                                        parsed.split('\n').map(|x: &str| x.trim_replace() + NEW_LINE),
-                                    );
+                                    let mut replaced: String = String::from_iter(parsed.split('\n').map(
+                                        |x: &str| if self.trim { x.trim_replace() } else { x.to_owned() } + NEW_LINE,
+                                    ));
 
                                     replaced.drain(replaced.len() - 2..);
-                                    replaced = replaced.trim_replace();
-
                                     lines_mut_ref.insert(replaced);
                                 } else if variable_type.is_name() {
                                     continue 'obj;
@@ -960,6 +981,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
                                 lines_mut_ref,
                                 None,
                                 None,
+                                self.trim,
                             );
                         }
                     }
@@ -1019,7 +1041,7 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 /// # Fields
 ///
 /// - `system_file_path` - Path to the original `System` file
-/// - `output_path` - Path to the directory containing the translation files
+/// - `translation_path` - Path to the directory containing the translation files
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `engine_type` - The RPG Maker engine type
@@ -1027,9 +1049,10 @@ impl<P: AsRef<Path>> OtherPurger<P> {
 /// - `leave_filled` - Whether to leave filled translation even if they're unused
 /// - `purge_empty` - Whether to purge empty translation
 /// - `create_ignore` - Whether to create an ignore file for purged entries
+/// - `trim` - Whether to trim whitespace from strings
 pub struct SystemPurger<P: AsRef<Path>> {
     system_file_path: P,
-    output_path: P,
+    translation_path: P,
     romanize: bool,
     logging: bool,
     engine_type: EngineType,
@@ -1037,6 +1060,7 @@ pub struct SystemPurger<P: AsRef<Path>> {
     leave_filled: bool,
     purge_empty: bool,
     create_ignore: bool,
+    trim: bool,
 }
 
 impl<P: AsRef<Path>> SystemPurger<P> {
@@ -1044,11 +1068,11 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     ///
     /// # Parameters
     ///
-    /// - `original_path` - Path to the original System file
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `system_file_path` - Path to the original System file
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn new(original_path: P, output_path: P, engine_type: EngineType) -> Self {
-        Self::default(original_path, output_path, engine_type)
+    pub fn new(system_file_path: P, translation_path: P, engine_type: EngineType) -> Self {
+        Self::default(system_file_path, translation_path, engine_type)
     }
 
     /// Creates a new `SystemPurger` with default values.
@@ -1060,16 +1084,17 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// - `leave_filled`: `false`
     /// - `create_ignore`: `false`
     /// - `purge_empty`: `false`
+    /// - `trim`: `false`
     ///
     /// # Parameters
     ///
-    /// - `original_path` - Path to the original System file
-    /// - `output_path` - Path to the directory containing the translation files
+    /// - `system_file_path` - Path to the original System file
+    /// - `translation_path` - Path to the directory containing the translation files
     /// - `engine_type` - The RPG Maker engine type
-    pub fn default(original_path: P, output_path: P, engine_type: EngineType) -> Self {
+    pub fn default(system_file_path: P, translation_path: P, engine_type: EngineType) -> Self {
         Self {
-            system_file_path: original_path,
-            output_path,
+            system_file_path,
+            translation_path,
             engine_type,
             romanize: false,
             logging: false,
@@ -1077,6 +1102,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
             leave_filled: false,
             create_ignore: false,
             purge_empty: false,
+            trim: false,
         }
     }
 
@@ -1093,6 +1119,14 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// When enabled, the purger will log information about the files being processed.
     pub fn logging(mut self, logging: bool) -> Self {
         self.logging = logging;
+        self
+    }
+
+    /// Sets whether to trim whitespace from strings.
+    ///
+    /// Must be the same value, as in previous read.
+    pub fn trim(mut self, trim: bool) -> Self {
+        self.trim = trim;
         self
     }
 
@@ -1117,7 +1151,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// Sets whether to create an ignore file for purged entries.
     ///
     /// When enabled, the purger will create a `.rvpacker-ignore` file containing
-    /// entries for all purged translation.
+    /// entries for all purged entries.
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.create_ignore = create_ignore;
         self
@@ -1125,7 +1159,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation fields that are empty will be purged.
+    /// When enabled, only translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -1147,8 +1181,8 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// use rvpacker_txt_rs_lib::types::EngineType;
     ///
     /// let purger = SystemPurger::new(
-    ///     Path::new("data/System.json"),
-    ///     Path::new("translation"),
+    ///     "data/System.json",
+    ///     "translation",
     ///     EngineType::New
     /// )
     /// .logging(true)
@@ -1158,7 +1192,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
     /// ```
     #[inline(always)]
     pub fn purge(self, mut ignore_map: Option<&mut IgnoreMap>, mut stat_vec: Option<&mut Vec<(String, String)>>) {
-        let txt_output_path: &Path = &self.output_path.as_ref().join("system.txt");
+        let txt_output_path: &Path = &self.translation_path.as_ref().join("system.txt");
 
         let lines: UnsafeCell<IndexSetGx> = UnsafeCell::new(IndexSet::default());
         let lines_mut_ref: &mut IndexSetGx = unsafe { &mut *lines.get() };
@@ -1167,7 +1201,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
             stat_vec
                 .as_mut()
                 .unwrap()
-                .push((String::from("<!-- `System`-->"), String::new()));
+                .push((String::from("<!-- System -->"), String::new()));
         }
 
         let mut ignore_entry: Option<&mut IgnoreEntry> = if self.create_ignore {
@@ -1213,22 +1247,21 @@ impl<P: AsRef<Path>> SystemPurger<P> {
                 let mut string: String = {
                     let mut buf: Vec<u8> = Vec::new();
 
-                    let str: &str = value
-                        .as_str()
-                        .unwrap_or_else(|| match value.as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => "",
-                        })
-                        .trim();
+                    let str: &str = value.as_str().unwrap_or_else(|| match value.as_object() {
+                        Some(obj) => {
+                            buf = get_object_data(obj);
+                            unsafe { std::str::from_utf8_unchecked(&buf) }
+                        }
+                        None => "",
+                    });
 
-                    if str.is_empty() {
+                    let trimmed = str.trim();
+
+                    if trimmed.is_empty() {
                         return;
                     }
 
-                    str.to_owned()
+                    if self.trim { trimmed } else { str }.to_owned()
                 };
 
                 if self.romanize {
@@ -1298,19 +1331,25 @@ impl<P: AsRef<Path>> SystemPurger<P> {
                 let mut game_title_string: String = {
                     let mut buf: Vec<u8> = Vec::new();
 
-                    obj[game_title_label]
-                        .as_str()
-                        .unwrap_or_else(|| match obj[game_title_label].as_object() {
-                            Some(obj) => {
-                                buf = get_object_data(obj);
-                                unsafe { std::str::from_utf8_unchecked(&buf) }
-                            }
-                            None => "",
-                        })
-                        .trim_replace()
+                    let game_title =
+                        obj[game_title_label]
+                            .as_str()
+                            .unwrap_or_else(|| match obj[game_title_label].as_object() {
+                                Some(obj) => {
+                                    buf = get_object_data(obj);
+                                    unsafe { std::str::from_utf8_unchecked(&buf) }
+                                }
+                                None => "",
+                            });
+
+                    if self.trim {
+                        game_title.trim_replace()
+                    } else {
+                        game_title.to_owned()
+                    }
                 };
 
-                // We aren't checking if game_title_string is empty because VX and XP don't include game title in `System`file, and we still need it last
+                // We aren't checking if game_title_string is empty because VX and XP don't include game title in `System` file, and we still need it last
 
                 if self.romanize {
                     game_title_string = romanize_string(game_title_string)
@@ -1370,7 +1409,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
 /// # Fields
 ///
 /// - `plugins_file_path` - Path to the original `plugins.js` file
-/// - `output_path` - Path to the directory containing the translation files
+/// - `translation_path` - Path to the directory containing the translation files
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `stat` - Whether to generate statistics instead of modifying files
@@ -1379,7 +1418,7 @@ impl<P: AsRef<Path>> SystemPurger<P> {
 /// - `create_ignore` - Whether to create an ignore file for purged entries
 pub struct PluginPurger<P: AsRef<Path>> {
     plugins_file_path: P,
-    output_path: P,
+    translation_path: P,
     romanize: bool,
     logging: bool,
     stat: bool,
@@ -1393,10 +1432,10 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     ///
     /// # Parameters
     ///
-    /// - `original_path` - Path to the original `plugins.js` file
-    /// - `output_path` - Path to the directory containing the translation files
-    pub fn new(original_path: P, output_path: P) -> Self {
-        Self::default(original_path, output_path)
+    /// - `plugins_file_path` - Path to the original `plugins.js` file
+    /// - `translation_path` - Path to the directory containing the translation files
+    pub fn new(plugins_file_path: P, translation_path: P) -> Self {
+        Self::default(plugins_file_path, translation_path)
     }
 
     /// Creates a new `PluginPurger` with default values.
@@ -1411,12 +1450,12 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     ///
     /// # Parameters
     ///
-    /// - `original_path` - Path to the original `plugins.js` file
-    /// - `output_path` - Path to the directory containing the translation files
-    pub fn default(original_path: P, output_path: P) -> Self {
+    /// - `plugins_file_path` - Path to the original `plugins.js` file
+    /// - `translation_path` - Path to the directory containing the translation files
+    pub fn default(plugins_file_path: P, translation_path: P) -> Self {
         Self {
-            plugins_file_path: original_path,
-            output_path,
+            plugins_file_path,
+            translation_path,
             romanize: false,
             logging: false,
             stat: false,
@@ -1463,7 +1502,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     /// Sets whether to create an ignore file for purged entries.
     ///
     /// When enabled, the purger will create a `.rvpacker-ignore` file containing
-    /// entries for all purged translation.
+    /// entries for all purged entries.
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.create_ignore = create_ignore;
         self
@@ -1471,7 +1510,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation fields that are empty will be purged.
+    /// When enabled, only translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -1492,8 +1531,8 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     /// use rvpacker_txt_rs_lib::purge::PluginPurger;
     ///
     /// let purger = PluginPurger::new(
-    ///     Path::new("js/plugins.js"),
-    ///     Path::new("translation")
+    ///     "js/plugins.js",
+    ///     "translation"
     /// )
     /// .logging(true)
     /// .purge_empty(true);
@@ -1502,7 +1541,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
     /// ```
     #[inline(always)]
     pub fn purge(self, mut ignore_map: Option<&mut IgnoreMap>, mut stat_vec: Option<&mut Vec<(String, String)>>) {
-        let txt_output_path: &Path = &self.output_path.as_ref().join("plugins.txt");
+        let txt_output_path: &Path = &self.translation_path.as_ref().join("plugins.txt");
 
         let mut ignore_entry: Option<&mut IgnoreEntry> = if self.create_ignore {
             Some(
@@ -1617,15 +1656,15 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 
 /// A struct for purging unused or empty translation from the `Scripts` file.
 ///
-/// `ScriptPurger` analyzes the RPG Maker `Scripts` file (which contains Ruby code in older
-/// RPG Maker versions) and its corresponding translation file, removing translation
+/// `ScriptPurger` analyzes the RPG Maker `Scripts` file, which contains Ruby code
+/// and its corresponding translation file, removing translation
 /// that are no longer needed or are empty. This helps keep translation files clean
 /// and focused only on text that actually appears in the game.
 ///
 /// # Fields
 ///
 /// - `scripts_file_path` - Path to the original `Scripts` file
-/// - `output_path` - Path to the directory containing the translation files
+/// - `translation_path` - Path to the directory containing the translation files
 /// - `romanize` - Whether to romanize non-Latin text
 /// - `logging` - Whether to log processing information
 /// - `stat` - Whether to generate statistics instead of modifying files
@@ -1634,7 +1673,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
 /// - `create_ignore` - Whether to create an ignore file for purged entries
 pub struct ScriptPurger<P: AsRef<Path>> {
     scripts_file_path: P,
-    output_path: P,
+    translation_path: P,
     romanize: bool,
     logging: bool,
     stat: bool,
@@ -1649,9 +1688,9 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
     /// # Parameters
     ///
     /// - `scripts_file_path` - Path to the original `Scripts` file
-    /// - `output_path` - Path to the directory containing the translation files
-    pub fn new(scripts_file_path: P, output_path: P) -> Self {
-        Self::default(scripts_file_path, output_path)
+    /// - `translation_path` - Path to the directory containing the translation files
+    pub fn new(scripts_file_path: P, translation_path: P) -> Self {
+        Self::default(scripts_file_path, translation_path)
     }
 
     /// Creates a new `ScriptPurger` with default values.
@@ -1667,11 +1706,11 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
     /// # Parameters
     ///
     /// - `scripts_file_path` - Path to the original `Scripts` file
-    /// - `output_path` - Path to the directory containing the translation files
-    pub fn default(scripts_file_path: P, output_path: P) -> Self {
+    /// - `translation_path` - Path to the directory containing the translation files
+    pub fn default(scripts_file_path: P, translation_path: P) -> Self {
         Self {
             scripts_file_path,
-            output_path,
+            translation_path,
             romanize: false,
             logging: false,
             stat: false,
@@ -1726,7 +1765,7 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
 
     /// Sets whether to purge empty translation.
     ///
-    /// When enabled, translation fields that are empty will be purged.
+    /// When enabled, only translation fields that are empty will be purged.
     pub fn purge_empty(mut self, purge_empty: bool) -> Self {
         self.purge_empty = purge_empty;
         self
@@ -1747,8 +1786,8 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
     /// use rvpacker_txt_rs_lib::purge::ScriptPurger;
     ///
     /// let purger = ScriptPurger::new(
-    ///     Path::new("data/Scripts.rxdata"),
-    ///     Path::new("translation")
+    ///     "data/Scripts.rxdata",
+    ///     "translation"
     /// )
     /// .logging(true)
     /// .purge_empty(true);
@@ -1757,7 +1796,7 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
     /// ```
     #[inline(always)]
     pub fn purge(self, mut ignore_map: Option<&mut IgnoreMap>, mut stat_vec: Option<&mut Vec<(String, String)>>) {
-        let txt_output_path: &Path = &self.output_path.as_ref().join("scripts.txt");
+        let txt_output_path: &Path = &self.translation_path.as_ref().join("scripts.txt");
 
         let mut lines_vec: Vec<String> = Vec::new();
         let translation_map: Vec<(String, String)> = Vec::from_iter(parse_translation(
@@ -1771,7 +1810,7 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
             stat_vec
                 .as_mut()
                 .unwrap()
-                .push((String::from("<!-- `Scripts` -->"), String::new()));
+                .push((String::from("<!-- Scripts -->"), String::new()));
         }
 
         let mut ignore_entry: Option<&mut IgnoreEntry> = if self.create_ignore {
@@ -1779,7 +1818,7 @@ impl<P: AsRef<Path>> ScriptPurger<P> {
                 ignore_map
                     .as_mut()
                     .unwrap()
-                    .entry(String::from("<!-- File: `Scripts` -->"))
+                    .entry(String::from("<!-- File: Scripts -->"))
                     .or_default(),
             )
         } else {
