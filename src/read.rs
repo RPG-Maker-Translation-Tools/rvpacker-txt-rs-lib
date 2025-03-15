@@ -479,8 +479,8 @@ impl<P: AsRef<Path>> MapReader<P> {
     /// use rvpacker_txt_rs_lib::{read::MapReader, types::EngineType};
     ///
     /// let reader = MapReader::new(
-    ///     Path::new("data"),
-    ///     Path::new("translation"),
+    ///     "data",
+    ///     "translation",
     ///     EngineType::New
     /// );
     ///
@@ -914,8 +914,8 @@ impl<P: AsRef<Path>> OtherReader<P> {
     /// use rvpacker_txt_rs_lib::{read::OtherReader, types::EngineType};
     ///
     /// let reader = OtherReader::new(
-    ///     Path::new("data"),
-    ///     Path::new("translation"),
+    ///     "data",
+    ///     "translation",
     ///     EngineType::New
     /// );
     ///
@@ -1290,8 +1290,8 @@ impl<P: AsRef<Path>> SystemReader<P> {
     /// use rvpacker_txt_rs_lib::{read::SystemReader, types::EngineType};
     ///
     /// let reader = SystemReader::new(
-    ///     Path::new("data/System.json"),
-    ///     Path::new("translation"),
+    ///     "data/System.json",
+    ///     "translation",
     ///     EngineType::New
     /// );
     ///
@@ -1589,8 +1589,8 @@ impl<P: AsRef<Path>> ScriptReader<P> {
     /// use rvpacker_txt_rs_lib::{read::ScriptReader, types::EngineType};
     ///
     /// let reader = ScriptReader::new(
-    ///     Path::new("Data/Scripts.rvdata"),
-    ///     Path::new("translation")
+    ///     "Data/Scripts.rvdata",
+    ///     "translation"
     /// );
     ///
     /// reader.read();
@@ -1838,8 +1838,8 @@ impl<P: AsRef<Path>> PluginReader<P> {
     /// use rvpacker_txt_rs_lib::read::PluginReader;
     ///
     /// let reader = PluginReader::new(
-    ///     Path::new("js/plugins.js"),
-    ///     Path::new("translation")
+    ///     "js/plugins.js",
+    ///     "translation"
     /// );
     ///
     /// reader.read();
