@@ -11,8 +11,8 @@ use crate::{
         ENCODINGS, LINES_SEPARATOR, NEW_LINE,
     },
     types::{
-        Code, EngineType, GameType, HashMapGx, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt, TrimReplace,
-        Variable,
+        Code, EngineType, GameType, HashMapGx, IndexMapGx, MapsProcessingMode, OptionExt, ProcessingMode, ResultExt,
+        TrimReplace, Variable,
     },
 };
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
@@ -1086,7 +1086,7 @@ impl<P: AsRef<Path>> PluginWriter<P> {
     /// ```
     #[inline(always)]
     pub fn write(self) {
-        let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
+        let mut translation_map: IndexMapGx = IndexMapGx::from_iter(parse_translation(
             &read_to_string(self.translation_path.as_ref().join("plugins.txt")).unwrap_log(),
             "plugins.txt",
             true,

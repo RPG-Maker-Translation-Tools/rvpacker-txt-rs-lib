@@ -5,7 +5,8 @@ use crate::{
         LINES_SEPARATOR, NEW_LINE, SYMBOLS,
     },
     types::{
-        Code, EachLine, EngineType, GameType, HashMapGx, OptionExt, ProcessingMode, ResultExt, TrimReplace, Variable,
+        Code, EachLine, EngineType, GameType, HashMapGx, IndexMapGx, OptionExt, ProcessingMode, ResultExt, TrimReplace,
+        Variable,
     },
 };
 use gxhash::GxBuildHasher;
@@ -394,7 +395,7 @@ pub fn traverse_json(
     key: Option<&str>,
     value: &mut Value,
     lines: &mut Option<&mut Vec<String>>,
-    map: &mut Option<&mut VecDeque<(String, String)>>,
+    map: &mut Option<&mut IndexMapGx>,
     set: Option<&HashSet<String, GxBuildHasher>>,
     write: bool,
     romanize: bool,
@@ -445,8 +446,8 @@ pub fn traverse_json(
                         return;
                     }
 
-                    if let Some((_, translated)) = unsafe { map.as_mut().unwrap_unchecked().pop_front() } {
-                        *value = (&translated).into();
+                    if let Some(translated) = unsafe { map.as_ref().unwrap_unchecked() }.get(&string) {
+                        *value = translated.into();
                     }
                 } else {
                     if let Some(entry) = ignore_entry {
@@ -464,8 +465,8 @@ pub fn traverse_json(
                     if processing_mode.is_append() {
                         let translation_map = unsafe { map.as_mut().unwrap_unchecked() };
 
-                        if translation_map.get(pos).is_some_and(|x| *last != x.0) {
-                            translation_map.insert(pos, (last.to_owned(), String::new()));
+                        if !translation_map.contains_key(last) {
+                            translation_map.shift_insert(pos, last.to_owned(), String::new());
                         }
                     }
                 }

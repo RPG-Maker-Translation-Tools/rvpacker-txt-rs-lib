@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, prelude::*, Array, Value};
 use std::{
     cell::UnsafeCell,
-    collections::{HashSet, VecDeque},
+    collections::HashSet,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
     mem::{take, transmute},
@@ -1555,7 +1555,7 @@ impl<P: AsRef<Path>> PluginPurger<P> {
             None
         };
 
-        let mut translation_map: VecDeque<(String, String)> = VecDeque::from_iter(parse_translation(
+        let mut translation_map: IndexMapGx = IndexMapGx::from_iter(parse_translation(
             &read_to_string(txt_output_path).unwrap_log(),
             "plugins.txt",
             false,

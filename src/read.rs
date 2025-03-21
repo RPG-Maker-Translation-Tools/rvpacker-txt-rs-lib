@@ -25,7 +25,6 @@ use smallvec::SmallVec;
 use sonic_rs::{from_str, from_value, prelude::*, Array, Value};
 use std::{
     cell::UnsafeCell,
-    collections::VecDeque,
     fs::{read, read_dir, read_to_string, write},
     io::Read,
     mem::{take, transmute},
@@ -1941,7 +1940,7 @@ impl<P: AsRef<Path>> PluginReader<P> {
 
         let mut ignore_map: IgnoreMap = IndexMap::default();
 
-        let mut translation_map: VecDeque<(String, String)> = VecDeque::new();
+        let mut translation_map: IndexMapGx = IndexMap::default();
         let translation: String;
 
         if self.processing_mode.is_append() {
