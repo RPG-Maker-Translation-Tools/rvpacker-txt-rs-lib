@@ -420,9 +420,9 @@ pub fn traverse_json(
                 return;
             }
 
-            let str: &str = unsafe { value.as_str().unwrap_unchecked() }.trim();
+            let str: &str = unsafe { value.as_str().unwrap_unchecked() };
 
-            if !(str.is_empty()
+            if !(str.trim().is_empty()
                 || IS_ONLY_SYMBOLS_RE.is_match(str)
                 || ["true", "false", "none", "time", "off"].contains(&str)
                 || str.starts_with("this.")
@@ -432,10 +432,6 @@ pub fn traverse_json(
                 || key.is_some_and(|x| x.starts_with("LATIN"))
             {
                 let mut string: String = str.replace('\n', NEW_LINE);
-
-                if string.trim().is_empty() {
-                    return;
-                }
 
                 if romanize {
                     string = romanize_string(string);
