@@ -932,9 +932,6 @@ impl<P: AsRef<Path>> SystemWriter<P> {
                     string = romanize_string(string);
                 }
 
-                if string.contains("Continue") {
-                    println!("{string}, {:?}", translation_map)
-                }
 
                 if let Some(translated) = translation_map.get(&string) {
                     *value = if self.engine_type.is_new() {
