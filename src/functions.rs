@@ -772,23 +772,22 @@ pub fn process_variable(
                             }
 
                             if note_is_continuation {
-                                let note_string: String;
+                                let note_string: String =
+                                    if let Some((mut left, _)) = note.trim_start().split_once('\n') {
+                                        left = left.trim();
 
-                                if let Some((mut left, _)) = note.trim_start().split_once('\n') {
-                                    left = left.trim();
+                                        if !left.ends_with(['.', '%', '!', '"']) {
+                                            return None;
+                                        }
 
-                                    if !left.ends_with(['.', '%', '!', '"']) {
-                                        return None;
-                                    }
+                                        NEW_LINE.to_owned() + left
+                                    } else {
+                                        if !note.ends_with(['.', '%', '!', '"']) && !note.ends_with("takes place?") {
+                                            return None;
+                                        }
 
-                                    note_string = String::from(NEW_LINE) + left;
-                                } else {
-                                    if !note.ends_with(['.', '%', '!', '"']) && !note.ends_with("takes place?") {
-                                        return None;
-                                    }
-
-                                    note_string = note.to_owned();
-                                }
+                                        note.to_owned()
+                                    };
 
                                 if note_string.is_empty() {
                                     return None;
@@ -810,7 +809,7 @@ pub fn process_variable(
                                 "<Menu Category: Body bag>",
                             ] {
                                 if variable_text.contains(string) {
-                                    variable_text = variable_text.replace(string, &hashmap?[string]);
+                                    return Some(variable_text.replace(string, &hashmap.unwrap()[string]));
                                 }
                             }
                         }
@@ -960,6 +959,10 @@ pub fn process_variable(
                     },
                     _ => {}
                 }
+            }
+
+            if game_type == Some(GameType::Termina) && variable_type.is_desc() {
+                result += "\n\n\n";
             }
 
             result
