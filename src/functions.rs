@@ -962,7 +962,7 @@ pub fn process_variable(
             }
 
             if game_type == Some(GameType::Termina) && variable_type.is_desc() {
-                result += "\n\n\n";
+                result += "\n\n\n\n";
             }
 
             result
