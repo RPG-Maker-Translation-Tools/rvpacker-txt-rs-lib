@@ -537,7 +537,7 @@ impl<P: AsRef<Path>> MapReader<P> {
 
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
                 let parsed_translation: Box<dyn Iterator<Item = (String, String)>> =
-                    parse_translation(&translation, "maps.txt", false, true);
+                    parse_translation(&translation, "maps.txt", false, self.trim);
 
                 match self.maps_processing_mode {
                     MapsProcessingMode::Default | MapsProcessingMode::Separate => {
@@ -998,7 +998,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
             if self.processing_mode.is_append() {
                 if txt_output_path.exists() {
                     let translation: String = read_to_string(txt_output_path).unwrap_log();
-                    translation_map.extend(parse_translation(&translation, &txt_filename, false, true));
+                    translation_map.extend(parse_translation(&translation, &txt_filename, false, self.trim));
                 } else {
                     println!("{FILES_ARE_NOT_PARSED_MSG}");
                     continue;
@@ -1368,7 +1368,7 @@ impl<P: AsRef<Path>> SystemReader<P> {
                 }
 
                 let translation: String = read_to_string(txt_output_path).unwrap_log();
-                translation_map.extend(parse_translation(&translation, "system.txt", false, true));
+                translation_map.extend(parse_translation(&translation, "system.txt", false, self.trim));
             } else {
                 println!("{FILES_ARE_NOT_PARSED_MSG}");
                 return;

@@ -672,7 +672,7 @@ impl<P: AsRef<Path> + Sync> OtherWriter<P> {
                 &read_to_string(self.translation_path.as_ref().join(txt_filename)).unwrap_log(),
                 txt_filename,
                 true,
-                true,
+                self.trim,
             ));
 
             if translation_map.is_empty() {
@@ -903,7 +903,7 @@ impl<P: AsRef<Path>> SystemWriter<P> {
             let translation: String = read_to_string(self.translation_path.as_ref().join("system.txt")).unwrap_log();
             let game_title: String = translation[translation.rfind(LINES_SEPARATOR).unwrap_log() + 3..].to_owned();
             (
-                HashMap::from_iter(parse_translation(&translation, "system.txt", true, true)),
+                HashMap::from_iter(parse_translation(&translation, "system.txt", true, self.trim)),
                 game_title,
             )
         };
@@ -930,6 +930,10 @@ impl<P: AsRef<Path>> SystemWriter<P> {
 
                 if self.romanize {
                     string = romanize_string(string);
+                }
+
+                if string.contains("Continue") {
+                    println!("{string}, {:?}", translation_map)
                 }
 
                 if let Some(translated) = translation_map.get(&string) {
