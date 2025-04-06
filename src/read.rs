@@ -224,7 +224,7 @@ fn get_order_number(mapinfos: &Value, entry: &str, map_number: u16, engine_type:
         &mapinfos[entry]["__symbol__order"]
     }
     .as_u64()
-    .unwrap_log()
+    .unwrap_or(0)
     .to_string()
 }
 
@@ -236,7 +236,7 @@ fn get_map_name(mapinfos: &Value, entry: &str, map_number: u16, engine_type: Eng
         &mapinfos[&entry]["__symbol__name"]
     }
     .as_str()
-    .unwrap_log()
+    .unwrap_or("")
     .to_string()
 }
 
