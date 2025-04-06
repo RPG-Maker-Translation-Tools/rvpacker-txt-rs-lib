@@ -1078,7 +1078,7 @@ impl<P: AsRef<Path>> OtherReader<P> {
                             if let Some(parsed) = parsed {
                                 let mut replaced: String =
                                     String::from_iter(parsed.split('\n').map(
-                                        |x: &str| if self.trim { x.trim_replace() } else { x.to_owned() } + NEW_LINE,
+                                        |x: &str| if variable_type.is_any_message() || self.trim { x.trim_replace() } else { x.to_owned() } + NEW_LINE,
                                     ));
 
                                 replaced.drain(replaced.len() - 2..);
