@@ -1101,6 +1101,7 @@ pub fn process_parameter(
 }
 
 #[inline]
+#[track_caller]
 pub fn parse_rpgm_file(path: &Path, engine_type: EngineType) -> Value {
     match engine_type {
         EngineType::New => from_str(&read_to_string_without_bom(path).unwrap_log()).unwrap_log(),
