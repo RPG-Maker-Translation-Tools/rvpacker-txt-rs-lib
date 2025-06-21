@@ -1,7 +1,13 @@
-use rvpacker_txt_rs_lib::{types::EngineType, write::MapWriter};
+use rvpacker_txt_rs_lib::{
+    types::{EngineType, FileFlags},
+    write::WriterBuilder,
+};
 
 fn main() {
-    let writer = MapWriter::new("data", "translation", "output/data", EngineType::New).logging(true);
+    let writer = WriterBuilder::new()
+        .with_flags(FileFlags::Map | FileFlags::Other)
+        .logging(true)
+        .build();
 
-    writer.write();
+    writer.write("data", "translation", "output/data", EngineType::New);
 }

@@ -1,7 +1,13 @@
-use rvpacker_txt_rs_lib::{purge::MapPurger, types::EngineType};
+use rvpacker_txt_rs_lib::{
+    purge::PurgerBuilder,
+    types::{EngineType, FileFlags},
+};
 
 fn main() {
-    let purger = MapPurger::new("data", "translation", EngineType::New).logging(true);
+    let purger = PurgerBuilder::new()
+        .with_flags(FileFlags::Map | FileFlags::Other)
+        .logging(true)
+        .build();
 
-    purger.purge(None, None);
+    purger.purge("data", "translation", EngineType::New);
 }

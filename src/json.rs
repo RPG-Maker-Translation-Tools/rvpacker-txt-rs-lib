@@ -1,59 +1,79 @@
 use crate::{
-    read_to_string_without_bom,
-    statics::localization::{APPEND_MODE_IS_NOT_SUPPORTED, CANNOT_GENERATE_JSON, JSON_ALREADY_EXIST},
-    types::{EngineType, OptionExt, ProcessingMode, ResultExt},
+    constants::{
+        localization::{
+            APPEND_MODE_IS_NOT_SUPPORTED, CANNOT_GENERATE_JSON,
+            JSON_ALREADY_EXIST,
+        },
+        INSTANCE_VAR_PREFIX,
+    },
+    functions::read_to_string_without_bom,
+    types::{EngineType, OptionExt, ReadMode, ResultExt},
 };
-use marshal_rs::{dump, load, StringMode};
+use marshal_rs::{dump, load_utf8};
 use sonic_rs::{from_str, to_string, Value};
 use std::{
     fs::{create_dir_all, read, read_dir, read_to_string, write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[inline(always)]
 pub fn generate_json<P: AsRef<Path>>(
-    original_path: P,
+    source_path: P,
     output_path: P,
     engine_type: EngineType,
-    processing_mode: ProcessingMode,
+    read_mode: ReadMode,
 ) {
-    if processing_mode.is_append() {
+    if read_mode.is_append() {
         println!("{APPEND_MODE_IS_NOT_SUPPORTED}");
         return;
     }
 
-    if output_path.as_ref().join("json").exists() && processing_mode != ProcessingMode::Force {
+    let output_path = output_path.as_ref();
+    let json_output_path = output_path.join("json");
+
+    if json_output_path.exists() && read_mode != ReadMode::Force {
         println!("{JSON_ALREADY_EXIST}");
         return;
     }
 
-    if original_path.as_ref().join("System.json").exists() {
+    if source_path.as_ref().join("System.json").exists() {
         println!("{CANNOT_GENERATE_JSON}");
         return;
     }
 
-    for entry in read_dir(original_path).unwrap_log().flatten() {
-        let filename: String = entry.file_name().into_string().unwrap_log();
+    for entry in read_dir(source_path).unwrap_log().flatten() {
+        let path = entry.path();
+        let extension = path.extension().unwrap_log();
 
         for ext in ["rxdata", "rvdata", "rvdata2"] {
-            if !filename.ends_with(ext) {
+            if extension != ext {
                 continue;
             }
         }
 
-        let obj: Value = if engine_type == EngineType::New {
-            from_str(&read_to_string_without_bom(entry.path()).unwrap_log()).unwrap_log()
+        let json: Value = if engine_type.is_new() {
+            from_str(&read_to_string_without_bom(entry.path()).unwrap_log())
+                .unwrap_log()
         } else {
-            load(&read(entry.path()).unwrap_log(), Some(StringMode::UTF8), Some("")).unwrap_log()
+            sonic_rs::from_str(
+                &serde_json::to_string(
+                    &load_utf8(
+                        &read(entry.path()).unwrap_log(),
+                        INSTANCE_VAR_PREFIX,
+                    )
+                    .unwrap_log(),
+                )
+                .unwrap_log(),
+            )
+            .unwrap_log()
         };
 
-        create_dir_all(output_path.as_ref().join("json")).unwrap();
+        create_dir_all(&json_output_path).unwrap_log();
 
         write(
-            output_path
-                .as_ref()
-                .join(format!("json/{}.json", &filename.rsplit_once('.').unwrap_log().0)),
-            unsafe { to_string(&obj).unwrap_unchecked() },
+            json_output_path
+                .join(PathBuf::from(entry.file_name()).with_extension("json")),
+            unsafe { to_string(&json).unwrap_unchecked() },
         )
         .unwrap_log();
     }
@@ -64,9 +84,15 @@ pub fn write_json<P: AsRef<Path>>(root_dir: P) {
     let json_dir: &Path = &root_dir.as_ref().join("json");
 
     for entry in read_dir(json_dir).unwrap_log().flatten() {
-        let json: Value = from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log();
-        let marshal_obj: Vec<u8> = dump(json, None);
+        let json: Value =
+            from_str(&read_to_string(entry.path()).unwrap_log()).unwrap_log();
 
-        write(root_dir.as_ref().join("written"), marshal_obj).unwrap_log();
+        let dumped: Vec<u8> = dump(
+            serde_json::from_str(&sonic_rs::to_string(&json).unwrap_log())
+                .unwrap_log(),
+            None,
+        );
+
+        write(root_dir.as_ref().join("written"), dumped).unwrap_log();
     }
 }

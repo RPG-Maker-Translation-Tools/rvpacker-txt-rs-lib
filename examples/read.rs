@@ -1,7 +1,13 @@
-use rvpacker_txt_rs_lib::{read::MapReader, types::EngineType};
+use rvpacker_txt_rs_lib::{
+    read::ReaderBuilder,
+    types::{EngineType, FileFlags},
+};
 
 fn main() {
-    let reader = MapReader::new("data", "translation", EngineType::New).logging(true);
+    let reader = ReaderBuilder::new()
+        .with_flags(FileFlags::Map | FileFlags::Other)
+        .logging(true)
+        .build();
 
-    reader.read();
+    reader.read("data", "translation", EngineType::New);
 }
