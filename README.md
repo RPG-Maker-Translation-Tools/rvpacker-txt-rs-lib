@@ -48,7 +48,7 @@ writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType
 
 `purge` module provides the `Purger` struct, along with its `PurgerBuilder` builder version.
 
-`Purger` struct is used to purge the translation from the `.txt` files based on settings, and output them to the specified output directory.
+`Purger` struct is used to purge the lines with empty translation from the `.txt` files.
 
 #### Example
 
@@ -62,7 +62,16 @@ purger.write("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 
 ### `json` module
 
-Currently broken.
+`json` module provides `generate_json` function to generate JSON representations of older engines' `rxdata`/`rvdata` files to review and edit them, and `write_json` function allows you to write these JSON representations back to their initial forms.
+
+#### Example
+
+```rust
+use rvpacker_txt_rs_lib::json::{generate_json, write_json};
+
+generate_json("C:/Game", "C:/Game", ReadMode::Default);
+write_json("C:/Game");
+```
 
 ## License
 

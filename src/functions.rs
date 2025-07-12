@@ -1,11 +1,11 @@
 use crate::{constants::*, types::*};
+use gxhash::HashSetExt;
 use std::{
-    fs::{read_to_string, File},
+    fs::{File, read_to_string},
     io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 
-#[inline(always)]
 /// Returns the RPG Maker file extension that corresponds to given `EngineType`.
 pub const fn get_engine_extension(engine_type: EngineType) -> &'static str {
     match engine_type {
@@ -17,32 +17,71 @@ pub const fn get_engine_extension(engine_type: EngineType) -> &'static str {
 }
 
 /// Parses ignore file contents to `IgnoreMap`.
-pub fn parse_ignore(ignore_file_path: PathBuf) -> IgnoreMap {
-    let mut map: IgnoreMap = IgnoreMap::default();
+pub(crate) fn parse_ignore(
+    ignore_file_path: PathBuf,
+    duplicate_mode: DuplicateMode,
+    read: bool,
+) -> IgnoreMap {
+    let mut ignore_map = IgnoreMap::default();
 
     if !ignore_file_path.exists() {
-        return map;
+        return ignore_map;
     }
 
-    let ignore_file_content: String =
-        read_to_string(ignore_file_path).unwrap_log();
+    let ignore_file_content = read_to_string(ignore_file_path).unwrap_log();
+    let mut ignore_file_lines = ignore_file_content.lines();
 
-    for line in ignore_file_content.lines() {
+    let Some(mut first_entry_comment) = ignore_file_lines.next() else {
+        return ignore_map;
+    };
+
+    if read
+        && duplicate_mode.is_remove()
+        && !(first_entry_comment.contains("<#>System")
+            || first_entry_comment.contains("<#>Scripts")
+            || first_entry_comment.contains("<#>Plugins"))
+    {
+        // If duplicates are removed, we should group all ignore entries
+        // that correspond to a single file into one ignore entry.
+        first_entry_comment =
+            &first_entry_comment[..first_entry_comment.find(':').unwrap_log()];
+    }
+
+    ignore_map.reserve(256);
+    ignore_map
+        .insert(first_entry_comment.into(), IgnoreEntry::with_capacity(128));
+
+    let mut ignore_entry = ignore_map.last_mut().unwrap_log().1;
+
+    for mut line in ignore_file_content.lines() {
         if line.is_empty() {
             continue;
         }
 
-        if line.starts_with(FILE_ENTRY_PREFIX) {
-            map.insert(line.to_owned(), IgnoreEntry::default());
+        if line.starts_with(IGNORE_ENTRY_COMMENT) {
+            // If duplicates are allowed, we should group all ignore entries
+            // that correspond to a single file into one ignore entry.
+            if read
+                && duplicate_mode.is_remove()
+                && !(line.contains("<#>System")
+                    || line.contains("<#>Scripts")
+                    || line.contains("<#>Plugins"))
+            {
+                line = &line[..line.find(':').unwrap_log()];
+            }
+
+            ignore_map
+                .entry(line.into())
+                .or_insert(IgnoreEntry::with_capacity(128));
+            ignore_entry = ignore_map.last_mut().unwrap_log().1;
         } else {
-            map.last_mut().unwrap_log().1.insert(line.to_owned());
+            ignore_entry.insert(line.into());
         }
     }
 
-    map
+    ignore_map
 }
 
-#[inline]
 /// This function is exactly similar to `std::fs::read_to_string`, but it doesn't include Byte Order Mark, if there's any.
 pub fn read_to_string_without_bom<P: AsRef<Path>>(
     file_path: P,

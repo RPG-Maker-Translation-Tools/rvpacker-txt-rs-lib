@@ -1,59 +1,176 @@
 use bitflags::bitflags;
-use gxhash::*;
-use indexmap::*;
+use getset::{Getters, MutGetters, Setters};
+use gxhash::{GxBuildHasher, HashSet};
+use indexmap::{IndexMap, IndexSet};
+use num_enum::FromPrimitive;
+use std::{mem::take, ops::Deref};
+use strum_macros::{Display, EnumIs};
+
+#[cfg(feature = "serde")]
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "log")]
 use log;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Deserializer};
-#[cfg(feature = "serde")]
-use std::mem::transmute;
-use strum_macros::EnumIs;
 
-pub type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
-pub type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
-pub type IgnoreEntry = HashSet<String>;
-pub type IgnoreMap = IndexMapGx<String, HashSet<String>>;
-pub type TranslationMap = IndexMapGx<String, String>;
-pub type TranslationSet = IndexSetGx<String>;
-pub type TranslationDuplicateMap = Vec<(String, String)>;
-pub type TranslationVec = Vec<String>;
-pub type PurgeIndices = HashSet<usize>;
-pub type StatVec = Vec<(String, String)>;
+pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
+pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
+pub(crate) type IgnoreEntry = HashSet<String>;
+pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
+pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
+pub(crate) type Lines = IndexSetGx<String>;
+pub(crate) type TranslationDuplicateMap = Vec<(String, TranslationEntry)>;
 
-#[derive(Clone, Copy, EnumIs)]
+pub(crate) trait Comments {
+    fn comments(&self) -> &Vec<String>;
+    fn comments_mut(&mut self) -> &mut Vec<String>;
+}
+
+impl Comments for IndexMapGx<String, TranslationEntry> {
+    fn comments(&self) -> &Vec<String> {
+        &self.first().unwrap_log().1.comments
+    }
+
+    fn comments_mut(&mut self) -> &mut Vec<String> {
+        &mut self.first_mut().unwrap_log().1.comments
+    }
+}
+
+#[derive(Debug, Default, Clone, Getters, Setters, MutGetters)]
+pub(crate) struct TranslationEntry {
+    #[getset(get = "pub", set = "pub")]
+    translation: String,
+    #[getset(get = "pub", set = "pub", get_mut = "pub")]
+    comments: Vec<String>,
+}
+
+impl TranslationEntry {
+    pub fn new(translation: String, comments: Vec<String>) -> Self {
+        Self {
+            translation,
+            comments,
+        }
+    }
+
+    pub fn parts(&self) -> (&String, &[String]) {
+        (&self.translation, &self.comments)
+    }
+}
+
+impl From<&str> for TranslationEntry {
+    fn from(value: &str) -> Self {
+        let mut entry = Self::default();
+        entry.set_translation(value.to_string());
+        entry
+    }
+}
+
+impl From<String> for TranslationEntry {
+    fn from(value: String) -> Self {
+        let mut entry = Self::default();
+        entry.set_translation(value);
+        entry
+    }
+}
+
+impl Deref for TranslationEntry {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.translation
+    }
+}
+
+#[derive(Clone, Copy, EnumIs, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
+)]
+#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
+#[repr(u8)]
 pub enum ProcessingMode {
+    #[default]
     Read,
     Write,
     Purge,
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
+#[derive(Clone, Copy, EnumIs, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
+)]
+#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
+#[repr(u8)]
+pub enum DuplicateMode {
+    #[default]
+    Allow,
+    Remove,
+}
+
+#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
+)]
+#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
+#[repr(u8)]
 pub enum GameType {
+    #[default]
     None,
     Termina,
     LisaRPG,
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
+#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
+)]
+#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
 #[repr(u8)]
 pub enum ReadMode {
+    #[default]
     None,
     Default,
     Append,
     Force,
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
+#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
+)]
+#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
+#[repr(u8)]
 pub enum EngineType {
+    #[default]
     New,
     VXAce,
     VX,
     XP,
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
+/// 401 - Dialogue line.
+///
+/// 101 - Start of the dialogue line. (**XP ENGINE ONLY!**)
+///
+/// 102 - Dialogue choices array.
+///
+/// 402 - One of the dialogue choices from the array. (**WRITE ONLY!**)
+///
+/// 405 - Credits lines. (**probably NEWER ENGINES ONLY!**)
+///
+/// 356 - System line, special text. (TODO: that one needs clarification)
+///
+/// 655 - Line displayed in shop - from an external script. (**OLDER ENGINES ONLY!**)
+///
+/// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
+#[derive(PartialEq, Clone, Copy, EnumIs, FromPrimitive)]
 #[repr(u16)]
-pub enum Code {
+pub(crate) enum Code {
     Dialogue = 401,
     DialogueStart = 101,
     Credit = 405,
@@ -63,6 +180,7 @@ pub enum Code {
     Misc1 = 320,
     Misc2 = 324,
     Shop = 655,
+    #[num_enum(default)]
     Bad = 0,
 }
 
@@ -77,7 +195,8 @@ impl Code {
 }
 
 #[derive(PartialEq, Clone, Copy, EnumIs)]
-pub enum Variable {
+#[repr(u8)]
+pub(crate) enum Variable {
     Name,
     Nickname,
     Description,
@@ -97,18 +216,18 @@ impl Variable {
     }
 }
 
-pub trait TrimReplace {
+pub(crate) trait TrimReplace {
     fn trim_replace(&self) -> String;
 }
 
 impl TrimReplace for str {
     #[inline(always)]
     fn trim_replace(&self) -> String {
-        self.trim().to_owned()
+        self.trim().into()
     }
 }
 
-pub trait EachLine {
+pub(crate) trait EachLine {
     fn each_line(&self) -> Vec<String>;
 }
 
@@ -116,19 +235,19 @@ impl EachLine for str {
     #[inline]
     /// Return a Vec of strings splitted by lines (inclusive), akin to each_line in Ruby
     fn each_line(&self) -> Vec<String> {
-        let mut result: Vec<String> = Vec::new();
-        let mut current_line: String = String::new();
+        let mut result = Vec::new();
+        let mut current_line = String::new();
 
         for char in self.chars() {
             current_line.push(char);
 
             if char == '\n' {
-                result.push(std::mem::take(&mut current_line));
+                result.push(take(&mut current_line));
             }
         }
 
         if !current_line.is_empty() {
-            result.push(std::mem::take(&mut current_line));
+            result.push(take(&mut current_line));
         }
 
         result
@@ -136,7 +255,7 @@ impl EachLine for str {
 }
 
 #[derive(Clone, Copy)]
-pub struct Labels {
+pub(crate) struct Labels {
     pub display_name: &'static str,
     pub events: &'static str,
     pub pages: &'static str,
@@ -186,42 +305,44 @@ impl Labels {
                 weapon_types: "weaponTypes",
                 game_title: "gameTitle",
                 equip_types: "equipTypes",
-                currency_unit: "__symbol__currency_unit",
+                currency_unit: "currency_unit",
             },
             _ => Self {
-                display_name: "__symbol__display_name",
-                events: "__symbol__events",
-                pages: "__symbol__pages",
-                list: "__symbol__list",
-                code: "__symbol__code",
-                parameters: "__symbol__parameters",
-                name: "__symbol__name",
-                nickname: "__symbol__nickname",
-                description: "__symbol__description",
-                message1: "__symbol__message1",
-                message2: "__symbol__message2",
-                message3: "__symbol__message3",
-                message4: "__symbol__message4",
-                note: "__symbol__note",
-                armor_types: "__symbol__armor_types",
-                elements: "__symbol__elements",
-                skill_types: "__symbol__skill_types",
+                display_name: "display_name",
+                events: "events",
+                pages: "pages",
+                list: "list",
+                code: "code",
+                parameters: "parameters",
+                name: "name",
+                nickname: "nickname",
+                description: "description",
+                message1: "message1",
+                message2: "message2",
+                message3: "message3",
+                message4: "message4",
+                note: "note",
+                armor_types: "armor_types",
+                elements: "elements",
+                skill_types: "skill_types",
                 terms: if engine_type.is_xp() {
-                    "__symbol__words"
+                    "words"
                 } else {
-                    "__symbol__terms"
+                    "terms"
                 },
-                weapon_types: "__symbol__weapon_types",
-                game_title: "__symbol__game_title",
+                weapon_types: "weapon_types",
+                game_title: "game_title",
                 equip_types: "equipTypes",
-                currency_unit: "__symbol__currency_unit",
+                currency_unit: "currency_unit",
             },
         }
     }
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
-pub enum RPGMFileType {
+#[derive(PartialEq, Clone, Copy, EnumIs, Display, Default)]
+#[repr(u8)]
+pub(crate) enum RPGMFileType {
+    #[default]
     Invalid,
     Actors,
     Armors,
@@ -283,9 +404,13 @@ bitflags! {
     #[derive(PartialEq, Clone, Copy)]
     pub struct FileFlags: u8 {
         const None = 0;
+        /// `Mapxxx.ext` files.
         const Map = 1;
+        /// All files, other than map, system, and scripts/plugins.
         const Other = 2;
+        /// `System.ext` file.
         const System = 4;
+        /// `Scripts.ext`/`plugins.js` file.
         const Scripts = 8;
         const All = Self::Map.bits()
                 | Self::Other.bits()
@@ -294,11 +419,17 @@ bitflags! {
     }
 }
 
-pub trait OptionExt<T> {
+impl Default for FileFlags {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+pub(crate) trait OptionExt<T> {
     fn unwrap_log(self) -> T;
 }
 
-pub trait ResultExt<T, E> {
+pub(crate) trait ResultExt<T, E> {
     fn unwrap_log(self) -> T
     where
         E: std::fmt::Debug;
@@ -313,11 +444,11 @@ impl<T> OptionExt<T> for Option<T> {
             {
                 let location = std::panic::Location::caller();
                 log::error!(
-                        "called `Option::unwrap_log()` on a `None` value in {} at {}:{}",
-                        location.file(),
-                        location.line(),
-                        location.column()
-                    );
+                    "called `Option::unwrap_log()` on a `None` value in {} at {}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                );
             }
 
             panic!("called `Option::unwrap_log()` on a `None` value");
@@ -349,8 +480,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
                 }
 
                 panic!(
-                    "called `Result::unwrap_log()` on an `Err` value: {:?}",
-                    err
+                    "called `Result::unwrap_log()` on an `Err` value: {err:?}"
                 );
             }
         }
@@ -371,26 +501,4 @@ macro_rules! eprintln {
     ($($arg:tt)*) => {{
         log::error!($($arg)*);
     }};
-}
-
-#[cfg(feature = "serde")]
-impl<'de> Deserialize<'de> for EngineType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value: u8 = Deserialize::deserialize(deserializer)?;
-        Ok(unsafe { transmute::<u8, EngineType>(value) })
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> Deserialize<'de> for ReadMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value: u8 = Deserialize::deserialize(deserializer)?;
-        Ok(unsafe { transmute::<u8, ReadMode>(value) })
-    }
 }

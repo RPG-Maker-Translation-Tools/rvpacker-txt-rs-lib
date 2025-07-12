@@ -1,5 +1,5 @@
 use crate::{
-    bases::*, constants::RVPACKER_IGNORE_FILE, functions::parse_ignore,
+    constants::RVPACKER_IGNORE_FILE, core::*, functions::parse_ignore,
     get_engine_extension, types::*,
 };
 use std::path::Path;
@@ -55,17 +55,16 @@ impl<'a> MapReader<'a> {
         self
     }
 
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.base.base.sort = enabled;
-        self
-    }
-
     pub fn ignore_map(mut self, map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = map;
         self
     }
 
-    #[inline(always)]
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.base.base.duplicate_mode = mode;
+        self
+    }
+
     pub fn read(self) {
         self.base.process();
     }
@@ -122,17 +121,16 @@ impl<'a> OtherReader<'a> {
         self
     }
 
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.base.base.sort = enabled;
-        self
-    }
-
     pub fn ignore_map(mut self, map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = map;
         self
     }
 
-    #[inline(always)]
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.base.base.duplicate_mode = mode;
+        self
+    }
+
     pub fn read(self) {
         self.base.process();
     }
@@ -184,17 +182,11 @@ impl<'a> SystemReader<'a> {
         self
     }
 
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.base.base.sort = enabled;
-        self
-    }
-
     pub fn ignore_map(mut self, map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = map;
         self
     }
 
-    #[inline(always)]
     pub fn read(self) {
         self.base.process();
     }
@@ -239,17 +231,11 @@ impl<'a> ScriptReader<'a> {
         self
     }
 
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.base.base.sort = enabled;
-        self
-    }
-
     pub fn ignore_map(mut self, map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = map;
         self
     }
 
-    #[inline(always)]
     pub fn read(self) {
         self.base.process();
     }
@@ -294,17 +280,11 @@ impl<'a> PluginReader<'a> {
         self
     }
 
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.base.base.sort = enabled;
-        self
-    }
-
     pub fn ignore_map(mut self, map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = map;
         self
     }
 
-    #[inline(always)]
     pub fn read(self) {
         self.base.process();
     }
@@ -312,18 +292,17 @@ impl<'a> PluginReader<'a> {
 
 /// A struct used for parsing and extracting text from RPG Maker files into `.txt` format.
 ///
-/// The `Reader` provides a configurable interface to control how files are parsed,
+/// The [`Reader`] provides a configurable interface to control how files are parsed,
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use `set_flags` to set them.
-/// - `read_mode`: Defines the read strategy. Use `set_read_mode` to set it.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use `set_game_type` to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see `set_romanize`.
-/// - `logging`: If enabled, logs operations and progress. Use `set_logging`
-/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use `set_ignore` to set it.
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use `set_trim` to set it.
-/// - `sort`: Sorts the extracted text entries chronologically. Use `set_sort` to set it.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_flags`] to set them.
+/// - `read_mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set it.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set it.
+/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Reader::set_romanize`].
+/// - `logging`: If enabled, logs operations and progress. Use [`Reader::set_logging`]
+/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use [`Reader::set_ignore`] to set it.
+/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Reader::set_trim`] to set it.
 ///
 /// # Example
 /// ```no_run
@@ -333,22 +312,22 @@ impl<'a> PluginReader<'a> {
 /// reader.set_flags(FileFlags::Map | FileFlags::Other);
 /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
+#[derive(Default)]
 pub struct Reader {
     file_flags: FileFlags,
     read_mode: ReadMode,
     game_type: GameType,
+    duplicate_mode: DuplicateMode,
     romanize: bool,
     logging: bool,
     ignore: bool,
     trim: bool,
-    sort: bool,
 }
 
 impl Reader {
-    /// Creates a new `Reader` instance with default values.
+    /// Creates a new [`Reader`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be read), the `ReadMode::Default` read mode is used,
-    /// and all other options are disabled.
+    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
     /// ```no_run
@@ -356,27 +335,21 @@ impl Reader {
     /// ```
     pub fn new() -> Self {
         Self {
-            file_flags: FileFlags::All,
             read_mode: ReadMode::Default,
-            game_type: GameType::None,
-            romanize: false,
-            logging: false,
-            ignore: false,
-            trim: false,
-            sort: false,
+            ..Default::default()
         }
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
     /// There's four FileFlags variants:
-    /// * `FileFlags::Map` - enables `Mapxxx.ext` files processing.
-    /// * `FileFlags::Other` - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// * `FileFlags::System` - enables `System.txt` file processing.
-    /// * `FileFlags::Scripts` - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
+    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::System`] - enables `System.txt` file processing.
+    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
     /// # Arguments
-    /// * `flags` - A `FileFlags` value indicating the file types to include.
+    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```no_run
@@ -389,12 +362,12 @@ impl Reader {
     /// Sets the read mode that affects how data is parsed.
     ///
     /// There's only three read modes:
-    /// * `ReadMode::Default` - parses the text from the RPG Maker files, aborts if translation files already exist.
-    /// * `ReadMode::Append` - appends the new text to the translation files. That's particularly helpful if the game received content update.
-    /// * `ReadMode::Force` - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
+    /// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
+    /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
+    /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
     ///
     /// # Arguments
-    /// * `mode` - A `ReadMode` variant.
+    /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -406,14 +379,14 @@ impl Reader {
 
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina (`GameType::Termina`), and LisaRPG series games (`GameType::LisaRPG`).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
+    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
     /// # Arguments
-    /// * `game_type` - A `GameType` variant.
+    /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -425,7 +398,7 @@ impl Reader {
 
     /// Enables or disables romanization of the parsed text.
     ///
-    /// Essentially, this flag just replaced Eastern symbols in strings to their Western equivalents.
+    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
     ///
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
@@ -467,15 +440,19 @@ impl Reader {
         self.trim = enabled;
     }
 
-    /// Sets whether to sort extracted text chronologically.
-    /// Works only with `ReadMode::Append`.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets, what to do with duplicates.
+    ///
+    /// - [`DuplicateMode::AllowDuplicates`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
+    /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
     /// ```no_run
-    /// reader.set_sort(true);
+    /// reader.set_duplicate_mode(DuplicateMode::AllowDuplicates);
     /// ```
-    pub fn set_sort(&mut self, enabled: bool) {
-        self.sort = enabled;
+    pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
+        self.duplicate_mode = mode;
     }
 
     /// Reads the RPG Maker files from `source_path` to `.txt` files in `translation_path`.
@@ -483,9 +460,9 @@ impl Reader {
     /// Make sure you've configured the reader as you desire before calling it.
     ///
     /// # Arguments
-    /// * `source_path` - Path to the directory containing RPG Maker files.
-    /// * `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
-    /// * `engine_type` - Engine type of the source RPG Maker files.
+    /// - `source_path` - Path to the directory containing RPG Maker files.
+    /// - `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
+    /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
     /// ```no_run
@@ -506,6 +483,8 @@ impl Reader {
         if self.ignore {
             ignore_map.extend(parse_ignore(
                 translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
+                self.duplicate_mode,
+                true,
             ));
         }
 
@@ -524,7 +503,7 @@ impl Reader {
                 .logging(self.logging)
                 .ignore(self.ignore)
                 .trim(self.trim)
-                .sort(self.sort)
+                .duplicate_mode(self.duplicate_mode)
                 .read();
         }
 
@@ -543,7 +522,7 @@ impl Reader {
                 .logging(self.logging)
                 .ignore(self.ignore)
                 .trim(self.trim)
-                .sort(self.sort)
+                .duplicate_mode(self.duplicate_mode)
                 .read();
         }
 
@@ -565,7 +544,6 @@ impl Reader {
                 .logging(self.logging)
                 .ignore(self.ignore)
                 .trim(self.trim)
-                .sort(self.sort)
                 .read();
         }
 
@@ -588,7 +566,6 @@ impl Reader {
                     .romanize(self.romanize)
                     .logging(self.logging)
                     .ignore(self.ignore)
-                    .sort(self.sort)
                     .read();
             } else {
                 let scripts_file_path = source_path.as_ref().join(format!(
@@ -607,33 +584,25 @@ impl Reader {
                     .romanize(self.romanize)
                     .logging(self.logging)
                     .ignore(self.ignore)
-                    .sort(self.sort)
                     .read();
             }
         }
     }
 }
 
-impl Default for Reader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A builder struct for `Reader`.
+/// A builder struct for [`Reader`].
 ///
-/// The `Reader` provides a configurable interface to control how files are parsed,
+/// The [`Reader`] provides a configurable interface to control how files are parsed,
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use `with_flags` to set them.
-/// - `read_mode`: Defines the read strategy. Use `read_mode` to set it.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use `game_type` to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see `romanize`.
-/// - `logging`: If enabled, logs operations and progress. Use `logging`
-/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use `ignore` to set it.
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use `trim` to set it.
-/// - `sort`: Sorts the extracted text entries chronologically. Use `sort` to set it.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`ReaderBuilder::with_flags`] to set them.
+/// - `read_mode`: Defines the read strategy. Use [`ReaderBuilder::read_mode`] to set it.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`ReaderBuilder::game_type`] to set it.
+/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`ReaderBuilder::romanize`].
+/// - `logging`: If enabled, logs operations and progress. Use [`ReaderBuilder::logging`]
+/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use [`ReaderBuilder::ignore`] to set it.
+/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`ReaderBuilder::trim`] to set it.
 ///
 /// # Example
 /// ```
@@ -641,36 +610,34 @@ impl Default for Reader {
 ///
 /// let mut reader = ReaderBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
 /// ```
+#[derive(Default)]
 pub struct ReaderBuilder {
     reader: Reader,
 }
 
 impl ReaderBuilder {
-    /// Creates a new `ReaderBuilder` instance with default values.
+    /// Creates a new [`ReaderBuilder`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be read), the `ReadMode::Default` read mode is used,
-    /// and all other options are disabled.
+    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
     /// ```no_run
     /// let mut reader = ReaderBuilder::new().build();
     /// ```
     pub fn new() -> Self {
-        Self {
-            reader: Reader::new(),
-        }
+        Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
     /// There's four FileFlags variants:
-    /// * `FileFlags::Map` - enables `Mapxxx.ext` files processing.
-    /// * `FileFlags::Other` - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// * `FileFlags::System` - enables `System.txt` file processing.
-    /// * `FileFlags::Scripts` - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
+    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::System`] - enables `System.txt` file processing.
+    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
     /// # Arguments
-    /// * `flags` - A `FileFlags` value indicating the file types to include.
+    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```no_run
@@ -684,12 +651,12 @@ impl ReaderBuilder {
     /// Sets the read mode that affects how data is parsed.
     ///
     /// There's only three read modes:
-    /// * `ReadMode::Default` - parses the text from the RPG Maker files, aborts if translation files already exist.
-    /// * `ReadMode::Append` - appends the new text to the translation files. That's particularly helpful if the game received content update.
-    /// * `ReadMode::Force` - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
+    /// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
+    /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
+    /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
     ///
     /// # Arguments
-    /// * `mode` - A `ReadMode` variant.
+    /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -702,14 +669,14 @@ impl ReaderBuilder {
 
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina (`GameType::Termina`), and LisaRPG series games (`GameType::LisaRPG`).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
+    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
     /// # Arguments
-    /// * `game_type` - A `GameType` variant.
+    /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -722,7 +689,7 @@ impl ReaderBuilder {
 
     /// Enables or disables romanization of the parsed text.
     ///
-    /// Essentially, this flag just replaced Eastern symbols in strings to their Western equivalents.
+    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
     ///
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
@@ -768,26 +735,22 @@ impl ReaderBuilder {
         self
     }
 
-    /// Sets whether to sort extracted text chronologically.
-    /// Works only with `ReadMode::Append`.
+    /// Sets, what to do with duplicates. Works only for map and other files.
+    ///
+    /// - [`DuplicateMode::AllowDuplicates`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
+    /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
     /// ```no_run
-    /// let reader = ReaderBuilder::new().sort(true).build();
+    /// let reader = ReaderBuilder::new().duplicate_mode(DuplicateMode::AllowDuplicates).build();
     /// ```
-    pub fn sort(mut self, enabled: bool) -> Self {
-        self.reader.sort = enabled;
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.reader.duplicate_mode = mode;
         self
     }
 
-    /// Builds and returns the `Reader`.
+    /// Builds and returns the [`Reader`].
     pub fn build(self) -> Reader {
         self.reader
-    }
-}
-
-impl Default for ReaderBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

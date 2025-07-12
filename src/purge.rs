@@ -1,5 +1,7 @@
+#[allow(unused_imports)]
+use crate::Reader;
 use crate::{
-    bases::*, constants::*, functions::parse_ignore, get_engine_extension,
+    constants::*, core::*, functions::parse_ignore, get_engine_extension,
     types::*,
 };
 use std::path::Path;
@@ -45,28 +47,8 @@ impl<'a> MapPurger<'a> {
         self
     }
 
-    pub fn stat(mut self, stat: bool) -> Self {
-        self.base.base.stat = stat;
-        self
-    }
-
-    pub fn leave_filled(mut self, leave_filled: bool) -> Self {
-        self.base.base.leave_filled = leave_filled;
-        self
-    }
-
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
-        self
-    }
-
-    pub fn purge_empty(mut self, purge_empty: bool) -> Self {
-        self.base.base.purge_empty = purge_empty;
-        self
-    }
-
-    pub fn stat_vec(mut self, stat_vec: &'a mut StatVec) -> Self {
-        self.base.base.stat_vec = stat_vec;
         self
     }
 
@@ -75,7 +57,11 @@ impl<'a> MapPurger<'a> {
         self
     }
 
-    #[inline(always)]
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.base.base.duplicate_mode = mode;
+        self
+    }
+
     pub fn purge(self) {
         self.base.process();
     }
@@ -122,28 +108,8 @@ impl<'a> OtherPurger<'a> {
         self
     }
 
-    pub fn stat(mut self, stat: bool) -> Self {
-        self.base.base.stat = stat;
-        self
-    }
-
-    pub fn leave_filled(mut self, leave_filled: bool) -> Self {
-        self.base.base.leave_filled = leave_filled;
-        self
-    }
-
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
-        self
-    }
-
-    pub fn purge_empty(mut self, purge_empty: bool) -> Self {
-        self.base.base.purge_empty = purge_empty;
-        self
-    }
-
-    pub fn stat_vec(mut self, stat_vec: &'a mut StatVec) -> Self {
-        self.base.base.stat_vec = stat_vec;
         self
     }
 
@@ -152,7 +118,11 @@ impl<'a> OtherPurger<'a> {
         self
     }
 
-    #[inline(always)]
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.base.base.duplicate_mode = mode;
+        self
+    }
+
     pub fn purge(self) {
         self.base.process();
     }
@@ -194,28 +164,8 @@ impl<'a> SystemPurger<'a> {
         self
     }
 
-    pub fn stat(mut self, stat: bool) -> Self {
-        self.base.base.stat = stat;
-        self
-    }
-
-    pub fn leave_filled(mut self, leave_filled: bool) -> Self {
-        self.base.base.leave_filled = leave_filled;
-        self
-    }
-
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
-        self
-    }
-
-    pub fn purge_empty(mut self, purge_empty: bool) -> Self {
-        self.base.base.purge_empty = purge_empty;
-        self
-    }
-
-    pub fn stat_vec(mut self, stat_vec: &'a mut StatVec) -> Self {
-        self.base.base.stat_vec = stat_vec;
         self
     }
 
@@ -224,7 +174,6 @@ impl<'a> SystemPurger<'a> {
         self
     }
 
-    #[inline(always)]
     pub fn purge(self) {
         self.base.process();
     }
@@ -259,28 +208,8 @@ impl<'a> PluginPurger<'a> {
         self
     }
 
-    pub fn stat(mut self, stat: bool) -> Self {
-        self.base.base.stat = stat;
-        self
-    }
-
-    pub fn leave_filled(mut self, leave_filled: bool) -> Self {
-        self.base.base.leave_filled = leave_filled;
-        self
-    }
-
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
-        self
-    }
-
-    pub fn purge_empty(mut self, purge_empty: bool) -> Self {
-        self.base.base.purge_empty = purge_empty;
-        self
-    }
-
-    pub fn stat_vec(mut self, stat_vec: &'a mut StatVec) -> Self {
-        self.base.base.stat_vec = stat_vec;
         self
     }
 
@@ -289,7 +218,6 @@ impl<'a> PluginPurger<'a> {
         self
     }
 
-    #[inline(always)]
     pub fn purge(self) {
         self.base.process();
     }
@@ -324,28 +252,8 @@ impl<'a> ScriptPurger<'a> {
         self
     }
 
-    pub fn stat(mut self, stat: bool) -> Self {
-        self.base.base.stat = stat;
-        self
-    }
-
-    pub fn leave_filled(mut self, leave_filled: bool) -> Self {
-        self.base.base.leave_filled = leave_filled;
-        self
-    }
-
     pub fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
-        self
-    }
-
-    pub fn purge_empty(mut self, purge_empty: bool) -> Self {
-        self.base.base.purge_empty = purge_empty;
-        self
-    }
-
-    pub fn stat_vec(mut self, stat_vec: &'a mut StatVec) -> Self {
-        self.base.base.stat_vec = stat_vec;
         self
     }
 
@@ -354,28 +262,23 @@ impl<'a> ScriptPurger<'a> {
         self
     }
 
-    #[inline(always)]
     pub fn purge(self) {
         self.base.process();
     }
 }
 
-/// A struct used for purging translation lines from `.txt` files based on options.
+/// A struct used for purging lines with no translation from `.txt` files.
 ///
-/// The `Purger` struct, essentially, should receive the same options, as `Reader`, to ensure proper purging.
+/// The [`Purger`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use `set_flags` to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use `set_game_type` to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see `set_romanize`.
-/// - `logging`: If enabled, logs operations and progress. Use `set_logging`
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use `set_trim` to set it.
-/// - `stat`: If enabled, doesn't actually purge any lines, and outputs `stat.txt` file with purge statistics
-///   to translation directory.
-/// - `leave_filled`: If enabled, leaves the lines with filled translation, even if they don't exist in game.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_flags`] to set them.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set it.
+/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Purger::set_romanize`].
+/// - `logging`: If enabled, logs operations and progress. Use [`Purger::set_logging`]
+/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Purger::set_trim`] to set it.
 /// - `create_ignore`: If enabled, creates `.rvpacker-ignore` file from purged lines, that can be used in
 ///   `Reader` struct when its `ignore` option is set.
-/// - `purge_empty`: If enabled, purges only the lines with empty translation.
 ///
 /// # Example
 /// ```no_run
@@ -385,52 +288,40 @@ impl<'a> ScriptPurger<'a> {
 /// purger.set_flags(FileFlags::Map | FileFlags::Other);
 /// purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
+#[derive(Default)]
 pub struct Purger {
     file_flags: FileFlags,
     game_type: GameType,
+    duplicate_mode: DuplicateMode,
     romanize: bool,
     logging: bool,
     trim: bool,
-    stat: bool,
-    leave_filled: bool,
     create_ignore: bool,
-    purge_empty: bool,
 }
 
 impl Purger {
-    /// Creates a new `Purger` instance with default values.
+    /// Creates a new [`Purger`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be purged),
-    /// and all other options are disabled.
+    /// By default, all four file flags are set (all files will be purged), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
     /// ```no_run
     /// let mut purger = Purger::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            file_flags: FileFlags::All,
-            game_type: GameType::None,
-            romanize: false,
-            logging: false,
-            trim: false,
-            stat: false,
-            leave_filled: false,
-            create_ignore: false,
-            purge_empty: false,
-        }
+        Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
-    /// * `FileFlags::Map` - enables `Mapxxx.ext` files processing.
-    /// * `FileFlags::Other` - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// * `FileFlags::System` - enables `System.txt` file processing.
-    /// * `FileFlags::Scripts` - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// There's four [`FileFlags`] variants:
+    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
+    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::System`] - enables `System.txt` file processing.
+    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
     /// # Arguments
-    /// * `flags` - A `FileFlags` value indicating the file types to include.
+    /// - `flags` - A `FileFlags` value indicating the file types to include.
     ///
     /// # Example
     /// ```no_run
@@ -440,18 +331,18 @@ impl Purger {
         self.file_flags = file_flags;
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina (`GameType::Termina`), and LisaRPG series games (`GameType::LisaRPG`).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
     /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
     ///
     /// # Arguments
-    /// * `game_type` - A `GameType` variant.
+    /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -461,11 +352,11 @@ impl Purger {
         self.game_type = game_type;
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Enables or disables romanization of the parsed text.
     ///
-    /// Essentially, this flag just replaced Eastern symbols in strings to their Western equivalents.
+    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
     ///
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
@@ -487,7 +378,7 @@ impl Purger {
         self.logging = enabled;
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Sets whether to trim whitespace from strings.
     ///
@@ -497,26 +388,6 @@ impl Purger {
     /// ```
     pub fn set_trim(&mut self, enabled: bool) {
         self.trim = enabled;
-    }
-
-    /// If set, `purge` outputs purge statistics, instead of actually purging anything.
-    ///
-    /// # Example
-    /// ```no_run
-    /// purger.set_stat(true);
-    /// ```
-    pub fn set_stat(&mut self, enabled: bool) {
-        self.stat = enabled;
-    }
-
-    /// Sets whether to leave lines with filled translation untouched.
-    ///
-    /// # Example
-    /// ```no_run
-    /// purger.set_leave_filled(true);
-    /// ```
-    pub fn set_leave_filled(&mut self, enabled: bool) {
-        self.leave_filled = enabled;
     }
 
     /// Sets whether to create `.rvpacker-ignore` file from purged lines.
@@ -529,24 +400,29 @@ impl Purger {
         self.create_ignore = enabled;
     }
 
-    /// Sets whether to purge only lines with empty translation.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets, what to do with duplicates. Works only for map and other files.
+    ///
+    /// - [`DuplicateMode::AllowDuplicates`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
+    /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
     /// ```no_run
-    /// purger.set_purge_empty(true);
+    /// purger.set_duplicate_mode(DuplicateMode::AllowDuplicates);
     /// ```
-    pub fn set_purge_empty(&mut self, enabled: bool) {
-        self.purge_empty = enabled;
+    pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
+        self.duplicate_mode = mode;
     }
 
-    /// Purges the lines from `.txt` files in `translation_path`, using source RPG Maker files from `source_path`.
+    /// Purges the lines with no translation from `.txt` files in `translation_path`, using source RPG Maker files from `source_path`.
     ///
     /// Make sure you've configured the purger with the same options as reader before calling it.
     ///
     /// # Arguments
-    /// * `source_path` - Path to the directory containing RPG Maker files.
-    /// * `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
-    /// * `engine_type` - Engine type of the source RPG Maker files.
+    /// - `source_path` - Path to the directory containing RPG Maker files.
+    /// - `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
+    /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
     /// ```no_run
@@ -563,10 +439,10 @@ impl Purger {
         if self.create_ignore {
             ignore_map.extend(parse_ignore(
                 translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
+                self.duplicate_mode,
+                false,
             ));
         }
-
-        let mut stat_vec: StatVec = StatVec::default();
 
         if self.file_flags.contains(FileFlags::Map) {
             let purger = MapPurger::new(
@@ -576,14 +452,11 @@ impl Purger {
             )
             .ignore_map(&mut ignore_map)
             .game_type(self.game_type)
-            .stat_vec(&mut stat_vec)
             .romanize(self.romanize)
             .logging(self.logging)
             .trim(self.trim)
-            .stat(self.stat)
-            .leave_filled(self.leave_filled)
-            .create_ignore(self.create_ignore)
-            .purge_empty(self.purge_empty);
+            .duplicate_mode(self.duplicate_mode)
+            .create_ignore(self.create_ignore);
 
             purger.purge();
         }
@@ -596,14 +469,11 @@ impl Purger {
             )
             .ignore_map(&mut ignore_map)
             .game_type(self.game_type)
-            .stat_vec(&mut stat_vec)
             .romanize(self.romanize)
             .logging(self.logging)
             .trim(self.trim)
-            .stat(self.stat)
-            .leave_filled(self.leave_filled)
-            .create_ignore(self.create_ignore)
-            .purge_empty(self.purge_empty);
+            .duplicate_mode(self.duplicate_mode)
+            .create_ignore(self.create_ignore);
 
             purger.purge();
         }
@@ -619,14 +489,10 @@ impl Purger {
                 engine_type,
             )
             .ignore_map(&mut ignore_map)
-            .stat_vec(&mut stat_vec)
             .romanize(self.romanize)
             .logging(self.logging)
             .trim(self.trim)
-            .stat(self.stat)
-            .leave_filled(self.leave_filled)
-            .create_ignore(self.create_ignore)
-            .purge_empty(self.purge_empty);
+            .create_ignore(self.create_ignore);
 
             purger.purge();
         }
@@ -644,13 +510,9 @@ impl Purger {
                     translation_path.as_ref(),
                 )
                 .ignore_map(&mut ignore_map)
-                .stat_vec(&mut stat_vec)
                 .romanize(self.romanize)
                 .logging(self.logging)
-                .stat(self.stat)
-                .leave_filled(self.leave_filled)
-                .create_ignore(self.create_ignore)
-                .purge_empty(self.purge_empty);
+                .create_ignore(self.create_ignore);
 
                 purger.purge();
             } else {
@@ -664,28 +526,12 @@ impl Purger {
                     translation_path.as_ref(),
                 )
                 .ignore_map(&mut ignore_map)
-                .stat_vec(&mut stat_vec)
                 .romanize(self.romanize)
                 .logging(self.logging)
-                .stat(self.stat)
-                .leave_filled(self.leave_filled)
-                .create_ignore(self.create_ignore)
-                .purge_empty(self.purge_empty);
+                .create_ignore(self.create_ignore);
 
                 purger.purge();
             }
-        }
-
-        if self.stat {
-            std::fs::write(
-                translation_path.as_ref().join("stat.txt"),
-                String::from_iter(stat_vec.into_iter().map(
-                    |(source, translation)| {
-                        format!("{source}{LINES_SEPARATOR}{translation}\n")
-                    },
-                )),
-            )
-            .unwrap_log();
         }
 
         if self.create_ignore {
@@ -720,28 +566,18 @@ impl Purger {
     }
 }
 
-impl Default for Purger {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A builder struct for `Purger`.
+/// A builder struct for [`Purger`].
 ///
-/// The `Purger` struct, essentially, should receive the same options, as `Reader`, to ensure proper purging.
+/// The `Purger` struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use `set_flags` to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use `set_game_type` to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see `set_romanize`.
-/// - `logging`: If enabled, logs operations and progress. Use `set_logging`
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use `set_trim` to set it.
-/// - `stat`: If enabled, doesn't actually purge any lines, and outputs `stat.txt` file with purge statistics
-///   to translation directory.
-/// - `leave_filled`: If enabled, leaves the lines with filled translation, even if they don't exist in game.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_flags`] to set them.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`PurgerBuilder::game_type`] to set it.
+/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`PurgerBuilder::romanize`].
+/// - `logging`: If enabled, logs operations and progress. Use [`PurgerBuilder::logging`]
+/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`PurgerBuilder::trim`] to set it.
 /// - `create_ignore`: If enabled, creates `.rvpacker-ignore` file from purged lines, that can be used in
 ///   `Reader` struct when its `ignore` option is set.
-/// - `purge_empty`: If enabled, purges only the lines with empty translation.
 ///
 /// # Example
 /// ```
@@ -749,15 +585,15 @@ impl Default for Purger {
 ///
 /// let mut purger = PurgerBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
 /// ```
+#[derive(Default)]
 pub struct PurgerBuilder {
     purger: Purger,
 }
 
 impl PurgerBuilder {
-    /// Creates a new `Purger` instance with default values.
+    /// Creates a new [`PurgerBuilder`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be purged),
-    /// and all other options are disabled.
+    /// By default, all four file flags are set (all files will be purged), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
     /// ```no_run
@@ -771,14 +607,14 @@ impl PurgerBuilder {
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
-    /// * `FileFlags::Map` - enables `Mapxxx.ext` files processing.
-    /// * `FileFlags::Other` - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// * `FileFlags::System` - enables `System.txt` file processing.
-    /// * `FileFlags::Scripts` - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// There's four [`FileFlags`] variants:
+    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
+    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::System`] - enables `System.txt` file processing.
+    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
     /// # Arguments
-    /// * `flags` - A `FileFlags` value indicating the file types to include.
+    /// - `flags` - A `FileFlags` value indicating the file types to include.
     ///
     /// # Example
     /// ```no_run
@@ -789,18 +625,18 @@ impl PurgerBuilder {
         self
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina (`GameType::Termina`), and LisaRPG series games (`GameType::LisaRPG`).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
     /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
     ///
     /// # Arguments
-    /// * `game_type` - A `GameType` variant.
+    /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
     /// ```no_run
@@ -811,11 +647,11 @@ impl PurgerBuilder {
         self
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Enables or disables romanization of the parsed text.
     ///
-    /// Essentially, this flag just replaced Eastern symbols in strings to their Western equivalents.
+    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
     ///
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
@@ -839,7 +675,7 @@ impl PurgerBuilder {
         self
     }
 
-    /// This function must have the same value that was passed to it in `Reader` struct.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
     /// Sets whether to trim whitespace from strings.
     ///
@@ -849,28 +685,6 @@ impl PurgerBuilder {
     /// ```
     pub fn trim(mut self, enabled: bool) -> Self {
         self.purger.trim = enabled;
-        self
-    }
-
-    /// If set, `purge` outputs purge statistics, instead of actually purging anything.
-    ///
-    /// # Example
-    /// ```no_run
-    /// let purger = PurgerBuilder::new().stat(true).build();
-    /// ```
-    pub fn stat(mut self, enabled: bool) -> Self {
-        self.purger.stat = enabled;
-        self
-    }
-
-    /// Sets whether to leave lines with filled translation untouched.
-    ///
-    /// # Example
-    /// ```no_run
-    /// let purger = PurgerBuilder::new().leave_filled(true).build();
-    /// ```
-    pub fn leave_filled(mut self, enabled: bool) -> Self {
-        self.purger.leave_filled = enabled;
         self
     }
 
@@ -885,25 +699,24 @@ impl PurgerBuilder {
         self
     }
 
-    /// Sets whether to purge only lines with empty translation.
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets, what to do with duplicates. Works only for map and other files.
+    ///
+    /// - [`DuplicateMode::AllowDuplicates`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
+    /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
     /// ```no_run
-    /// let purger = PurgerBuilder::new().purge_empty(true).build();
+    /// let purger = PurgerBuilder::new().duplicate_mode(DuplicateMode::AllowDuplicates);.build();
     /// ```
-    pub fn purge_empty(mut self, enabled: bool) -> Self {
-        self.purger.purge_empty = enabled;
+    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+        self.purger.duplicate_mode = mode;
         self
     }
 
-    /// Builds and returns the `Purger`.
+    /// Builds and returns the [`Purger`].
     pub fn build(self) -> Purger {
         self.purger
-    }
-}
-
-impl Default for PurgerBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

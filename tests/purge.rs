@@ -7,10 +7,7 @@ fn mz() {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let mut purger = PurgerBuilder::new().build();
-    purger.purge(&source_path, &translation_path, EngineType::New);
-
-    purger.set_purge_empty(true);
+    let purger = PurgerBuilder::new().build();
     purger.purge(source_path, translation_path, EngineType::New);
 }
 
@@ -20,10 +17,7 @@ fn mv() {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let mut purger = PurgerBuilder::new().build();
-    purger.purge(&source_path, &translation_path, EngineType::New);
-
-    purger.set_purge_empty(true);
+    let purger = PurgerBuilder::new().build();
     purger.purge(source_path, translation_path, EngineType::New);
 }
 
@@ -33,10 +27,7 @@ fn ace() {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut purger = PurgerBuilder::new().build();
-    purger.purge(&source_path, &translation_path, EngineType::VXAce);
-
-    purger.set_purge_empty(true);
+    let purger = PurgerBuilder::new().build();
     purger.purge(source_path, translation_path, EngineType::VXAce);
 }
 
@@ -46,10 +37,7 @@ fn vx() {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut purger = PurgerBuilder::new().build();
-    purger.purge(&source_path, &translation_path, EngineType::VX);
-
-    purger.set_purge_empty(true);
+    let purger = PurgerBuilder::new().build();
     purger.purge(source_path, translation_path, EngineType::VX);
 }
 
@@ -59,9 +47,6 @@ fn xp() {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut purger = PurgerBuilder::new().build();
-    purger.purge(&source_path, &translation_path, EngineType::XP);
-
-    purger.set_purge_empty(true);
+    let purger = PurgerBuilder::new().build();
     purger.purge(source_path, translation_path, EngineType::XP);
 }

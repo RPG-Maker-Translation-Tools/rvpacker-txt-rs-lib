@@ -1,10 +1,10 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "6.0.0"
+version = "7.0.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.80.0"
-description = "Library providing functions for rvpacker-txt-rs."
+description = "Library that allows you to generate text files from RPG Maker files."
 documentation = "https://docs.rs/rvpacker-txt-rs-lib"
 readme = "README.md"
 repository = "https://github.com/savannstm/rvpacker-txt-rs-lib"
@@ -17,16 +17,18 @@ serde = ["dep:serde"]
 [dependencies]
 encoding_rs = "0.8.35"
 flate2 = "1.1.2"
-indexmap = "2.9.0"
-marshal-rs = { version = "0.4.0" }
+indexmap = "2.10.0"
+marshal-rs = "1.0.2"
 regex = "1.11.1"
-sonic-rs = { version = "0.5.1", features = ["sort_keys"] }
 log = { version = "0.4.27", optional = true }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
 serde = { version = "1.0.219", optional = true }
 phf = { version = "0.12.1", features = ["macros"] }
 smallvec = "1.15.1"
-gxhash = { version = "3.5.0" }
+gxhash = "3.5.0"
 const_format = "0.2.34"
 bitflags = "2.9.1"
 strum_macros = "0.27.1"
-serde_json = "1.0.140"
+thiserror = "2.0.12"
+num_enum = "0.7.4"
+getset = "0.1.6"
