@@ -4,7 +4,7 @@ use crate::{
     constants::*, core::*, functions::parse_ignore, get_engine_extension,
     types::*,
 };
-use std::path::Path;
+use std::{fs::write, path::Path};
 
 struct MapPurger<'a> {
     base: MapBase<'a>,
@@ -434,103 +434,83 @@ impl Purger {
         translation_path: P,
         engine_type: EngineType,
     ) {
-        let mut ignore_map: IgnoreMap = IgnoreMap::default();
+        if self.file_flags.is_empty() {
+            return;
+        }
+
+        let mut ignore_map = IgnoreMap::default();
 
         if self.create_ignore {
-            ignore_map.extend(parse_ignore(
+            ignore_map = parse_ignore(
                 translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
                 self.duplicate_mode,
                 false,
-            ));
+            );
         }
 
-        if self.file_flags.contains(FileFlags::Map) {
-            let purger = MapPurger::new(
-                source_path.as_ref(),
-                translation_path.as_ref(),
-                engine_type,
-            )
-            .ignore_map(&mut ignore_map)
-            .game_type(self.game_type)
-            .romanize(self.romanize)
-            .logging(self.logging)
-            .trim(self.trim)
-            .duplicate_mode(self.duplicate_mode)
-            .create_ignore(self.create_ignore);
+        let source_path = source_path.as_ref();
+        let translation_path = translation_path.as_ref();
 
-            purger.purge();
+        if self.file_flags.contains(FileFlags::Map) {
+            MapPurger::new(source_path, translation_path, engine_type)
+                .ignore_map(&mut ignore_map)
+                .game_type(self.game_type)
+                .romanize(self.romanize)
+                .logging(self.logging)
+                .trim(self.trim)
+                .duplicate_mode(self.duplicate_mode)
+                .create_ignore(self.create_ignore)
+                .purge();
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            let purger = OtherPurger::new(
-                source_path.as_ref(),
-                translation_path.as_ref(),
-                engine_type,
-            )
-            .ignore_map(&mut ignore_map)
-            .game_type(self.game_type)
-            .romanize(self.romanize)
-            .logging(self.logging)
-            .trim(self.trim)
-            .duplicate_mode(self.duplicate_mode)
-            .create_ignore(self.create_ignore);
-
-            purger.purge();
+            OtherPurger::new(source_path, translation_path, engine_type)
+                .ignore_map(&mut ignore_map)
+                .game_type(self.game_type)
+                .romanize(self.romanize)
+                .logging(self.logging)
+                .trim(self.trim)
+                .duplicate_mode(self.duplicate_mode)
+                .create_ignore(self.create_ignore)
+                .purge();
         }
 
         if self.file_flags.contains(FileFlags::System) {
             let system_file_path = source_path
-                .as_ref()
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            let purger = SystemPurger::new(
-                system_file_path.as_ref(),
-                translation_path.as_ref(),
-                engine_type,
-            )
-            .ignore_map(&mut ignore_map)
-            .romanize(self.romanize)
-            .logging(self.logging)
-            .trim(self.trim)
-            .create_ignore(self.create_ignore);
-
-            purger.purge();
+            SystemPurger::new(&system_file_path, translation_path, engine_type)
+                .ignore_map(&mut ignore_map)
+                .romanize(self.romanize)
+                .logging(self.logging)
+                .trim(self.trim)
+                .create_ignore(self.create_ignore)
+                .purge();
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugins_file_path = source_path
-                    .as_ref()
-                    .parent()
-                    .unwrap_log()
-                    .join("js/plugins.js");
+                let plugins_file_path =
+                    source_path.parent().unwrap_log().join("js/plugins.js");
 
-                let purger = PluginPurger::new(
-                    plugins_file_path.as_path(),
-                    translation_path.as_ref(),
-                )
-                .ignore_map(&mut ignore_map)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .create_ignore(self.create_ignore);
-
-                purger.purge();
+                PluginPurger::new(&plugins_file_path, translation_path)
+                    .ignore_map(&mut ignore_map)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .create_ignore(self.create_ignore)
+                    .purge();
             } else {
-                let scripts_file_path = source_path.as_ref().join(format!(
+                let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
                     get_engine_extension(engine_type)
                 ));
 
-                let purger = ScriptPurger::new(
-                    scripts_file_path.as_path(),
-                    translation_path.as_ref(),
-                )
-                .ignore_map(&mut ignore_map)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .create_ignore(self.create_ignore);
-
-                purger.purge();
+                ScriptPurger::new(&scripts_file_path, translation_path)
+                    .ignore_map(&mut ignore_map)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .create_ignore(self.create_ignore)
+                    .purge();
             }
         }
 
@@ -557,11 +537,8 @@ impl Purger {
                 },
             );
 
-            std::fs::write(
-                translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
-                contents,
-            )
-            .unwrap_log();
+            write(translation_path.join(RVPACKER_IGNORE_FILE), contents)
+                .unwrap_log();
         }
     }
 }

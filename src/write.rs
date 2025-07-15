@@ -376,12 +376,18 @@ impl Writer {
         output_path: P,
         engine_type: EngineType,
     ) {
+        if self.file_flags.is_empty() {
+            return;
+        }
+
         let source_path = source_path.as_ref();
         let translation_path = translation_path.as_ref();
         let output_path = output_path.as_ref();
 
+        create_dir_all(output_path).unwrap_log();
+
         if self.file_flags.contains(FileFlags::Map) {
-            let writer = MapWriter::new(
+            MapWriter::new(
                 source_path,
                 translation_path,
                 output_path,
@@ -391,13 +397,12 @@ impl Writer {
             .romanize(self.romanize)
             .logging(self.logging)
             .duplicate_mode(self.duplicate_mode)
-            .trim(self.trim);
-
-            writer.write();
+            .trim(self.trim)
+            .write();
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            let writer = OtherWriter::new(
+            OtherWriter::new(
                 source_path,
                 translation_path,
                 output_path,
@@ -407,16 +412,15 @@ impl Writer {
             .romanize(self.romanize)
             .logging(self.logging)
             .duplicate_mode(self.duplicate_mode)
-            .trim(self.trim);
-
-            writer.write();
+            .trim(self.trim)
+            .write();
         }
 
         if self.file_flags.contains(FileFlags::System) {
             let system_file_path = source_path
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            let writer = SystemWriter::new(
+            SystemWriter::new(
                 system_file_path.as_path(),
                 translation_path,
                 output_path,
@@ -424,9 +428,8 @@ impl Writer {
             )
             .romanize(self.romanize)
             .logging(self.logging)
-            .trim(self.trim);
-
-            writer.write();
+            .trim(self.trim)
+            .write();
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
@@ -438,30 +441,28 @@ impl Writer {
 
                 create_dir_all(&plugins_output_path).unwrap_log();
 
-                let writer = PluginWriter::new(
-                    plugins_file_path.as_path(),
+                PluginWriter::new(
+                    &plugins_file_path,
                     translation_path,
                     &plugins_output_path,
                 )
                 .romanize(self.romanize)
-                .logging(self.logging);
-
-                writer.write();
+                .logging(self.logging)
+                .write();
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
                     get_engine_extension(engine_type)
                 ));
 
-                let writer = ScriptWriter::new(
-                    scripts_file_path.as_path(),
+                ScriptWriter::new(
+                    &scripts_file_path,
                     translation_path,
                     output_path,
                 )
                 .romanize(self.romanize)
-                .logging(self.logging);
-
-                writer.write();
+                .logging(self.logging)
+                .write();
             }
         }
     }

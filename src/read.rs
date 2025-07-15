@@ -2,7 +2,7 @@ use crate::{
     constants::RVPACKER_IGNORE_FILE, core::*, functions::parse_ignore,
     get_engine_extension, types::*,
 };
-use std::path::Path;
+use std::{fs::create_dir_all, path::Path};
 
 struct MapReader<'a> {
     base: MapBase<'a>,
@@ -474,28 +474,27 @@ impl Reader {
         translation_path: P,
         engine_type: EngineType,
     ) {
-        if self.file_flags == FileFlags::None {
+        if self.file_flags.is_empty() {
             return;
         }
 
-        let mut ignore_map: IgnoreMap = IgnoreMap::default();
+        let mut ignore_map = IgnoreMap::default();
 
         if self.ignore {
-            ignore_map.extend(parse_ignore(
+            ignore_map = parse_ignore(
                 translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
                 self.duplicate_mode,
                 true,
-            ));
+            );
         }
 
-        if self.file_flags.contains(FileFlags::Map) {
-            let reader = MapReader::new(
-                source_path.as_ref(),
-                translation_path.as_ref(),
-                engine_type,
-            );
+        let source_path = source_path.as_ref();
+        let translation_path = translation_path.as_ref();
 
-            reader
+        create_dir_all(translation_path).unwrap_log();
+
+        if self.file_flags.contains(FileFlags::Map) {
+            MapReader::new(source_path, translation_path, engine_type)
                 .ignore_map(&mut ignore_map)
                 .game_type(self.game_type)
                 .read_mode(self.read_mode)
@@ -508,13 +507,7 @@ impl Reader {
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            let reader = OtherReader::new(
-                source_path.as_ref(),
-                translation_path.as_ref(),
-                engine_type,
-            );
-
-            reader
+            OtherReader::new(source_path, translation_path, engine_type)
                 .ignore_map(&mut ignore_map)
                 .game_type(self.game_type)
                 .read_mode(self.read_mode)
@@ -528,16 +521,9 @@ impl Reader {
 
         if self.file_flags.contains(FileFlags::System) {
             let system_file_path = source_path
-                .as_ref()
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            let reader = SystemReader::new(
-                system_file_path.as_path(),
-                translation_path.as_ref(),
-                engine_type,
-            );
-
-            reader
+            SystemReader::new(&system_file_path, translation_path, engine_type)
                 .ignore_map(&mut ignore_map)
                 .read_mode(self.read_mode)
                 .romanize(self.romanize)
@@ -549,18 +535,10 @@ impl Reader {
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugins_file_path = source_path
-                    .as_ref()
-                    .parent()
-                    .unwrap_log()
-                    .join("js/plugins.js");
+                let plugins_file_path =
+                    source_path.parent().unwrap_log().join("js/plugins.js");
 
-                let reader = PluginReader::new(
-                    plugins_file_path.as_path(),
-                    translation_path.as_ref(),
-                );
-
-                reader
+                PluginReader::new(&plugins_file_path, translation_path)
                     .ignore_map(&mut ignore_map)
                     .read_mode(self.read_mode)
                     .romanize(self.romanize)
@@ -568,17 +546,12 @@ impl Reader {
                     .ignore(self.ignore)
                     .read();
             } else {
-                let scripts_file_path = source_path.as_ref().join(format!(
+                let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
                     get_engine_extension(engine_type)
                 ));
 
-                let reader = ScriptReader::new(
-                    scripts_file_path.as_path(),
-                    translation_path.as_ref(),
-                );
-
-                reader
+                ScriptReader::new(&scripts_file_path, translation_path)
                     .ignore_map(&mut ignore_map)
                     .read_mode(self.read_mode)
                     .romanize(self.romanize)
