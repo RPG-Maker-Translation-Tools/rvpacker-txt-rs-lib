@@ -3,7 +3,7 @@ use getset::{Getters, MutGetters, Setters};
 use gxhash::{GxBuildHasher, HashSet};
 use indexmap::{IndexMap, IndexSet};
 use num_enum::FromPrimitive;
-use std::{mem::take, ops::Deref};
+use std::{hash::BuildHasher, mem::take, ops::Deref};
 use strum_macros::{Display, EnumIs};
 
 #[cfg(feature = "serde")]
@@ -34,6 +34,36 @@ impl Comments for IndexMapGx<String, TranslationEntry> {
 
     fn comments_mut(&mut self) -> &mut Vec<String> {
         &mut self.first_mut().unwrap_log().1.comments
+    }
+}
+
+pub trait IndexSetExt {
+    fn new() -> Self;
+    fn with_capacity(capacity: usize) -> Self;
+}
+
+impl<K, S: BuildHasher + Default> IndexSetExt for IndexSet<K, S> {
+    fn new() -> Self {
+        Self::with_hasher(S::default())
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_hasher(capacity, S::default())
+    }
+}
+
+pub trait IndexMapExt {
+    fn new() -> Self;
+    fn with_capacity(capacity: usize) -> Self;
+}
+
+impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
+    fn new() -> Self {
+        Self::with_hasher(S::default())
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_hasher(capacity, S::default())
     }
 }
 
