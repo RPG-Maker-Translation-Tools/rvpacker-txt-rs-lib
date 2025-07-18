@@ -9,5 +9,5 @@ fn main() {
         .logging(true)
         .build();
 
-    purger.purge("data", "translation", EngineType::New);
+    let result = purger.purge("data", "translation", EngineType::New);
 }

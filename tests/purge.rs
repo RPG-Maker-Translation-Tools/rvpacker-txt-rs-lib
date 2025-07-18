@@ -1,52 +1,87 @@
-use rvpacker_txt_rs_lib::{types::*, PurgerBuilder};
+use rvpacker_txt_rs_lib::{PurgerBuilder, types::*};
 use std::{env::var, path::PathBuf};
 
 #[test]
-fn mz() {
-    let game_path = PathBuf::from(var("MZ_GAME_PATH").unwrap());
+fn mz() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("MZ_GAME_PATH")?);
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
     let purger = PurgerBuilder::new().build();
-    purger.purge(source_path, translation_path, EngineType::New);
+    let results =
+        purger.purge(source_path, translation_path, EngineType::New)?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn mv() {
-    let game_path = PathBuf::from(var("MV_GAME_PATH").unwrap());
+fn mv() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("MV_GAME_PATH")?);
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
     let purger = PurgerBuilder::new().build();
-    purger.purge(source_path, translation_path, EngineType::New);
+    let results =
+        purger.purge(source_path, translation_path, EngineType::New)?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn ace() {
-    let game_path = PathBuf::from(var("VXACE_GAME_PATH").unwrap());
+fn ace() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("VXACE_GAME_PATH")?);
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
     let purger = PurgerBuilder::new().build();
-    purger.purge(source_path, translation_path, EngineType::VXAce);
+    let results =
+        purger.purge(source_path, translation_path, EngineType::VXAce)?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn vx() {
-    let game_path = PathBuf::from(var("VX_GAME_PATH").unwrap());
+fn vx() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("VX_GAME_PATH")?);
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
     let purger = PurgerBuilder::new().build();
-    purger.purge(source_path, translation_path, EngineType::VX);
+    let results =
+        purger.purge(source_path, translation_path, EngineType::VX)?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn xp() {
-    let game_path = PathBuf::from(var("XP_GAME_PATH").unwrap());
+fn xp() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("XP_GAME_PATH")?);
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
     let purger = PurgerBuilder::new().build();
-    purger.purge(source_path, translation_path, EngineType::XP);
+    let results =
+        purger.purge(source_path, translation_path, EngineType::XP)?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }

@@ -9,5 +9,5 @@ fn main() {
         .logging(true)
         .build();
 
-    reader.read("data", "translation", EngineType::New);
+    let result = reader.read("data", "translation", EngineType::New);
 }

@@ -2,12 +2,12 @@ use const_format::formatcp;
 use phf::phf_set;
 
 pub(crate) mod localization {
-    pub const PARSED_FILE_MSG: &str = "Parsed file";
-    pub const PURGED_FILE_MSG: &str = "Purged file";
-    pub const WROTE_FILE_MSG: &str = "Wrote file";
+    pub const PARSED_FILE_MSG: &str = "Parsed file.";
+    pub const PURGED_FILE_MSG: &str = "Purged file.";
+    pub const WROTE_FILE_MSG: &str = "Wrote file.";
 
     pub const FILE_ALREADY_EXISTS_MSG: &str = "file already exists. If you want to forcefully re-read files or append \
-                                               new text, use --mode force or --mode append arguments.";
+                                                new text, set `read_mode` to `Force` or `Append`.";
 
     pub const COULD_NOT_SPLIT_LINE_MSG: &str =
         "Couldn't split line to source and translation parts.";
@@ -15,6 +15,8 @@ pub(crate) mod localization {
     pub const IN_FILE_MSG: &str = "In file";
 }
 
+/// Quotes aren't included in this set because user might want to change them.
+/// For example, in Europe, guillemets are used instead of default quotes.
 pub(crate) const SYMBOLS: phf::Set<char> = phf_set! {
     ',', '.', '(', ')', '+', '-', ':', ';', '[', ']', '^', '~', '%', '&', '!', '№', '$', '@', '`', '*', '/', '→', '×', '？', '?', 'ｘ', '％', '▼', '|', '♥', '♪', '！', '：', '〜', '『', '』', '「', '」', '〽', '。', '…', '‥', '＝', '゠', '、', '，', '【', '】', '［', '］', '｛', '｝', '（', '）', '〔', '〕', '｟', '｠', '〘', '〙', '〈', '〉', '《', '》', '・', '\\', '#', '<', '>', '=', '_', 'ー', '※', '▶', 'Ⅰ', 'ⅰ', 'Ⅱ', 'ⅱ', 'Ⅲ', 'ⅲ', 'Ⅳ', 'ⅳ', 'Ⅴ', 'ⅴ', 'Ⅵ', 'ⅵ', 'Ⅶ', 'ⅶ', 'Ⅷ', 'ⅷ', 'Ⅸ', 'ⅸ', 'Ⅹ', 'ⅹ', 'Ⅺ', 'ⅺ', 'Ⅻ', 'ⅻ', 'Ⅼ', 'ⅼ', 'Ⅽ', 'ⅽ', 'Ⅾ', 'ⅾ', 'Ⅿ', 'ⅿ', ' ', '\t', '\r', '\n'
 };

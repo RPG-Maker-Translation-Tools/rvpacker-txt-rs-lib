@@ -3,20 +3,20 @@ use crate::{
     functions::*,
     types::*,
 };
-#[cfg(feature = "log")]
-use crate::{eprintln, println};
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use gxhash::GxBuildHasher;
-use marshal_rs::{Value, ValueType, dump, load_binary, load_utf8};
+use indexmap::map::Entry;
+use log::{info, warn};
+use marshal_rs::{Get, Value, ValueType, dump, load_binary, load_utf8};
 use regex::Regex;
-use serde_json::{from_str, to_string, to_vec};
+use serde_json::{from_str, to_vec};
 use smallvec::SmallVec;
 use std::{
+    borrow::Cow,
     cell::LazyCell,
     fs::{DirEntry, read, read_dir, read_to_string, write},
     io::{Read, Write},
-    mem::take,
-    ops::Range,
+    mem::{replace, take},
+    ops::{ControlFlow, Range},
     path::{Path, PathBuf},
 };
 
@@ -72,6 +72,27 @@ thread_local! {
     static IS_ONLY_SYMBOLS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
         Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s\d"']+$"#).unwrap_unchecked()
     });
+    static LINE_BREAKS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
+        Regex::new(r"\r|\n|\r\n").unwrap_unchecked()
+    });
+    static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
+        Regex::new(r"\#").unwrap_unchecked()
+    });
+}
+
+trait CustomReplace {
+    fn replace_line_breaks(&self) -> Cow<'_, str>;
+    fn replace_new_line(&self) -> Cow<'_, str>;
+}
+
+impl CustomReplace for str {
+    fn replace_line_breaks(&self) -> Cow<'_, str> {
+        LINE_BREAKS_RE.with(|re| re.replace_all(self, NEW_LINE))
+    }
+
+    fn replace_new_line(&self) -> Cow<'_, str> {
+        LINE_BREAKS_RE.with(|re| re.replace_all(self, "\n"))
+    }
 }
 
 pub struct Base<'a> {
@@ -85,7 +106,6 @@ pub struct Base<'a> {
     pub trim: bool,
 
     pub read_mode: ReadMode,
-    // TODO: Seems like I fucked up and duplicate modes do the opposite what they should do
     pub duplicate_mode: DuplicateMode,
     pub ignore: bool,
 
@@ -99,15 +119,19 @@ pub struct Base<'a> {
     translation_duplicate_map: TranslationDuplicateMap,
     lines_lengths: Vec<usize>,
 
+    filename: &'a str,
     text_file_path: PathBuf,
+    source_path: &'a Path,
     translation_path: &'a Path,
     output_path: &'a Path,
 
     labels: Labels,
+    results: ResultVec,
 }
 
 impl<'a> Base<'a> {
     pub fn new(
+        source_path: &'a Path,
         translation_path: &'a Path,
         output_path: &'a Path,
         engine_type: EngineType,
@@ -132,27 +156,30 @@ impl<'a> Base<'a> {
             ignore_map: Box::leak(Box::default()),
             ignore_entry: Box::leak(Box::default()),
 
-            lines: Lines::with_capacity_and_hasher(
-                1024,
-                GxBuildHasher::default(),
-            ),
-            translation_map: Box::leak(Box::new(
-                TranslationMap::with_capacity_and_hasher(
-                    1024,
-                    GxBuildHasher::default(),
-                ),
-            )),
+            lines: Lines::default(),
+            translation_map: Box::leak(Box::default()),
             translation_maps: IndexMapGx::default(),
-            translation_duplicate_map: TranslationDuplicateMap::with_capacity(
-                999,
-            ),
+            translation_duplicate_map: TranslationDuplicateMap::default(),
             lines_lengths: Vec::new(),
 
+            filename: "",
             text_file_path: PathBuf::new(),
+            source_path,
             translation_path,
             output_path,
 
             labels: Labels::new(engine_type),
+            results: ResultVec::default(),
+        }
+    }
+
+    fn reserve(&mut self) {
+        self.results.reserve(512);
+        self.lines.reserve(1024);
+
+        if !self.mode.is_read() || self.read_mode.is_append() {
+            self.translation_maps.reserve(1024);
+            self.translation_map.reserve(512);
         }
     }
 
@@ -219,8 +246,10 @@ impl<'a> Base<'a> {
                     return None;
                 }
 
+                // At this point, shop parameter should always contain '='.
+                // Panic is unlikely.
                 let (_, mut actual_string) =
-                    parameter.split_once('=').unwrap_log();
+                    unsafe { parameter.split_once('=').unwrap_unchecked() };
                 actual_string = actual_string.trim();
 
                 if actual_string.len() < 2 {
@@ -240,7 +269,7 @@ impl<'a> Base<'a> {
         }
 
         if self.mode.is_write() {
-            self.get_key(parameter).cloned().map(|translation| {
+            self.get_key(parameter).map(|translation| {
                 let mut translation = translation.to_string();
 
                 for (string, append) in extra_strings {
@@ -262,7 +291,7 @@ impl<'a> Base<'a> {
         }
     }
 
-    fn write_output(&mut self, json: Value, output_file: impl AsRef<Path>) {
+    fn write_output(&mut self, json: Value) {
         if self.mode.is_read() && self.duplicate_mode.is_remove() {
             if self.read_mode.is_append() {
                 self.sync_map();
@@ -272,11 +301,12 @@ impl<'a> Base<'a> {
                 for (i, map) in
                     take(&mut self.translation_maps).into_values().enumerate()
                 {
+                    self.translation_duplicate_map.reserve(map.len());
                     self.translation_duplicate_map.extend(map);
 
                     for _ in 0..self.lines_lengths[i] {
                         self.translation_duplicate_map.push((
-                            lines_iter.next().unwrap_log(),
+                            unsafe { lines_iter.next().unwrap_unchecked() },
                             TranslationEntry::default(),
                         ));
                     }
@@ -285,21 +315,23 @@ impl<'a> Base<'a> {
         }
 
         let output_file_path = if self.mode.is_write() {
-            self.output_path.join(&output_file)
+            self.output_path.join(self.filename)
         } else {
             take(&mut self.text_file_path)
         };
 
         let output_content = if self.mode.is_write() {
             if self.file_type.is_plugins() {
-                format!(
-                    "var $plugins =\n{}",
-                    to_string(&serde_json::Value::from(json)).unwrap_log()
-                )
-                .into_bytes()
+                ["var $plugins =\n".as_bytes(), unsafe {
+                    &to_vec(&serde_json::Value::from(json)).unwrap_unchecked()
+                }]
+                .concat()
             } else {
                 if self.engine_type.is_new() {
-                    to_vec(&serde_json::Value::from(json)).unwrap_log()
+                    unsafe {
+                        to_vec(&serde_json::Value::from(json))
+                            .unwrap_unchecked()
+                    }
                 } else {
                     dump(
                         json,
@@ -351,11 +383,38 @@ impl<'a> Base<'a> {
             output_content
         };
 
-        write(&output_file_path, output_content).unwrap_log();
+        let write_result = write(&output_file_path, output_content);
+
+        match write_result {
+            Ok(_) => {
+                self.push_result(Ok(match self.mode {
+                    ProcessingMode::Read => Outcome::ReadFile(
+                        if self.file_type.is_map() || self.file_type.is_other()
+                        {
+                            self.source_path.join(self.filename)
+                        } else {
+                            self.source_path.to_path_buf()
+                        },
+                    ),
+                    ProcessingMode::Write => {
+                        Outcome::WrittenFile(output_file_path.clone())
+                    }
+                    ProcessingMode::Purge => {
+                        Outcome::PurgedFile(output_file_path.clone())
+                    }
+                }));
+            }
+            Err(err) => {
+                self.push_result(Err(Error::WriteFileFailed {
+                    file: output_file_path.clone(),
+                    err,
+                }));
+            }
+        }
 
         if self.logging {
-            println!(
-                "{msg} {file}",
+            info!(
+                "{output_file}: {msg}",
                 msg = if self.mode.is_read() {
                     PARSED_FILE_MSG
                 } else if self.mode.is_write() {
@@ -363,7 +422,17 @@ impl<'a> Base<'a> {
                 } else {
                     PURGED_FILE_MSG
                 },
-                file = output_file.as_ref().display()
+                output_file = if self.mode.is_read() {
+                    self.filename
+                } else {
+                    unsafe {
+                        output_file_path
+                            .file_name()
+                            .unwrap_unchecked()
+                            .to_str()
+                            .unwrap_unchecked()
+                    }
+                }
             );
         }
 
@@ -456,8 +525,10 @@ impl<'a> Base<'a> {
                 let remaining =
                     translation_lines[dialogue_line_count - 1..].join("\n");
 
-                list[*dialogue_line_indices.last().unwrap_log()]
-                    [self.labels.parameters][0] = Value::string(remaining);
+                // We checked if `dialogue_lines` not empty before calling this.
+                list[unsafe {
+                    *dialogue_line_indices.last().unwrap_unchecked()
+                }][self.labels.parameters][0] = Value::string(remaining);
             }
         } else {
             self.process_param(&mut Value::default(), Code::Dialogue, &joined);
@@ -477,8 +548,10 @@ impl<'a> Base<'a> {
         for (item_idx, item) in
             mutable!(list, Vec<Value>).iter_mut().enumerate()
         {
-            let code: Code =
-                Code::from(item[self.labels.code].as_int().unwrap_log() as u16);
+            // Each item must contain code, panic is unlikely.
+            let code: Code = Code::from(unsafe {
+                item[self.labels.code].as_int().unwrap_unchecked()
+            } as u16);
 
             let code: Code =
                 if code.is_dialogue_start() && !self.engine_type.is_xp() {
@@ -488,8 +561,10 @@ impl<'a> Base<'a> {
                 };
 
             if self.mode.is_write() && !self.engine_type.is_new() {
-                let parameters =
-                    item[self.labels.parameters].as_array().unwrap_log();
+                // Each item must contain parameters, panic is unlikely.
+                let parameters = unsafe {
+                    item[self.labels.parameters].as_array().unwrap_unchecked()
+                };
 
                 if !parameters.is_empty() {
                     write_string_literally = !match code {
@@ -524,8 +599,12 @@ impl<'a> Base<'a> {
                 continue;
             }
 
-            let parameters =
-                item[self.labels.parameters].as_array_mut().unwrap_log();
+            // Each item must contain parameters, panic is unlikely.
+            let parameters = unsafe {
+                item[self.labels.parameters]
+                    .as_array_mut()
+                    .unwrap_unchecked()
+            };
 
             if parameters.is_empty() {
                 continue;
@@ -540,7 +619,8 @@ impl<'a> Base<'a> {
             let value = &mut parameters[value_index];
 
             if code.is_choice_array() {
-                for value in value.as_array_mut().unwrap_log() {
+                for value in unsafe { value.as_array_mut().unwrap_unchecked() }
+                {
                     let Some(string) = mutable!(self, Self)
                         .extract_string(mutable!(value, Value), true)
                     else {
@@ -550,9 +630,11 @@ impl<'a> Base<'a> {
                     self.process_param(value, code, string);
                 }
             } else {
-                let parameter_string = mutable!(self, Self)
+                let Some(parameter_string) = mutable!(self, Self)
                     .extract_string(mutable!(value, Value), false)
-                    .unwrap_log();
+                else {
+                    continue;
+                };
 
                 if !code.is_credit() && parameter_string.is_empty() {
                     continue;
@@ -579,7 +661,8 @@ impl<'a> Base<'a> {
                 &format!("{file}: {entry_name}", file = self.file_type);
 
             if self.ignore && self.duplicate_mode.is_remove() {
-                entry_name = &entry_name[..entry_name.find(':').unwrap_log()];
+                entry_name = &entry_name
+                    [..unsafe { entry_name.find(':').unwrap_unchecked() }];
             }
 
             self.ignore_entry = mutable!(
@@ -593,29 +676,64 @@ impl<'a> Base<'a> {
         }
     }
 
-    fn parse_rpgm_file(&self, path: impl AsRef<Path>) -> Value {
+    fn parse_rpgm_file(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<Value, Error> {
         if self.engine_type.is_new() {
-            Value::from(
-                from_str::<serde_json::Value>(
-                    &read_to_string_without_bom(path).unwrap_log(),
-                )
-                .unwrap_log(),
-            )
+            let content = read_to_string_without_bom(&path).map_err(|err| {
+                Error::ReadFileFailed {
+                    file: path.as_ref().to_path_buf(),
+                    err,
+                }
+            })?;
+
+            let parsed =
+                from_str::<serde_json::Value>(&content).map_err(|err| {
+                    Error::JSONParseFailed {
+                        file: path.as_ref().to_path_buf(),
+                        err,
+                    }
+                })?;
+
+            Ok(Value::from(parsed))
         } else {
-            let content = read(path).unwrap_log();
-            if self.file_type.is_scripts() {
-                load_binary(&content, INSTANCE_VAR_PREFIX).unwrap_log()
+            let content = read(&path).map_err(|err| Error::ReadFileFailed {
+                file: path.as_ref().to_path_buf(),
+                err,
+            })?;
+
+            let loaded = if self.file_type.is_scripts() {
+                load_binary(&content, INSTANCE_VAR_PREFIX)
             } else {
-                load_utf8(&content, INSTANCE_VAR_PREFIX).unwrap_log()
+                load_utf8(&content, INSTANCE_VAR_PREFIX)
             }
+            .map_err(|err| Error::LoadFailed {
+                file: path.as_ref().to_path_buf(),
+                err,
+            })?;
+
+            Ok(loaded)
         }
     }
 
-    fn get_translation_maps(&mut self) {
+    fn get_translation_maps(&mut self) -> ControlFlow<()> {
         if !self.mode.is_read() || self.read_mode.is_append() {
             self.translation_maps.clear();
 
-            let translation = read_to_string(&self.text_file_path).unwrap_log();
+            let translation = read_to_string(&self.text_file_path);
+            let translation = match translation {
+                Ok(translation) => translation,
+                Err(err) => {
+                    self.push_result(Err(Error::ReadFileFailed {
+                        file: self.text_file_path.clone(),
+                        err,
+                    }));
+
+                    return ControlFlow::Break(());
+                }
+            };
+
             let mut translation_lines =
                 translation.lines().enumerate().peekable();
 
@@ -624,13 +742,16 @@ impl<'a> Base<'a> {
             } else if self.file_type.is_other() {
                 if self.game_type.is_termina() && self.file_type.is_items() {
                     for _ in 0..4 {
-                        let (_, item_category_line) =
-                            translation_lines.next().unwrap_log();
+                        let (_, item_category_line) = unsafe {
+                            translation_lines.next().unwrap_unchecked()
+                        };
 
                         if item_category_line.starts_with("<Menu Category") {
-                            let (source, translation) = item_category_line
-                                .split_once(SEPARATOR)
-                                .unwrap_log();
+                            let (source, translation) = unsafe {
+                                item_category_line
+                                    .split_once(SEPARATOR)
+                                    .unwrap_unchecked()
+                            };
 
                             self.translation_map
                                 .insert(source.into(), translation.into());
@@ -646,6 +767,7 @@ impl<'a> Base<'a> {
                         take(self.translation_map),
                     );
                 }
+
                 EVENT_ID_COMMENT
             } else if self.file_type.is_system() {
                 SYSTEM_ENTRY_COMMENT
@@ -655,15 +777,14 @@ impl<'a> Base<'a> {
                 SCRIPT_ID_COMMENT
             };
 
-            let mut comments = Vec::with_capacity(4);
-
             loop {
                 let Some((_, next)) = translation_lines.next() else {
-                    return;
+                    return ControlFlow::Continue(());
                 };
 
                 // Push the first line in iterator to comments
                 // If it's not a comment, then something is wrong.
+                let mut comments = Vec::with_capacity(4);
                 comments.push(next.into());
 
                 while let Some((_, line)) = translation_lines.peek() {
@@ -682,44 +803,57 @@ impl<'a> Base<'a> {
                     let split: Vec<&str> = line.split(SEPARATOR).collect();
 
                     if split.len() < 2 {
-                        println!(
-                            "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}",
+                        info!(
+                            "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
+                            i = i + 1,
                             file = self.file_type.to_string().to_lowercase()
                         );
                         comments.clear();
                         continue;
                     }
 
-                    let mut source: String =
-                        unsafe { split.first().unwrap_unchecked() }.to_string();
-                    let mut translation: String = split
+                    let mut source: &str =
+                        unsafe { split.first().unwrap_unchecked() };
+                    let mut translation = split
                         .into_iter()
                         .skip(1)
                         .rfind(|x| !x.is_empty())
-                        .unwrap_or_default()
-                        .into();
+                        .unwrap_or_default();
 
                     if self.trim {
-                        source = source.trim_replace();
-                        translation = translation.trim_replace();
+                        source = source.trim();
+                        translation = translation.trim();
                     }
+
+                    let replaced_source: Cow<'_, str>;
+                    let replaced_translation: Cow<'_, str>;
 
                     if self.mode.is_write() {
                         if translation.is_empty() {
                             continue;
                         }
 
-                        source = source.replace(NEW_LINE, "\n");
-                        translation = translation.replace(NEW_LINE, "\n");
+                        replaced_source = source.replace_new_line();
+                        source = &replaced_source;
+
+                        replaced_translation = translation.replace_new_line();
+                        translation = &replaced_translation;
                     }
 
                     self.translation_map.insert(
-                        source,
-                        TranslationEntry::new(translation, take(&mut comments)),
+                        source.into(),
+                        TranslationEntry::new(
+                            translation.into(),
+                            take(&mut comments),
+                        ),
                     );
                 }
 
                 if self.translation_map.is_empty() {
+                    if self.mode.is_write() {
+                        continue;
+                    }
+
                     self.translation_map.insert(
                         String::new(),
                         TranslationEntry::new(
@@ -736,22 +870,50 @@ impl<'a> Base<'a> {
                 }
 
                 self.translation_maps.insert(
-                    comments[0]
-                        .rsplit_once(SEPARATOR)
-                        .unwrap_log()
-                        .1
-                        .to_string(),
-                    take(self.translation_map),
+                    unsafe {
+                        comments[0].rsplit_once(SEPARATOR).unwrap_unchecked()
+                    }
+                    .1
+                    .into(),
+                    replace(
+                        self.translation_map,
+                        TranslationMap::with_capacity(512),
+                    ),
                 );
             }
         }
+
+        ControlFlow::Continue(())
     }
 
-    fn get_translation_map(&mut self, entry_name: &str) {
-        self.translation_map = mutable!(self, Self)
+    /// Sets `self.translation_map` to the entry from `self.translation_maps`.
+    ///
+    /// # Returns
+    /// If `self.mode` is write, and entry corresponding to the `entry_name`
+    /// does not exist, returns `ControlFlow::Break`.
+    /// Else, returns `ControlFlow::Continue`.
+    fn get_translation_map(&mut self, entry_name: &str) -> ControlFlow<()> {
+        let entry = mutable!(self, Self)
             .translation_maps
-            .entry(entry_name.into())
-            .or_default();
+            .entry(entry_name.into());
+
+        self.translation_map = match entry {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                if self.mode.is_write() {
+                    self.results.push(Ok(Outcome::NoTranslationForEntry {
+                        file: self.filename.into(),
+                        entry: entry_name.into(),
+                    }));
+
+                    return ControlFlow::Break(());
+                }
+
+                entry.insert(Default::default())
+            }
+        };
+
+        ControlFlow::Continue(())
     }
 
     fn make_string_value(string: &str, literal: bool) -> Value {
@@ -895,6 +1057,8 @@ impl<'a> Base<'a> {
             }
         } else if string.starts_with(r"\nbt") {
             Some(r"\nbt".len())
+        } else if string.starts_with(r"\nblt") {
+            Some(r"\nblt".len())
         } else {
             None
         }
@@ -905,10 +1069,9 @@ impl<'a> Base<'a> {
         value: &'a Value,
         ret: bool,
     ) -> Option<&'a str> {
-        let string = value.as_str().unwrap_or_else(|| {
-            std::str::from_utf8(value.as_byte_vec().unwrap_or_default())
-                .unwrap_log()
-        });
+        let string = value.as_str().or_else(|| {
+            std::str::from_utf8(value.as_byte_vec().unwrap_or_default()).ok()
+        })?;
 
         let trimmed = string.trim();
 
@@ -960,58 +1123,53 @@ impl<'a> Base<'a> {
     }
 
     fn sync_map(&mut self) {
-        self.translation_duplicate_map
-            .reserve(self.lines.capacity());
+        let this = mutable!(self, Self);
 
-        let push_comments =
-            |map: &TranslationMap, out: &mut TranslationDuplicateMap| {
-                if map.first().is_some_and(|x| x.0.is_empty()) {
-                    out.extend(
-                        map.first()
-                            .unwrap_log()
-                            .1
-                            .parts()
-                            .1
-                            .to_vec()
-                            .into_iter()
-                            .map(|k| (String::new(), k.into())),
-                    );
-                } else {
-                    for (k, v) in map
+        let mut push_comments = |map: &TranslationMap| {
+            if map.first().is_some_and(|x| x.0.is_empty()) {
+                this.translation_duplicate_map.extend(
+                    map.comments()
                         .iter()
-                        .take_while(|(k, _)| k.starts_with(COMMENT_PREFIX))
-                    {
-                        out.push((k.clone(), v.clone()));
-                    }
+                        .map(|k| (String::new(), k.clone().into())),
+                );
+            } else {
+                for (k, v) in map
+                    .iter()
+                    .take_while(|(k, _)| k.starts_with(COMMENT_PREFIX))
+                {
+                    this.translation_duplicate_map.push((k.clone(), v.clone()));
                 }
-            };
+            }
+        };
+
+        let lines = take(&mut self.lines);
 
         if self.duplicate_mode.is_allow() {
-            push_comments(
-                self.translation_map,
-                &mut self.translation_duplicate_map,
-            );
+            self.translation_duplicate_map
+                .reserve(self.lines.capacity() + 5);
+            push_comments(self.translation_map);
 
-            for key in take(&mut self.lines) {
+            for key in lines {
                 let val =
                     self.translation_map.swap_remove(&key).unwrap_or_default();
                 self.translation_duplicate_map.push((key, val));
             }
         } else {
-            let mut map_index: isize = -1;
+            let mut map_index = 0;
+            self.translation_duplicate_map.reserve(
+                self.lines.capacity() + (self.translation_maps.len() * 5),
+            );
 
-            for key in take(&mut self.lines) {
+            for key in lines {
                 let mut val = TranslationEntry::default();
 
                 for (i, map) in self.translation_maps.values_mut().enumerate() {
                     if let Some(entry) = map.swap_remove(&key) {
-                        while i as isize > map_index {
+                        while i > map_index {
+                            push_comments(&self.translation_maps[map_index]);
                             map_index += 1;
-                            push_comments(
-                                &self.translation_maps[map_index as usize],
-                                &mut self.translation_duplicate_map,
-                            );
                         }
+
                         val = entry;
                         break;
                     }
@@ -1020,12 +1178,9 @@ impl<'a> Base<'a> {
                 self.translation_duplicate_map.push((key, val));
             }
 
-            if (map_index as usize) < self.translation_maps.len() - 1 {
-                if let Some((_name, last_map)) = self.translation_maps.last() {
-                    push_comments(
-                        last_map,
-                        &mut self.translation_duplicate_map,
-                    );
+            if map_index < self.translation_maps.len() - 1 {
+                if let Some(kv) = self.translation_maps.last() {
+                    push_comments(kv.1);
                 }
             }
         }
@@ -1033,11 +1188,13 @@ impl<'a> Base<'a> {
 
     fn purge_empty(&mut self) {
         let len_limit = if self.file_type.is_system() {
-            self.translation_map.len() - 1
+            self.translation_map.len().wrapping_sub(1)
         } else {
             self.translation_map.len()
         };
 
+        self.translation_duplicate_map
+            .reserve(self.translation_map.len());
         self.translation_duplicate_map.extend(
             self.translation_map.drain(..).enumerate().map(
                 |(i, (mut k, v))| {
@@ -1065,6 +1222,8 @@ impl<'a> Base<'a> {
         if self.read_mode.is_append() {
             self.sync_map();
         } else {
+            self.translation_duplicate_map
+                .reserve(self.translation_map.len() + self.lines.len());
             self.translation_duplicate_map.extend(
                 self.translation_map.drain(..).chain(
                     take(&mut self.lines)
@@ -1075,16 +1234,18 @@ impl<'a> Base<'a> {
         }
     }
 
-    fn should_abort_read(&self) -> bool {
+    fn should_abort_read(&mut self) -> bool {
         let should_abort = self.mode.is_read()
             && self.read_mode.is_default()
             && self.text_file_path.exists();
 
         if should_abort {
-            println!(
-                "{filename}.txt {FILE_ALREADY_EXISTS_MSG}",
-                filename = self.file_type.to_string().to_lowercase()
+            info!(
+                "{file}: {FILE_ALREADY_EXISTS_MSG}",
+                file = self.text_file_path.display()
             );
+            let path = take(&mut self.text_file_path);
+            self.push_result(Ok(Outcome::TXTAlreadyExist(path)));
         }
 
         should_abort
@@ -1138,11 +1299,18 @@ impl<'a> Base<'a> {
             ]);
         }
     }
+
+    fn push_result(&mut self, result: Result<Outcome, Error>) {
+        self.results.push(result);
+    }
+
+    fn results(&mut self) -> ResultVec {
+        take(&mut self.results)
+    }
 }
 
 pub struct MapBase<'a> {
     pub base: Base<'a>,
-    source_path: &'a Path,
 }
 
 impl<'a> MapBase<'a> {
@@ -1155,44 +1323,54 @@ impl<'a> MapBase<'a> {
     ) -> Self {
         Self {
             base: Base::new(
+                source_path,
                 translation_path,
                 output_path,
                 engine_type,
                 RPGMFileType::Map,
                 mode,
             ),
-            source_path,
         }
     }
 
     fn filter_maps(
-        entry: Result<DirEntry, std::io::Error>,
+        entry: DirEntry,
         engine_type: EngineType,
     ) -> Option<(String, PathBuf)> {
-        let Ok(entry) = entry else {
-            return None;
-        };
-
-        if !entry.file_type().unwrap_log().is_file() {
+        if !entry.file_type().ok()?.is_file() {
             return None;
         };
 
         let filename = entry.file_name();
-        let filename_str = filename.to_str().unwrap_log();
+        let filename_str = filename.to_str()?;
+        let extension = Path::new(&filename).extension()?;
 
         if filename_str.starts_with("Map")
-            && (*filename_str.as_bytes().get(3).unwrap_log() as char)
-                .is_ascii_digit()
-            && filename_str.ends_with(get_engine_extension(engine_type))
+            && filename_str.as_bytes().get(3)?.is_ascii_digit()
+            && extension == get_engine_extension(engine_type)
         {
-            return Some((filename_str.into(), entry.path()));
+            return Some((
+                unsafe { filename.into_string().unwrap_unchecked() },
+                entry.path(),
+            ));
         }
 
         None
     }
 
     fn parse_map_id(string: &str) -> i32 {
-        string[3..=5].parse::<i32>().unwrap_log()
+        // We discarded all files, which don't contain a digit at index 3, so
+        // panic is unlikely.
+        unsafe { string[3..=5].parse::<i32>().unwrap_unchecked() }
+    }
+
+    fn is_map_unused(&self, mapinfos: &Value, map_id: i32) -> bool {
+        // If map ID can't be found in mapinfos, then it is unused in game.
+        if self.base.engine_type.is_new() {
+            mapinfos.get_index(map_id as usize).is_none()
+        } else {
+            mapinfos.get(&Value::int(map_id)).is_none()
+        }
     }
 
     fn get_map_order(&self, mapinfos: &Value, map_id: i32) -> String {
@@ -1222,11 +1400,14 @@ impl<'a> MapBase<'a> {
         {
             display_name
                 .as_str()
-                .map(|s| {
+                .map(|mut name| {
+                    let name_replaced = name.replace_line_breaks();
+                    name = mutable!(&name_replaced, Cow<'_, str>);
+
                     if self.base.romanize {
-                        Base::romanize_string(s)
+                        Base::romanize_string(name)
                     } else {
-                        s.to_string()
+                        name.to_string()
                     }
                 })
                 .unwrap_or_default()
@@ -1236,14 +1417,45 @@ impl<'a> MapBase<'a> {
     }
 
     fn process_maps(&mut self) {
-        let engine_type = self.base.engine_type;
-        let map_entries = read_dir(self.source_path)
-            .unwrap_log()
-            .filter_map(|entry| Self::filter_maps(entry, engine_type));
-        let mapinfos = self.base.parse_rpgm_file(self.source_path.join(
-            format!("MapInfos.{}", get_engine_extension(self.base.engine_type)),
-        ));
-        self.base.get_translation_maps();
+        let map_entries = read_dir(self.base.source_path);
+
+        let map_entries = match map_entries {
+            Ok(entries) => {
+                let engine_type = self.base.engine_type;
+                entries.flatten().filter_map(move |entry| {
+                    Self::filter_maps(entry, engine_type)
+                })
+            }
+            Err(err) => {
+                self.base.push_result(Err(Error::ReadDirFailed {
+                    path: self.base.source_path.to_path_buf(),
+                    err,
+                }));
+
+                return;
+            }
+        };
+
+        let mapinfos_path =
+            format!("MapInfos.{}", get_engine_extension(self.base.engine_type));
+        let mapinfos = self
+            .base
+            .parse_rpgm_file(self.base.source_path.join(mapinfos_path));
+
+        let mapinfos = match mapinfos {
+            Ok(mapinfos) => mapinfos,
+            Err(err) => {
+                self.base.push_result(Err(err));
+                return;
+            }
+        };
+
+        self.base.reserve();
+
+        let flow = self.base.get_translation_maps();
+        if flow.is_break() {
+            return;
+        }
 
         if self.base.duplicate_mode.is_remove()
             && !self.base.read_mode.is_append()
@@ -1253,13 +1465,32 @@ impl<'a> MapBase<'a> {
 
         for (filename, path) in map_entries {
             let map_id = Self::parse_map_id(&filename);
-            self.base.get_translation_map(&map_id.to_string());
-            self.base.get_ignore_entry(&map_id.to_string());
+            if self.is_map_unused(&mapinfos, map_id) {
+                self.base.push_result(Ok(Outcome::MapIsUnused(filename)));
+                continue;
+            }
+
+            self.base.filename = mutable!(filename.as_str(), str);
+
+            let map_id_string = map_id.to_string();
+            let flow = self.base.get_translation_map(&map_id_string);
+            if flow.is_break() {
+                continue;
+            }
+
+            self.base.get_ignore_entry(&map_id_string);
 
             if self.base.mode.is_purge() {
                 self.base.purge_empty();
             } else {
-                let mut map_object = self.base.parse_rpgm_file(path);
+                let mut map_object = match self.base.parse_rpgm_file(path) {
+                    Ok(object) => object,
+                    Err(err) => {
+                        self.base.push_result(Err(err));
+                        continue;
+                    }
+                };
+
                 let display_name = self.get_display_name(&map_object);
                 let display_name_comment = format!(
                     "{MAP_DISPLAY_NAME_COMMENT_PREFIX}{display_name}{COMMENT_SUFFIX}"
@@ -1269,10 +1500,13 @@ impl<'a> MapBase<'a> {
                     let mut comments_inserted = true;
 
                     let order_number = self.get_map_order(&mapinfos, map_id);
-                    let map_name = self.get_map_name(&mapinfos, map_id);
+                    let mut map_name = self.get_map_name(&mapinfos, map_id);
+
+                    let replaced_map_name = map_name.replace_line_breaks();
+                    map_name = &replaced_map_name;
 
                     if self.base.read_mode.is_append() {
-                        if self.base.translation_map.first_mut().is_some() {
+                        if self.base.translation_map.first().is_some() {
                             let start_comments =
                                 self.base.translation_map.comments_mut();
                             let mut slots = vec![String::new(); 4];
@@ -1314,7 +1548,7 @@ impl<'a> MapBase<'a> {
 
                             *display_name_start_comment = format!(
                                 "{display_name_comment}{SEPARATOR}{translation}"
-                            )
+                            );
                         } else {
                             comments_inserted = false;
                         }
@@ -1324,7 +1558,7 @@ impl<'a> MapBase<'a> {
 
                     if !comments_inserted {
                         self.base.translation_map.extend([
-                            (MAP_ID_COMMENT.into(), map_id.to_string().into()),
+                            (MAP_ID_COMMENT.into(), map_id_string.into()),
                             (MAP_ORDER_COMMENT.into(), order_number.into()),
                             (MAP_NAME_COMMENT.into(), map_name.into()),
                             (display_name_comment, TranslationEntry::default()),
@@ -1333,28 +1567,49 @@ impl<'a> MapBase<'a> {
                 } else if !display_name.is_empty() {
                     let display_name_comment_line =
                         &self.base.translation_map.comments()[3];
-                    let (_, translation) = display_name_comment_line
-                        .split_once(SEPARATOR)
-                        .unwrap_log();
-                    map_object[self.base.labels.display_name] =
-                        Value::string(translation);
+
+                    let split: Vec<&str> =
+                        display_name_comment_line.split(SEPARATOR).collect();
+
+                    if split.len() >= 2 {
+                        let mut translation = split
+                            .into_iter()
+                            .skip(1)
+                            .rfind(|x| !x.is_empty())
+                            .unwrap_or_default();
+
+                        let translation_replaced =
+                            translation.replace_new_line();
+                        translation = &translation_replaced;
+
+                        map_object[self.base.labels.display_name] =
+                            Value::string(translation);
+                    } else {
+                        warn!(
+                            "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
+                            file =
+                                self.base.file_type.to_string().to_lowercase()
+                        );
+                    }
                 }
 
                 let events = if self.base.engine_type.is_new() {
-                    EventIterator::New(
+                    // Always an array in new maps, unlikely to panic.
+                    EventIterator::New(unsafe {
                         map_object[self.base.labels.events]
                             .as_array_mut()
-                            .unwrap_log()
+                            .unwrap_unchecked()
                             .iter_mut()
-                            .skip(1),
-                    )
+                            .skip(1)
+                    })
                 } else {
-                    EventIterator::Old(
+                    // Always a hashmap in old maps, unlikely to panic.
+                    EventIterator::Old(unsafe {
                         map_object[self.base.labels.events]
                             .as_hashmap_mut()
-                            .unwrap_log()
-                            .values_mut(),
-                    )
+                            .unwrap_unchecked()
+                            .values_mut()
+                    })
                 };
 
                 for event in events {
@@ -1370,16 +1625,19 @@ impl<'a> MapBase<'a> {
                     };
 
                     for page in pages {
-                        self.base.process_list(
+                        // List is always in map files, unlikely to panic.
+                        let list = unsafe {
                             page[self.base.labels.list]
                                 .as_array_mut()
-                                .unwrap_log(),
-                        );
+                                .unwrap_unchecked()
+                        };
+
+                        self.base.process_list(list);
                     }
                 }
 
                 if self.base.mode.is_write() {
-                    self.base.write_output(map_object, &filename);
+                    self.base.write_output(map_object);
                 } else {
                     if self.base.duplicate_mode.is_remove()
                         && !self.base.read_mode.is_append()
@@ -1392,31 +1650,44 @@ impl<'a> MapBase<'a> {
 
                     self.base.extend_translation_map();
                     if self.base.logging {
-                        println!("{PARSED_FILE_MSG} {filename}");
+                        info!("{filename}: {PARSED_FILE_MSG}");
                     }
+
+                    self.base.push_result(Ok(match self.base.mode {
+                        ProcessingMode::Read => Outcome::ReadFile(
+                            self.base.source_path.join(filename),
+                        ),
+                        ProcessingMode::Purge => Outcome::PurgedFile(
+                            self.base.source_path.join(filename),
+                        ),
+                        ProcessingMode::Write => unreachable!(),
+                    }));
                 }
             }
         }
     }
 
-    pub fn process(mut self) {
+    pub fn process(mut self) -> ResultVec {
         self.base.text_file_path = self.base.translation_path.join("maps.txt");
 
         if self.base.should_abort_read() {
-            return;
+            return self.base.results();
         }
 
         self.process_maps();
 
+        // When writing, we call `write_output` on each `Mapxxx` file separately.
         if !self.base.mode.is_write() {
-            self.base.write_output(Value::default(), "");
+            self.base.filename = "maps.txt";
+            self.base.write_output(Value::default());
         }
+
+        self.base.results()
     }
 }
 
 pub struct OtherBase<'a> {
     pub base: Base<'a>,
-    source_path: &'a Path,
 }
 
 impl<'a> OtherBase<'a> {
@@ -1429,13 +1700,13 @@ impl<'a> OtherBase<'a> {
     ) -> Self {
         Self {
             base: Base::new(
+                source_path,
                 translation_path,
                 output_path,
                 engine_type,
                 RPGMFileType::Invalid,
                 mode,
             ),
-            source_path,
         }
     }
 
@@ -1758,9 +2029,14 @@ impl<'a> OtherBase<'a> {
 
     fn process_object(&mut self, object: &mut Value) {
         if self.base.file_type.is_troops() {
-            for page in
-                object[self.base.labels.pages].as_array_mut().unwrap_log()
-            {
+            // Troops always include pages, panic is unlikely.
+            let pages = unsafe {
+                object[self.base.labels.pages]
+                    .as_array_mut()
+                    .unwrap_unchecked()
+            };
+
+            for page in pages {
                 if let Some(list_array) =
                     page[self.base.labels.list].as_array_mut()
                 {
@@ -1768,9 +2044,14 @@ impl<'a> OtherBase<'a> {
                 }
             }
         } else {
-            self.base.process_list(
-                object[self.base.labels.list].as_array_mut().unwrap_log(),
-            );
+            // Commonevents always include list, panic is unlikely.
+            let list = unsafe {
+                object[self.base.labels.list]
+                    .as_array_mut()
+                    .unwrap_unchecked()
+            };
+
+            self.base.process_list(list);
         }
     }
 
@@ -1836,23 +2117,25 @@ impl<'a> OtherBase<'a> {
                 array[variable_label] = Value::string(parsed);
                 continue;
             } else {
-                let replaced = parsed
-                    .lines()
-                    .map(|line| {
-                        let trimmed = if variable_type.is_any_message()
-                            || self.base.trim
-                        {
-                            line.trim()
-                        } else {
-                            line
-                        };
+                let replaced = unsafe {
+                    parsed
+                        .lines()
+                        .map(|line| {
+                            let trimmed = if variable_type.is_any_message()
+                                || self.base.trim
+                            {
+                                line.trim()
+                            } else {
+                                line
+                            };
 
-                        format!("{trimmed}{NEW_LINE}")
-                    })
-                    .collect::<String>()
-                    .strip_suffix(NEW_LINE)
-                    .unwrap_log()
-                    .into();
+                            format!("{trimmed}{NEW_LINE}")
+                        })
+                        .collect::<String>()
+                        .strip_suffix(NEW_LINE)
+                        .unwrap_unchecked()
+                }
+                .into();
 
                 self.base.insert_string(replaced);
             }
@@ -1860,48 +2143,53 @@ impl<'a> OtherBase<'a> {
     }
 
     fn filter_other(
-        entry: Result<DirEntry, std::io::Error>,
+        entry: DirEntry,
         engine_type: EngineType,
         game_type: GameType,
-    ) -> Option<(String, PathBuf)> {
-        let Ok(entry) = entry else {
-            return None;
-        };
-
-        if !entry.file_type().unwrap_log().is_file() {
+    ) -> Option<PathBuf> {
+        if !entry.file_type().ok()?.is_file() {
             return None;
         };
 
         let filename = entry.file_name();
-        let filename_str = filename.to_str().unwrap_log();
+        let filename_path = Path::new(&filename);
+        let basename = filename_path.file_stem()?;
+        let basename_str = basename.to_str()?;
+        let extension = filename_path.extension()?;
 
-        let (basename, _) = filename_str.split_once('.').unwrap_log();
-        let file_type = RPGMFileType::from_filename(basename);
+        let file_type = RPGMFileType::from_filename(basename_str);
 
-        if filename_str.ends_with(get_engine_extension(engine_type))
+        if extension == get_engine_extension(engine_type)
             && file_type.is_other()
         {
             if game_type.is_termina() && file_type.is_states() {
                 return None;
             }
 
-            return Some((filename_str.into(), entry.path()));
+            return Some(entry.path());
         }
 
         None
     }
 
-    pub fn process(mut self) {
-        let entries =
-            read_dir(self.source_path)
-                .unwrap_log()
-                .filter_map(move |entry| {
-                    Self::filter_other(
-                        entry,
-                        self.base.engine_type,
-                        self.base.game_type,
-                    )
-                });
+    pub fn process(mut self) -> ResultVec {
+        let entries = read_dir(self.base.source_path).map_err(|err| {
+            Error::ReadDirFailed {
+                path: self.base.source_path.to_path_buf(),
+                err,
+            }
+        });
+
+        let entries = match entries {
+            Ok(entries) => entries.flatten().filter_map(move |entry| {
+                Self::filter_other(
+                    entry,
+                    self.base.engine_type,
+                    self.base.game_type,
+                )
+            }),
+            Err(err) => return ResultVec::from(vec![Err(err)]),
+        };
 
         if self.base.duplicate_mode.is_remove()
             && !self.base.read_mode.is_append()
@@ -1909,41 +2197,79 @@ impl<'a> OtherBase<'a> {
             self.base.lines_lengths.reserve_exact(999);
         }
 
-        for (filename, path) in entries {
-            let basename =
-                filename.rsplit_once('.').unwrap_log().0.to_lowercase();
-            let text_file_name =
-                PathBuf::from(filename.to_lowercase()).with_extension("txt");
+        for path in entries {
+            let filename = unsafe {
+                path.file_name()
+                    .unwrap_unchecked()
+                    .to_str()
+                    .unwrap_unchecked()
+            };
+            let basename = unsafe {
+                path.file_stem()
+                    .unwrap_unchecked()
+                    .to_str()
+                    .unwrap_unchecked()
+                    .to_lowercase()
+            };
 
             self.base.file_type = RPGMFileType::from_filename(&basename);
-            self.base.text_file_path =
-                self.base.translation_path.join(&text_file_name);
+            self.base.text_file_path = self
+                .base
+                .translation_path
+                .join(PathBuf::from(basename).with_extension("txt"));
 
             if self.base.should_abort_read() {
                 continue;
             }
 
             if self.base.read_mode.is_append() || !self.base.mode.is_read() {
-                // In previous iteration, translation_map was unsafely assigned to the map
-                // located in translation_maps, and then translation_maps was cleared.
+                // In previous iteration, `translation_map` was unsafely assigned to the map
+                // located in `translation_maps`, and then `translation_maps` was cleared.
                 // If we don't reassign back to valid reference, it'll cause heap corruption.
                 self.base.translation_map = Box::leak(Box::default());
             }
 
-            self.base.get_translation_maps();
+            self.base.reserve();
+
+            let flow = self.base.get_translation_maps();
+            if flow.is_break() {
+                continue;
+            }
+
             self.base.append_additional_data();
 
-            let mut entry_json = self.base.parse_rpgm_file(&path);
+            let mut entry_value = match self.base.parse_rpgm_file(&path) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.base.push_result(Err(err));
+                    continue;
+                }
+            };
+
+            self.base.filename = mutable!(filename, str);
             self.base.lines_lengths.clear();
+            let mut changed = false;
 
-            for object in
-                entry_json.as_array_mut().unwrap_log().iter_mut().skip(1)
-            {
-                let event_name =
-                    object[self.base.labels.name].as_str().unwrap_log();
-                let event_id = object["id"].as_int().unwrap_log().to_string();
+            // All "other" entries are always arrays, unlikely to panic.
+            let object_array =
+                unsafe { entry_value.as_array_mut().unwrap_unchecked() };
 
-                self.base.get_translation_map(&event_id);
+            // Skipping one, because the first entry is always null.
+            for object in object_array.iter_mut().skip(1) {
+                // Name and ID exists on every object, unlikely to panic.
+                let event_name = unsafe {
+                    object[self.base.labels.name].as_str().unwrap_unchecked()
+                };
+                let event_id = unsafe {
+                    object["id"].as_int().unwrap_unchecked().to_string()
+                };
+
+                let flow = self.base.get_translation_map(&event_id);
+                if flow.is_break() {
+                    continue;
+                }
+
+                changed = true;
                 self.base.get_ignore_entry(&event_id);
 
                 if self.base.mode.is_purge() {
@@ -1972,16 +2298,21 @@ impl<'a> OtherBase<'a> {
                 }
             }
 
-            self.base.write_output(entry_json, filename);
+            if !changed {
+                continue;
+            }
+
+            self.base.write_output(entry_value);
         }
+
+        self.base.results()
     }
 }
 
 pub struct SystemBase<'a> {
     pub base: Base<'a>,
-    system_file_path: &'a Path,
     game_title: String,
-    system_json: Value,
+    system_value: Value,
 }
 
 impl<'a> SystemBase<'a> {
@@ -1992,22 +2323,35 @@ impl<'a> SystemBase<'a> {
         engine_type: EngineType,
         mode: ProcessingMode,
     ) -> Self {
-        Self {
-            base: Base::new(
-                translation_path,
-                output_path,
-                engine_type,
-                RPGMFileType::System,
-                mode,
-            ),
+        // Caller makes sure file name is valid and is UTF-8.
+        let filename = unsafe {
+            system_file_path
+                .file_name()
+                .unwrap_unchecked()
+                .to_str()
+                .unwrap_unchecked()
+        };
+
+        let mut base = Base::new(
             system_file_path,
+            translation_path,
+            output_path,
+            engine_type,
+            RPGMFileType::System,
+            mode,
+        );
+
+        base.filename = filename;
+
+        Self {
+            base,
             game_title: String::new(),
-            system_json: Value::default(),
+            system_value: Value::default(),
         }
     }
 
     fn process_terms(&mut self) {
-        let Some(terms) = mutable!(self, Self).system_json
+        let Some(terms) = mutable!(self, Self).system_value
             [self.base.labels.terms]
             .as_object_mut()
         else {
@@ -2064,7 +2408,7 @@ impl<'a> SystemBase<'a> {
     fn process_currency_unit(&mut self) {
         if !self.base.engine_type.is_new() {
             mutable!(self, Self).process_value(
-                &mut self.system_json[self.base.labels.currency_unit],
+                &mut self.system_value[self.base.labels.currency_unit],
             );
         }
     }
@@ -2072,11 +2416,11 @@ impl<'a> SystemBase<'a> {
     fn process_game_title(&mut self) {
         if self.base.mode.is_write() {
             if !self.game_title.is_empty() {
-                self.system_json[self.base.labels.game_title] =
+                self.system_value[self.base.labels.game_title] =
                     Value::string(self.game_title.as_str());
             }
         } else if let Some(game_title_value) =
-            self.system_json.get(self.base.labels.game_title)
+            self.system_value.get(self.base.labels.game_title)
         {
             let Some(mut game_title) =
                 self.base.extract_string(game_title_value, true)
@@ -2095,16 +2439,31 @@ impl<'a> SystemBase<'a> {
         }
     }
 
-    pub fn process(mut self) {
+    pub fn process(mut self) -> ResultVec {
         self.base.text_file_path =
             self.base.translation_path.join("system.txt");
 
         if self.base.should_abort_read() {
-            return;
+            return self.base.results();
         }
 
-        self.base.get_translation_maps();
-        self.system_json = self.base.parse_rpgm_file(self.system_file_path);
+        self.base.reserve();
+
+        let flow = self.base.get_translation_maps();
+        if flow.is_break() {
+            return self.base.results();
+        }
+
+        self.system_value =
+            match self.base.parse_rpgm_file(self.base.source_path) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.base.push_result(Err(err));
+                    return self.base.results();
+                }
+            };
+
+        let mut changed = false;
 
         for (entry_id, entry) in [
             "Armor Types",
@@ -2119,7 +2478,12 @@ impl<'a> SystemBase<'a> {
         .into_iter()
         .enumerate()
         {
-            self.base.get_translation_map(entry);
+            let flow = self.base.get_translation_map(entry);
+            if flow.is_break() {
+                continue;
+            }
+
+            changed = true;
             self.base.get_ignore_entry(entry);
 
             if self.base.mode.is_purge() {
@@ -2140,8 +2504,8 @@ impl<'a> SystemBase<'a> {
                         self.base.labels.equip_types,
                     ][entry_id];
 
-                    let Some(array) =
-                        mutable!(&self, Self).system_json[label].as_array_mut()
+                    let Some(array) = mutable!(&self, Self).system_value[label]
+                        .as_array_mut()
                     else {
                         continue;
                     };
@@ -2161,16 +2525,17 @@ impl<'a> SystemBase<'a> {
             }
         }
 
-        self.base.write_output(
-            self.system_json.take(),
-            self.system_file_path.file_name().unwrap_log(),
-        );
+        if !changed {
+            return self.base.results();
+        }
+
+        self.base.write_output(self.system_value.take());
+        self.base.results()
     }
 }
 
 pub struct ScriptBase<'a> {
     pub base: Base<'a>,
-    scripts_file_path: &'a Path,
     scripts_array: Vec<Value>,
     script_names: Vec<String>,
     scripts_content: Vec<String>,
@@ -2183,15 +2548,27 @@ impl<'a> ScriptBase<'a> {
         output_path: &'a Path,
         mode: ProcessingMode,
     ) -> Self {
-        Self {
-            base: Base::new(
-                translation_path,
-                output_path,
-                EngineType::VXAce,
-                RPGMFileType::Scripts,
-                mode,
-            ),
+        // Caller makes sure file name is valid and is UTF-8.
+        let filename = unsafe {
+            scripts_file_path
+                .file_name()
+                .unwrap_unchecked()
+                .to_str()
+                .unwrap_unchecked()
+        };
+
+        let mut base = Base::new(
             scripts_file_path,
+            translation_path,
+            output_path,
+            EngineType::VXAce,
+            RPGMFileType::Scripts,
+            mode,
+        );
+        base.filename = filename;
+
+        Self {
+            base,
             scripts_array: Vec::new(),
             script_names: Vec::new(),
             scripts_content: Vec::new(),
@@ -2213,13 +2590,13 @@ impl<'a> ScriptBase<'a> {
     }
 
     fn extract_strings(&self, ruby_code: &str) -> (Lines, Vec<Range<usize>>) {
-        let mut strings: Lines = Lines::default();
-        let mut ranges: Vec<Range<usize>> = Vec::new();
-        let mut inside_string: bool = false;
-        let mut inside_multiline_comment: bool = false;
-        let mut string_start_index: usize = 0;
-        let mut current_quote_type: char = '\0';
-        let mut global_index: usize = 0;
+        let mut strings = Lines::default();
+        let mut ranges = Vec::new();
+        let mut inside_string = false;
+        let mut inside_multiline_comment = false;
+        let mut string_start_index = 0;
+        let mut current_quote_type = '\0';
+        let mut global_index = 0;
 
         for line in ruby_code.each_line() {
             let trimmed = line.trim();
@@ -2257,17 +2634,15 @@ impl<'a> ScriptBase<'a> {
                     && char == current_quote_type
                     && !Self::is_escaped(i, &line)
                 {
-                    let range: Range<usize> =
-                        string_start_index + 1..global_index + i;
+                    let range = string_start_index + 1..global_index + i;
 
-                    let extracted_string = ruby_code[range.clone()]
-                        .replace("\r\n", NEW_LINE)
-                        .replace('\n', NEW_LINE);
+                    let extracted_string =
+                        ruby_code[range.clone()].replace_line_breaks();
 
                     if !extracted_string.is_empty()
-                        && !strings.contains(&extracted_string)
+                        && !strings.contains(extracted_string.as_ref())
                     {
-                        strings.insert(extracted_string);
+                        strings.insert(extracted_string.into_owned());
 
                         if self.base.mode.is_write() {
                             ranges.push(range);
@@ -2290,14 +2665,20 @@ impl<'a> ScriptBase<'a> {
         self.script_names.reserve_exact(self.scripts_array.len());
 
         for script in self.scripts_array.iter() {
-            let script_name_data = script[1].as_byte_vec().unwrap_log();
-            let script_data = script[2].as_byte_vec().unwrap_log();
+            // These always exist in scripts, panic is unlikely.
+            let script_name_data =
+                unsafe { script[1].as_byte_vec().unwrap_unchecked() };
+            let script_data =
+                unsafe { script[2].as_byte_vec().unwrap_unchecked() };
 
             let mut decoded_script = Vec::new();
 
-            ZlibDecoder::new(script_data)
-                .read_to_end(&mut decoded_script)
-                .unwrap_log();
+            // `script_data` is always zlib encoded, panic is unlikely.
+            unsafe {
+                ZlibDecoder::new(script_data)
+                    .read_to_end(&mut decoded_script)
+                    .unwrap_unchecked()
+            };
 
             for encoding in [
                 encoding_rs::UTF_8,
@@ -2319,19 +2700,22 @@ impl<'a> ScriptBase<'a> {
         }
     }
 
-    pub fn process(mut self) {
+    pub fn process(mut self) -> ResultVec {
         self.base.text_file_path =
             self.base.translation_path.join("scripts.txt");
 
         if self.base.should_abort_read() {
-            return;
+            return self.base.results();
         }
 
-        self.scripts_array = self
-            .base
-            .parse_rpgm_file(self.scripts_file_path)
-            .into_array()
-            .unwrap_log();
+        self.scripts_array =
+            match self.base.parse_rpgm_file(self.base.source_path) {
+                Ok(value) => unsafe { value.into_array().unwrap_unchecked() },
+                Err(err) => {
+                    self.base.push_result(Err(err));
+                    return self.base.results();
+                }
+            };
 
         self.decode_scripts();
 
@@ -2346,7 +2730,12 @@ impl<'a> ScriptBase<'a> {
             ]
         };
 
-        self.base.get_translation_maps();
+        self.base.reserve();
+
+        let flow = self.base.get_translation_maps();
+        if flow.is_break() {
+            return self.base.results();
+        }
 
         let mut changed = false;
 
@@ -2358,10 +2747,13 @@ impl<'a> ScriptBase<'a> {
                 .zip(take(&mut self.script_names))
                 .zip(take(&mut self.scripts_content))
         {
-            changed = true;
-
             let script_id = script_id.to_string();
-            self.base.get_translation_map(&script_id);
+            let flow = self.base.get_translation_map(&script_id);
+            if flow.is_break() {
+                continue;
+            }
+
+            changed = true;
             self.base.get_ignore_entry(&script_id);
 
             if self.base.mode.is_purge() {
@@ -2371,11 +2763,14 @@ impl<'a> ScriptBase<'a> {
                 let (extracted_strings, ranges) = self.extract_strings(&code);
 
                 if self.base.mode.is_write() {
-                    let mut buf = Vec::new();
+                    let mut buf = Vec::with_capacity(1024);
 
-                    ZlibEncoder::new(&mut buf, Compression::default())
-                        .write_all(code.as_bytes())
-                        .unwrap_log();
+                    // Can this even fail?
+                    unsafe {
+                        ZlibEncoder::new(&mut buf, Compression::default())
+                            .write_all(code.as_bytes())
+                            .unwrap_unchecked()
+                    };
 
                     script[2] = Value::bytes(buf.as_slice());
 
@@ -2423,19 +2818,17 @@ impl<'a> ScriptBase<'a> {
         }
 
         if !changed {
-            return;
+            return self.base.results();
         }
 
-        self.base.write_output(
-            Value::array(self.scripts_array),
-            self.scripts_file_path.file_name().unwrap_log(),
-        );
+        self.base.write_output(Value::array(self.scripts_array));
+
+        self.base.results()
     }
 }
 
 pub struct PluginBase<'a> {
     pub base: Base<'a>,
-    plugins_file_path: &'a Path,
     plugins_array: Vec<Value>,
 }
 
@@ -2446,15 +2839,28 @@ impl<'a> PluginBase<'a> {
         output_path: &'a Path,
         mode: ProcessingMode,
     ) -> Self {
-        Self {
-            base: Base::new(
-                translation_path,
-                output_path,
-                EngineType::New,
-                RPGMFileType::Plugins,
-                mode,
-            ),
+        // Caller makes sure file name is valid and is UTF-8.
+        let filename = unsafe {
+            plugins_file_path
+                .file_name()
+                .unwrap_unchecked()
+                .to_str()
+                .unwrap_unchecked()
+        };
+
+        let mut base = Base::new(
             plugins_file_path,
+            translation_path,
+            output_path,
+            EngineType::New,
+            RPGMFileType::Plugins,
+            mode,
+        );
+
+        base.filename = filename;
+
+        Self {
+            base,
             plugins_array: Vec::new(),
         }
     }
@@ -2492,22 +2898,25 @@ impl<'a> PluginBase<'a> {
                     || value_string.starts_with("rgba"))
                     || key.is_some_and(|x| x.starts_with("LATIN"))
                 {
-                    let mut string = value_string.replace('\n', NEW_LINE);
+                    let replaced = value_string.replace_line_breaks();
+                    let mut string: &str = &replaced;
 
+                    let romanized: String;
                     if self.base.romanize {
-                        string = Base::romanize_string(&string);
+                        romanized = Base::romanize_string(string);
+                        string = &romanized;
                     }
 
                     if self.base.mode.is_write() {
-                        if !self.base.contains_key(&string) {
+                        if !self.base.contains_key(string) {
                             return;
                         }
 
-                        if let Some(translated) = self.base.get_key(&string) {
-                            *value = Value::string(translated.to_string());
+                        if let Some(translated) = self.base.get_key(string) {
+                            *value = Value::string(translated.as_str());
                         }
                     } else {
-                        self.base.insert_string(string);
+                        self.base.insert_string(string.into());
                     }
                 }
             }
@@ -2525,37 +2934,67 @@ impl<'a> PluginBase<'a> {
         }
     }
 
-    pub fn process(mut self) {
+    pub fn process(mut self) -> ResultVec {
         self.base.text_file_path =
             self.base.translation_path.join("plugins.txt");
 
         if self.base.should_abort_read() {
-            return;
+            return self.base.results();
         }
 
-        let plugins_content =
-            read_to_string(self.plugins_file_path).unwrap_log();
+        let plugins_content = read_to_string(self.base.source_path);
+        let plugins_content = match plugins_content {
+            Ok(content) => content,
+            Err(err) => {
+                return ResultVec::from(vec![Err(Error::ReadFileFailed {
+                    file: self.base.source_path.to_path_buf(),
+                    err,
+                })]);
+            }
+        };
 
-        let plugins_array = plugins_content
-            .split_once('=')
-            .unwrap_log()
-            .1
-            .trim_end_matches([';', '\r', '\n']);
+        // '=' should always exist in plugins.js, panic is unlikely.
+        let plugins_array =
+            unsafe { plugins_content.split_once('=').unwrap_unchecked() }
+                .1
+                .trim_end_matches([';', '\r', '\n']);
 
-        self.plugins_array = Value::from(
-            from_str::<serde_json::Value>(plugins_array).unwrap_log(),
-        )
-        .into_array()
-        .unwrap_log();
+        let value = from_str::<serde_json::Value>(plugins_array);
 
-        self.base.get_translation_maps();
+        let value = match value {
+            Ok(value) => value,
+            Err(err) => {
+                return ResultVec::from(vec![Err(Error::JSONParseFailed {
+                    file: self.base.source_path.to_path_buf(),
+                    err,
+                })]);
+            }
+        };
+
+        // Should always be array, panic is unlikely.
+        self.plugins_array =
+            unsafe { Value::from(value).into_array().unwrap_unchecked() };
+
+        self.base.reserve();
+
+        let flow = self.base.get_translation_maps();
+        if flow.is_break() {
+            return self.base.results();
+        }
 
         for (plugin_id, plugin_object) in
             mutable!(&self, Self).plugins_array.iter_mut().enumerate()
         {
-            let plugin_name = plugin_object["name"].as_str().unwrap_log();
+            // Each plugin always contain name, panic is unlikely.
+            let plugin_name =
+                unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
             let plugin_id = plugin_id.to_string();
-            self.base.get_translation_map(&plugin_id);
+
+            let flow = self.base.get_translation_map(&plugin_id);
+            if flow.is_break() {
+                continue;
+            }
+
             self.base.get_ignore_entry(&plugin_id);
 
             if self.base.mode.is_purge() {
@@ -2567,9 +3006,7 @@ impl<'a> PluginBase<'a> {
             }
         }
 
-        self.base.write_output(
-            Value::array(self.plugins_array),
-            self.plugins_file_path.file_name().unwrap_log(),
-        );
+        self.base.write_output(Value::array(self.plugins_array));
+        self.base.results()
     }
 }

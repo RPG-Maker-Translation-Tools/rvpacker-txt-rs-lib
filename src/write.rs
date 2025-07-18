@@ -50,8 +50,8 @@ impl<'a> MapWriter<'a> {
         self
     }
 
-    pub fn write(self) {
-        self.base.process();
+    pub fn write(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -102,8 +102,8 @@ impl<'a> OtherWriter<'a> {
         self
     }
 
-    pub fn write(self) {
-        self.base.process();
+    pub fn write(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -144,8 +144,8 @@ impl<'a> SystemWriter<'a> {
         self
     }
 
-    pub fn write(self) {
-        self.base.process();
+    pub fn write(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -179,8 +179,8 @@ impl<'a> PluginWriter<'a> {
         self
     }
 
-    pub fn write(self) {
-        self.base.process();
+    pub fn write(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -214,8 +214,8 @@ impl<'a> ScriptWriter<'a> {
         self
     }
 
-    pub fn write(self) {
-        self.base.process();
+    pub fn write(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -227,7 +227,7 @@ impl<'a> ScriptWriter<'a> {
 /// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_flags`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set it.
 /// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Writer::set_romanize`].
-/// - `logging`: If enabled, logs operations and progress. Use [`Writer::set_logging`]
+/// - `logging`: If enabled, logs operations and progress. Use [`Writer::set_logging`] to set it. As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
 /// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Writer::set_trim`] to set it.
 ///
 /// # Example
@@ -254,7 +254,7 @@ impl Writer {
     /// By default, all four file flags are set (all files will be written), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut writer = Writer::new();
     /// ```
     pub fn new() -> Self {
@@ -273,7 +273,7 @@ impl Writer {
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_flags(FileFlags::Map | FileFlags::Other);
     /// ```
     pub fn set_flags(&mut self, file_flags: FileFlags) {
@@ -294,7 +294,7 @@ impl Writer {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_game_type(GameType::Termina);
     /// ```
     pub fn set_game_type(&mut self, game_type: GameType) {
@@ -310,17 +310,19 @@ impl Writer {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_romanize(true);
     /// ```
     pub fn set_romanize(&mut self, logging: bool) {
         self.romanize = logging;
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_logging(true);
     /// ```
     pub fn set_logging(&mut self, logging: bool) {
@@ -332,7 +334,7 @@ impl Writer {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_trim(true);
     /// ```
     pub fn set_trim(&mut self, logging: bool) {
@@ -347,7 +349,7 @@ impl Writer {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.set_duplicate_mode(DuplicateMode::AllowDuplicates);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
@@ -361,12 +363,15 @@ impl Writer {
     ///
     /// # Arguments
     /// - `source_path` - Path to the directory containing source RPG Maker files.
-    /// - `translation_path` - Path to the directory where `translation` directory with `.txt` files is located.
+    ///
+    ///   For `MV/MZ` engines, parent directory of `source_path` must contain `js` directory.
+    ///
+    /// - `translation_path` - Path to the directory where `.txt` translation files are located.
     /// - `output_path` - Path to the directory, where output RPG Maker files will be created.
     /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
     /// ```
     pub fn write<P: AsRef<Path>>(
@@ -375,22 +380,33 @@ impl Writer {
         translation_path: P,
         output_path: P,
         engine_type: EngineType,
-    ) {
+    ) -> Result<FileResults, Error> {
+        let mut results = FileResults::default();
+
         if self.file_flags.is_empty() {
-            return;
+            return Ok(results);
         }
 
         let source_path = source_path.as_ref();
         let translation_path = translation_path.as_ref();
         let output_path = output_path.as_ref();
 
-        create_dir_all(output_path).unwrap_log();
+        let data_output_path = output_path.join(if engine_type.is_new() {
+            "data"
+        } else {
+            "Data"
+        });
+
+        create_dir_all(output_path).map_err(|err| Error::CreateDirFailed {
+            path: output_path.to_path_buf(),
+            err,
+        })?;
 
         if self.file_flags.contains(FileFlags::Map) {
-            MapWriter::new(
+            results.map = MapWriter::new(
                 source_path,
                 translation_path,
-                output_path,
+                &data_output_path,
                 engine_type,
             )
             .game_type(self.game_type)
@@ -402,10 +418,10 @@ impl Writer {
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            OtherWriter::new(
+            results.other = OtherWriter::new(
                 source_path,
                 translation_path,
-                output_path,
+                &data_output_path,
                 engine_type,
             )
             .game_type(self.game_type)
@@ -420,10 +436,10 @@ impl Writer {
             let system_file_path = source_path
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            SystemWriter::new(
+            results.system = SystemWriter::new(
                 system_file_path.as_path(),
                 translation_path,
-                output_path,
+                &data_output_path,
                 engine_type,
             )
             .romanize(self.romanize)
@@ -434,14 +450,29 @@ impl Writer {
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugins_file_path =
-                    source_path.parent().unwrap_log().join("js/plugins.js");
-                let plugins_output_path =
-                    output_path.parent().unwrap_log().join("js");
+                let plugins_file_path = unsafe {
+                    source_path
+                        .parent()
+                        .unwrap_unchecked()
+                        .join("js/plugins.js")
+                };
 
-                create_dir_all(&plugins_output_path).unwrap_log();
+                if !plugins_file_path.exists() {
+                    return Err(Error::PluginsFileMissing);
+                }
 
-                PluginWriter::new(
+                let plugins_output_path = unsafe {
+                    output_path.parent().unwrap_unchecked().join("js")
+                };
+
+                create_dir_all(&plugins_output_path).map_err(|err| {
+                    Error::CreateDirFailed {
+                        path: plugins_output_path.clone(),
+                        err,
+                    }
+                })?;
+
+                results.scripts = PluginWriter::new(
                     &plugins_file_path,
                     translation_path,
                     &plugins_output_path,
@@ -455,16 +486,18 @@ impl Writer {
                     get_engine_extension(engine_type)
                 ));
 
-                ScriptWriter::new(
+                results.scripts = ScriptWriter::new(
                     &scripts_file_path,
                     translation_path,
-                    output_path,
+                    &data_output_path,
                 )
                 .romanize(self.romanize)
                 .logging(self.logging)
                 .write();
             }
         }
+
+        Ok(results)
     }
 }
 
@@ -496,7 +529,7 @@ impl WriterBuilder {
     /// By default, all four file flags are set (all files will be written), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut writer = WriterBuilder::new().build();
     /// ```
     pub fn new() -> Self {
@@ -515,7 +548,7 @@ impl WriterBuilder {
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
     /// ```
     pub fn with_flags(mut self, flags: FileFlags) -> Self {
@@ -537,7 +570,7 @@ impl WriterBuilder {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().game_type(GameType::Termina).build();
     /// ```
     pub fn game_type(mut self, game_type: GameType) -> Self {
@@ -554,7 +587,7 @@ impl WriterBuilder {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().romanize(true).build();
     /// ```
     pub fn romanize(mut self, enabled: bool) -> Self {
@@ -562,10 +595,12 @@ impl WriterBuilder {
         self
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().logging(true).build();
     /// ```
     pub fn logging(mut self, enabled: bool) -> Self {
@@ -578,7 +613,7 @@ impl WriterBuilder {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().trim(true).build();
     /// ```
     pub fn trim(mut self, enabled: bool) -> Self {
@@ -594,7 +629,7 @@ impl WriterBuilder {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let writer = WriterBuilder::new().duplicate_mode(DuplicateMode::NoDuplicates);.build();
     /// ```
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {

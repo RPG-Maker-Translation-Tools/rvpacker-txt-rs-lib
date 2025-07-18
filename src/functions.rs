@@ -17,22 +17,29 @@ pub const fn get_engine_extension(engine_type: EngineType) -> &'static str {
 }
 
 /// Parses ignore file contents to `IgnoreMap`.
-pub(crate) fn parse_ignore(
+pub fn parse_ignore(
     ignore_file_path: PathBuf,
     duplicate_mode: DuplicateMode,
     read: bool,
-) -> IgnoreMap {
+) -> Result<IgnoreMap, Error> {
     let mut ignore_map = IgnoreMap::default();
 
     if !ignore_file_path.exists() {
-        return ignore_map;
+        return Ok(ignore_map);
     }
 
-    let ignore_file_content = read_to_string(ignore_file_path).unwrap_log();
+    let ignore_file_content =
+        read_to_string(&ignore_file_path).map_err(|err| {
+            Error::ReadFileFailed {
+                file: ignore_file_path,
+                err,
+            }
+        })?;
+
     let mut ignore_file_lines = ignore_file_content.lines();
 
     let Some(mut first_entry_comment) = ignore_file_lines.next() else {
-        return ignore_map;
+        return Ok(ignore_map);
     };
 
     if read
@@ -43,15 +50,16 @@ pub(crate) fn parse_ignore(
     {
         // If duplicates are removed, we should group all ignore entries
         // that correspond to a single file into one ignore entry.
-        first_entry_comment =
-            &first_entry_comment[..first_entry_comment.find(':').unwrap_log()];
+        first_entry_comment = &first_entry_comment
+            [..unsafe { first_entry_comment.find(':').unwrap_unchecked() }];
     }
 
     ignore_map.reserve(256);
     ignore_map
         .insert(first_entry_comment.into(), IgnoreEntry::with_capacity(128));
 
-    let mut ignore_entry = ignore_map.last_mut().unwrap_log().1;
+    let mut ignore_entry =
+        unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
 
     for mut line in ignore_file_content.lines() {
         if line.is_empty() {
@@ -67,19 +75,20 @@ pub(crate) fn parse_ignore(
                     || line.contains("<#>Scripts")
                     || line.contains("<#>Plugins"))
             {
-                line = &line[..line.find(':').unwrap_log()];
+                line = &line[..unsafe { line.find(':').unwrap_unchecked() }];
             }
 
             ignore_map
                 .entry(line.into())
                 .or_insert(IgnoreEntry::with_capacity(128));
-            ignore_entry = ignore_map.last_mut().unwrap_log().1;
+            ignore_entry =
+                unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
         } else {
             ignore_entry.insert(line.into());
         }
     }
 
-    ignore_map
+    Ok(ignore_map)
 }
 
 /// This function is exactly similar to `std::fs::read_to_string`, but it doesn't include Byte Order Mark, if there's any.
@@ -88,13 +97,13 @@ pub fn read_to_string_without_bom<P: AsRef<Path>>(
 ) -> std::io::Result<String> {
     const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
-    let file: File = File::open(file_path.as_ref())?;
-    let mut reader: BufReader<File> = BufReader::new(file);
+    let file = File::open(file_path.as_ref())?;
+    let mut reader = BufReader::new(file);
 
-    let mut buffer: [u8; 3] = [0u8; 3];
-    let mut content: String = String::new();
+    let mut buffer = [0u8; 3];
+    let mut content = String::new();
 
-    let read_bytes: usize = reader.read(&mut buffer)?;
+    let read_bytes = reader.read(&mut buffer)?;
 
     if read_bytes == 3 && buffer == BOM {
         reader.read_to_string(&mut content)?;

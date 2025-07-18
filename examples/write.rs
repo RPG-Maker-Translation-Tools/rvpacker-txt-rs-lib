@@ -9,5 +9,6 @@ fn main() {
         .logging(true)
         .build();
 
-    writer.write("data", "translation", "output/data", EngineType::New);
+    let result =
+        writer.write("data", "translation", "output/data", EngineType::New);
 }

@@ -1,72 +1,122 @@
-use rvpacker_txt_rs_lib::{types::*, WriterBuilder};
+use rvpacker_txt_rs_lib::{WriterBuilder, types::*};
 use std::{env::var, fs::create_dir_all, path::PathBuf};
 
 #[test]
-fn mz() {
-    let game_path = PathBuf::from(var("MZ_GAME_PATH").unwrap());
+fn mz() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("MZ_GAME_PATH")?);
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
     let output_path = game_path.join("output/data");
 
-    create_dir_all(&output_path).unwrap();
+    create_dir_all(&output_path)?;
 
     let writer = WriterBuilder::new().build();
-    writer.write(source_path, translation_path, output_path, EngineType::New);
+    let results = writer.write(
+        source_path,
+        translation_path,
+        output_path,
+        EngineType::New,
+    )?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn mv() {
-    let game_path = PathBuf::from(var("MV_GAME_PATH").unwrap());
+fn mv() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("MV_GAME_PATH")?);
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
     let output_path = game_path.join("output/data");
 
-    create_dir_all(&output_path).unwrap();
+    create_dir_all(&output_path)?;
 
     let writer = WriterBuilder::new().build();
-    writer.write(source_path, translation_path, output_path, EngineType::New);
+    let results = writer.write(
+        source_path,
+        translation_path,
+        output_path,
+        EngineType::New,
+    )?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn ace() {
-    let game_path = PathBuf::from(var("VXACE_GAME_PATH").unwrap());
+fn ace() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("VXACE_GAME_PATH")?);
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
     let output_path = game_path.join("output/data");
 
-    create_dir_all(&output_path).unwrap();
+    create_dir_all(&output_path)?;
 
     let writer = WriterBuilder::new().build();
-    writer.write(
+    let results = writer.write(
         source_path,
         translation_path,
         output_path,
         EngineType::VXAce,
-    );
+    )?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
 }
 
 #[test]
-fn vx() {
-    let game_path = PathBuf::from(var("VX_GAME_PATH").unwrap());
+fn vx() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("VX_GAME_PATH")?);
+    let source_path = game_path.join("Data");
+    let translation_path = game_path.join("translation");
+    let output_path = game_path.join("output");
+
+    create_dir_all(&output_path)?;
+
+    let writer = WriterBuilder::new().build();
+    let results = writer.write(
+        source_path,
+        translation_path,
+        output_path,
+        EngineType::VX,
+    )?;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
+}
+
+#[test]
+fn xp() -> Result<(), Box<dyn std::error::Error>> {
+    let game_path = PathBuf::from(var("XP_GAME_PATH")?);
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
     let output_path = game_path.join("output/data");
 
-    create_dir_all(&output_path).unwrap();
+    create_dir_all(&output_path)?;
 
     let writer = WriterBuilder::new().build();
-    writer.write(source_path, translation_path, output_path, EngineType::VX);
-}
+    let results = writer.write(
+        source_path,
+        translation_path,
+        output_path,
+        EngineType::XP,
+    )?;
 
-#[test]
-fn xp() {
-    let game_path = PathBuf::from(var("XP_GAME_PATH").unwrap());
-    let source_path = game_path.join("Data");
-    let translation_path = game_path.join("translation");
-    let output_path = game_path.join("output/data");
+    for result in results {
+        result?;
+    }
 
-    create_dir_all(&output_path).unwrap();
-
-    let writer = WriterBuilder::new().build();
-    writer.write(source_path, translation_path, output_path, EngineType::XP);
+    Ok(())
 }

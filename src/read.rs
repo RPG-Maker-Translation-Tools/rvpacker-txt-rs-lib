@@ -65,8 +65,8 @@ impl<'a> MapReader<'a> {
         self
     }
 
-    pub fn read(self) {
-        self.base.process();
+    pub fn read(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -131,8 +131,8 @@ impl<'a> OtherReader<'a> {
         self
     }
 
-    pub fn read(self) {
-        self.base.process();
+    pub fn read(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -187,8 +187,8 @@ impl<'a> SystemReader<'a> {
         self
     }
 
-    pub fn read(self) {
-        self.base.process();
+    pub fn read(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -236,8 +236,8 @@ impl<'a> ScriptReader<'a> {
         self
     }
 
-    pub fn read(self) {
-        self.base.process();
+    pub fn read(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -285,8 +285,8 @@ impl<'a> PluginReader<'a> {
         self
     }
 
-    pub fn read(self) {
-        self.base.process();
+    pub fn read(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -300,7 +300,7 @@ impl<'a> PluginReader<'a> {
 /// - `read_mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set it.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set it.
 /// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Reader::set_romanize`].
-/// - `logging`: If enabled, logs operations and progress. Use [`Reader::set_logging`]
+/// - `logging`: If enabled, logs operations and progress. Use [`Reader::set_logging`] to set it. As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
 /// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use [`Reader::set_ignore`] to set it.
 /// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Reader::set_trim`] to set it.
 ///
@@ -330,7 +330,7 @@ impl Reader {
     /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut reader = Reader::new();
     /// ```
     pub fn new() -> Self {
@@ -352,7 +352,7 @@ impl Reader {
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_flags(FileFlags::Map | FileFlags::Other);
     /// ```
     pub fn set_flags(&mut self, flags: FileFlags) {
@@ -370,7 +370,7 @@ impl Reader {
     /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_read_mode(ReadMode::Default);
     /// ```
     pub fn set_read_mode(&mut self, mode: ReadMode) {
@@ -389,7 +389,7 @@ impl Reader {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_game_type(GameType::Termina);
     /// ```
     pub fn set_game_type(&mut self, game_type: GameType) {
@@ -403,17 +403,19 @@ impl Reader {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_romanize(true);
     /// ```
     pub fn set_romanize(&mut self, enabled: bool) {
         self.romanize = enabled;
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_logging(true);
     /// ```
     pub fn set_logging(&mut self, enabled: bool) {
@@ -423,7 +425,7 @@ impl Reader {
     /// Sets whether to ignore entries from `.rvpacker-ignore` file.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_ignore(true);
     /// ```
     pub fn set_ignore(&mut self, enabled: bool) {
@@ -433,7 +435,7 @@ impl Reader {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_trim(true);
     /// ```
     pub fn set_trim(&mut self, enabled: bool) {
@@ -448,7 +450,7 @@ impl Reader {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.set_duplicate_mode(DuplicateMode::AllowDuplicates);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
@@ -461,11 +463,11 @@ impl Reader {
     ///
     /// # Arguments
     /// - `source_path` - Path to the directory containing RPG Maker files.
-    /// - `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
+    /// - `translation_path` - Path to the directory where `.txt` files will be created.
     /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
     /// ```
     pub fn read<P: AsRef<Path> + Sync>(
@@ -473,93 +475,118 @@ impl Reader {
         source_path: P,
         translation_path: P,
         engine_type: EngineType,
-    ) {
+    ) -> Result<FileResults, Error> {
+        let mut results = FileResults::default();
+
         if self.file_flags.is_empty() {
-            return;
-        }
-
-        let mut ignore_map = IgnoreMap::default();
-
-        if self.ignore {
-            ignore_map = parse_ignore(
-                translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
-                self.duplicate_mode,
-                true,
-            );
+            return Ok(results);
         }
 
         let source_path = source_path.as_ref();
         let translation_path = translation_path.as_ref();
 
-        create_dir_all(translation_path).unwrap_log();
+        let mut ignore_map = IgnoreMap::default();
+
+        if self.ignore {
+            ignore_map = parse_ignore(
+                translation_path.join(RVPACKER_IGNORE_FILE),
+                self.duplicate_mode,
+                true,
+            )?;
+        }
+
+        create_dir_all(translation_path).map_err(|err| {
+            Error::CreateDirFailed {
+                path: translation_path.to_path_buf(),
+                err,
+            }
+        })?;
 
         if self.file_flags.contains(FileFlags::Map) {
-            MapReader::new(source_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .game_type(self.game_type)
-                .read_mode(self.read_mode)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .ignore(self.ignore)
-                .trim(self.trim)
-                .duplicate_mode(self.duplicate_mode)
-                .read();
+            results.map =
+                MapReader::new(source_path, translation_path, engine_type)
+                    .ignore_map(&mut ignore_map)
+                    .game_type(self.game_type)
+                    .read_mode(self.read_mode)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .ignore(self.ignore)
+                    .trim(self.trim)
+                    .duplicate_mode(self.duplicate_mode)
+                    .read();
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            OtherReader::new(source_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .game_type(self.game_type)
-                .read_mode(self.read_mode)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .ignore(self.ignore)
-                .trim(self.trim)
-                .duplicate_mode(self.duplicate_mode)
-                .read();
+            results.other =
+                OtherReader::new(source_path, translation_path, engine_type)
+                    .ignore_map(&mut ignore_map)
+                    .game_type(self.game_type)
+                    .read_mode(self.read_mode)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .ignore(self.ignore)
+                    .trim(self.trim)
+                    .duplicate_mode(self.duplicate_mode)
+                    .read();
         }
 
         if self.file_flags.contains(FileFlags::System) {
             let system_file_path = source_path
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            SystemReader::new(&system_file_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .read_mode(self.read_mode)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .ignore(self.ignore)
-                .trim(self.trim)
-                .read();
+            results.system = SystemReader::new(
+                &system_file_path,
+                translation_path,
+                engine_type,
+            )
+            .ignore_map(&mut ignore_map)
+            .read_mode(self.read_mode)
+            .romanize(self.romanize)
+            .logging(self.logging)
+            .ignore(self.ignore)
+            .trim(self.trim)
+            .read();
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugins_file_path =
-                    source_path.parent().unwrap_log().join("js/plugins.js");
+                let plugins_file_path = unsafe {
+                    source_path
+                        .parent()
+                        .unwrap_unchecked()
+                        .join("js/plugins.js")
+                };
 
-                PluginReader::new(&plugins_file_path, translation_path)
-                    .ignore_map(&mut ignore_map)
-                    .read_mode(self.read_mode)
-                    .romanize(self.romanize)
-                    .logging(self.logging)
-                    .ignore(self.ignore)
-                    .read();
+                if !plugins_file_path.exists() {
+                    return Err(Error::PluginsFileMissing);
+                }
+
+                results.scripts =
+                    PluginReader::new(&plugins_file_path, translation_path)
+                        .ignore_map(&mut ignore_map)
+                        .read_mode(self.read_mode)
+                        .romanize(self.romanize)
+                        .logging(self.logging)
+                        .ignore(self.ignore)
+                        .read();
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
                     get_engine_extension(engine_type)
                 ));
 
-                ScriptReader::new(&scripts_file_path, translation_path)
-                    .ignore_map(&mut ignore_map)
-                    .read_mode(self.read_mode)
-                    .romanize(self.romanize)
-                    .logging(self.logging)
-                    .ignore(self.ignore)
-                    .read();
+                results.scripts =
+                    ScriptReader::new(&scripts_file_path, translation_path)
+                        .ignore_map(&mut ignore_map)
+                        .read_mode(self.read_mode)
+                        .romanize(self.romanize)
+                        .logging(self.logging)
+                        .ignore(self.ignore)
+                        .read();
             }
         }
+
+        Ok(results)
     }
 }
 
@@ -580,7 +607,6 @@ impl Reader {
 /// # Example
 /// ```
 /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags, GameType};
-///
 /// let mut reader = ReaderBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
 /// ```
 #[derive(Default)]
@@ -594,7 +620,7 @@ impl ReaderBuilder {
     /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut reader = ReaderBuilder::new().build();
     /// ```
     pub fn new() -> Self {
@@ -613,7 +639,7 @@ impl ReaderBuilder {
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
     /// ```
     pub fn with_flags(mut self, flags: FileFlags) -> Self {
@@ -632,7 +658,7 @@ impl ReaderBuilder {
     /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default).build();
     /// ```
     pub fn read_mode(mut self, mode: ReadMode) -> Self {
@@ -652,7 +678,7 @@ impl ReaderBuilder {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().game_type(GameType::Termina).build();
     /// ```
     pub fn game_type(mut self, game_type: GameType) -> Self {
@@ -667,7 +693,7 @@ impl ReaderBuilder {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().romanize(true).build();
     /// ```
     pub fn romanize(mut self, enabled: bool) -> Self {
@@ -675,10 +701,12 @@ impl ReaderBuilder {
         self
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().logging(true).build();
     /// ```
     pub fn logging(mut self, enabled: bool) -> Self {
@@ -689,7 +717,7 @@ impl ReaderBuilder {
     /// Sets whether to ignore entries from `.rvpacker-ignore` file.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().ignore(true).build();
     /// ```
     pub fn ignore(mut self, enabled: bool) -> Self {
@@ -700,7 +728,7 @@ impl ReaderBuilder {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().trim(true).build();
     /// ```
     pub fn trim(mut self, enabled: bool) -> Self {
@@ -714,7 +742,7 @@ impl ReaderBuilder {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let reader = ReaderBuilder::new().duplicate_mode(DuplicateMode::AllowDuplicates).build();
     /// ```
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {

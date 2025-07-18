@@ -11,7 +11,7 @@ struct MapPurger<'a> {
 }
 
 impl<'a> MapPurger<'a> {
-    pub fn new(
+    fn new(
         source_path: &'a Path,
         translation_path: &'a Path,
         engine_type: EngineType,
@@ -27,43 +27,43 @@ impl<'a> MapPurger<'a> {
         }
     }
 
-    pub fn romanize(mut self, romanize: bool) -> Self {
+    fn romanize(mut self, romanize: bool) -> Self {
         self.base.base.romanize = romanize;
         self
     }
 
-    pub fn logging(mut self, logging: bool) -> Self {
+    fn logging(mut self, logging: bool) -> Self {
         self.base.base.logging = logging;
         self
     }
 
-    pub fn trim(mut self, trim: bool) -> Self {
+    fn trim(mut self, trim: bool) -> Self {
         self.base.base.trim = trim;
         self
     }
 
-    pub fn game_type(mut self, game_type: GameType) -> Self {
+    fn game_type(mut self, game_type: GameType) -> Self {
         self.base.base.game_type = game_type;
         self
     }
 
-    pub fn create_ignore(mut self, create_ignore: bool) -> Self {
+    fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
         self
     }
 
-    pub fn ignore_map(mut self, ignore_map: &'a mut IgnoreMap) -> Self {
+    fn ignore_map(mut self, ignore_map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = ignore_map;
         self
     }
 
-    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+    fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
         self.base.base.duplicate_mode = mode;
         self
     }
 
-    pub fn purge(self) {
-        self.base.process();
+    fn purge(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -72,7 +72,7 @@ struct OtherPurger<'a> {
 }
 
 impl<'a> OtherPurger<'a> {
-    pub fn new(
+    fn new(
         source_path: &'a Path,
         translation_path: &'a Path,
         engine_type: EngineType,
@@ -88,43 +88,43 @@ impl<'a> OtherPurger<'a> {
         }
     }
 
-    pub fn romanize(mut self, romanize: bool) -> Self {
+    fn romanize(mut self, romanize: bool) -> Self {
         self.base.base.romanize = romanize;
         self
     }
 
-    pub fn logging(mut self, logging: bool) -> Self {
+    fn logging(mut self, logging: bool) -> Self {
         self.base.base.logging = logging;
         self
     }
 
-    pub fn game_type(mut self, game_type: GameType) -> Self {
+    fn game_type(mut self, game_type: GameType) -> Self {
         self.base.base.game_type = game_type;
         self
     }
 
-    pub fn trim(mut self, trim: bool) -> Self {
+    fn trim(mut self, trim: bool) -> Self {
         self.base.base.trim = trim;
         self
     }
 
-    pub fn create_ignore(mut self, create_ignore: bool) -> Self {
+    fn create_ignore(mut self, create_ignore: bool) -> Self {
         self.base.base.create_ignore = create_ignore;
         self
     }
 
-    pub fn ignore_map(mut self, ignore_map: &'a mut IgnoreMap) -> Self {
+    fn ignore_map(mut self, ignore_map: &'a mut IgnoreMap) -> Self {
         self.base.base.ignore_map = ignore_map;
         self
     }
 
-    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
+    fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
         self.base.base.duplicate_mode = mode;
         self
     }
 
-    pub fn purge(self) {
-        self.base.process();
+    fn purge(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -174,8 +174,8 @@ impl<'a> SystemPurger<'a> {
         self
     }
 
-    pub fn purge(self) {
-        self.base.process();
+    pub fn purge(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -218,8 +218,8 @@ impl<'a> PluginPurger<'a> {
         self
     }
 
-    pub fn purge(self) {
-        self.base.process();
+    pub fn purge(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -262,8 +262,8 @@ impl<'a> ScriptPurger<'a> {
         self
     }
 
-    pub fn purge(self) {
-        self.base.process();
+    pub fn purge(self) -> ResultVec {
+        self.base.process()
     }
 }
 
@@ -275,7 +275,7 @@ impl<'a> ScriptPurger<'a> {
 /// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_flags`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set it.
 /// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Purger::set_romanize`].
-/// - `logging`: If enabled, logs operations and progress. Use [`Purger::set_logging`]
+/// - `logging`: If enabled, logs operations and progress. Use [`Purger::set_logging`] to set it. As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
 /// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Purger::set_trim`] to set it.
 /// - `create_ignore`: If enabled, creates `.rvpacker-ignore` file from purged lines, that can be used in
 ///   `Reader` struct when its `ignore` option is set.
@@ -286,7 +286,7 @@ impl<'a> ScriptPurger<'a> {
 ///
 /// let mut purger = Purger::new();
 /// purger.set_flags(FileFlags::Map | FileFlags::Other);
-/// purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
+/// let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
 #[derive(Default)]
 pub struct Purger {
@@ -305,7 +305,7 @@ impl Purger {
     /// By default, all four file flags are set (all files will be purged), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut purger = Purger::new();
     /// ```
     pub fn new() -> Self {
@@ -324,7 +324,7 @@ impl Purger {
     /// - `flags` - A `FileFlags` value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_flags(FileFlags::Map | FileFlags::Other);
     /// ```
     pub fn set_flags(&mut self, file_flags: FileFlags) {
@@ -345,7 +345,7 @@ impl Purger {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_game_type(GameType::Termina);
     /// ```
     pub fn set_game_type(&mut self, game_type: GameType) {
@@ -361,17 +361,19 @@ impl Purger {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_romanize(true);
     /// ```
     pub fn set_romanize(&mut self, enabled: bool) {
         self.romanize = enabled;
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_logging(true);
     /// ```
     pub fn set_logging(&mut self, enabled: bool) {
@@ -383,7 +385,7 @@ impl Purger {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_trim(true);
     /// ```
     pub fn set_trim(&mut self, enabled: bool) {
@@ -393,7 +395,7 @@ impl Purger {
     /// Sets whether to create `.rvpacker-ignore` file from purged lines.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_create_ignore(true);
     /// ```
     pub fn set_create_ignore(&mut self, enabled: bool) {
@@ -408,7 +410,7 @@ impl Purger {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// purger.set_duplicate_mode(DuplicateMode::AllowDuplicates);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
@@ -421,11 +423,11 @@ impl Purger {
     ///
     /// # Arguments
     /// - `source_path` - Path to the directory containing RPG Maker files.
-    /// - `translation_path` - Path to the directory where `translation` directory with `.txt` files will be created.
+    /// - `translation_path` - Path to the directory containing `.txt` translation files.
     /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
     /// ```
     pub fn purge<P: AsRef<Path> + Sync>(
@@ -433,84 +435,102 @@ impl Purger {
         source_path: P,
         translation_path: P,
         engine_type: EngineType,
-    ) {
+    ) -> Result<FileResults, Error> {
+        let mut results = FileResults::default();
+
         if self.file_flags.is_empty() {
-            return;
-        }
-
-        let mut ignore_map = IgnoreMap::default();
-
-        if self.create_ignore {
-            ignore_map = parse_ignore(
-                translation_path.as_ref().join(RVPACKER_IGNORE_FILE),
-                self.duplicate_mode,
-                false,
-            );
+            return Ok(results);
         }
 
         let source_path = source_path.as_ref();
         let translation_path = translation_path.as_ref();
 
+        let mut ignore_map = IgnoreMap::default();
+
+        if self.create_ignore {
+            ignore_map = parse_ignore(
+                translation_path.join(RVPACKER_IGNORE_FILE),
+                self.duplicate_mode,
+                false,
+            )?;
+        }
+
         if self.file_flags.contains(FileFlags::Map) {
-            MapPurger::new(source_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .game_type(self.game_type)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .trim(self.trim)
-                .duplicate_mode(self.duplicate_mode)
-                .create_ignore(self.create_ignore)
-                .purge();
+            results.map =
+                MapPurger::new(source_path, translation_path, engine_type)
+                    .ignore_map(&mut ignore_map)
+                    .game_type(self.game_type)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .trim(self.trim)
+                    .duplicate_mode(self.duplicate_mode)
+                    .create_ignore(self.create_ignore)
+                    .purge();
         }
 
         if self.file_flags.contains(FileFlags::Other) {
-            OtherPurger::new(source_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .game_type(self.game_type)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .trim(self.trim)
-                .duplicate_mode(self.duplicate_mode)
-                .create_ignore(self.create_ignore)
-                .purge();
+            results.other =
+                OtherPurger::new(source_path, translation_path, engine_type)
+                    .ignore_map(&mut ignore_map)
+                    .game_type(self.game_type)
+                    .romanize(self.romanize)
+                    .logging(self.logging)
+                    .trim(self.trim)
+                    .duplicate_mode(self.duplicate_mode)
+                    .create_ignore(self.create_ignore)
+                    .purge();
         }
 
         if self.file_flags.contains(FileFlags::System) {
             let system_file_path = source_path
                 .join(format!("System.{}", get_engine_extension(engine_type)));
 
-            SystemPurger::new(&system_file_path, translation_path, engine_type)
-                .ignore_map(&mut ignore_map)
-                .romanize(self.romanize)
-                .logging(self.logging)
-                .trim(self.trim)
-                .create_ignore(self.create_ignore)
-                .purge();
+            results.system = SystemPurger::new(
+                &system_file_path,
+                translation_path,
+                engine_type,
+            )
+            .ignore_map(&mut ignore_map)
+            .romanize(self.romanize)
+            .logging(self.logging)
+            .trim(self.trim)
+            .create_ignore(self.create_ignore)
+            .purge();
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugins_file_path =
-                    source_path.parent().unwrap_log().join("js/plugins.js");
+                let plugins_file_path = unsafe {
+                    source_path
+                        .parent()
+                        .unwrap_unchecked()
+                        .join("js/plugins.js")
+                };
 
-                PluginPurger::new(&plugins_file_path, translation_path)
-                    .ignore_map(&mut ignore_map)
-                    .romanize(self.romanize)
-                    .logging(self.logging)
-                    .create_ignore(self.create_ignore)
-                    .purge();
+                if !plugins_file_path.exists() {
+                    return Err(Error::PluginsFileMissing);
+                }
+
+                results.scripts =
+                    PluginPurger::new(&plugins_file_path, translation_path)
+                        .ignore_map(&mut ignore_map)
+                        .romanize(self.romanize)
+                        .logging(self.logging)
+                        .create_ignore(self.create_ignore)
+                        .purge();
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
                     get_engine_extension(engine_type)
                 ));
 
-                ScriptPurger::new(&scripts_file_path, translation_path)
-                    .ignore_map(&mut ignore_map)
-                    .romanize(self.romanize)
-                    .logging(self.logging)
-                    .create_ignore(self.create_ignore)
-                    .purge();
+                results.scripts =
+                    ScriptPurger::new(&scripts_file_path, translation_path)
+                        .ignore_map(&mut ignore_map)
+                        .romanize(self.romanize)
+                        .logging(self.logging)
+                        .create_ignore(self.create_ignore)
+                        .purge();
             }
         }
 
@@ -537,9 +557,17 @@ impl Purger {
                 },
             );
 
-            write(translation_path.join(RVPACKER_IGNORE_FILE), contents)
-                .unwrap_log();
+            let ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
+
+            write(&ignore_file_path, contents).map_err(|err| {
+                Error::WriteFileFailed {
+                    file: ignore_file_path,
+                    err,
+                }
+            })?;
         }
+
+        Ok(results)
     }
 }
 
@@ -573,7 +601,7 @@ impl PurgerBuilder {
     /// By default, all four file flags are set (all files will be purged), duplicate mode is set to `AllowDuplicates`, and all other options are disabled.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let mut purger = PurgerBuilder::new().build();
     /// ```
     pub fn new() -> Self {
@@ -594,7 +622,7 @@ impl PurgerBuilder {
     /// - `flags` - A `FileFlags` value indicating the file types to include.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
     /// ```
     pub fn with_flags(mut self, file_flags: FileFlags) -> Self {
@@ -616,7 +644,7 @@ impl PurgerBuilder {
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().game_type(FileFlags::Map | FileFlags::Other).build();
     /// ```
     pub fn game_type(mut self, game_type: GameType) -> Self {
@@ -633,7 +661,7 @@ impl PurgerBuilder {
     /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().romanize(true).build();
     /// ```
     pub fn romanize(mut self, enabled: bool) -> Self {
@@ -641,10 +669,12 @@ impl PurgerBuilder {
         self
     }
 
-    /// Sets whether to log file processing.
+    /// Sets whether to output logs.
+    ///
+    /// As this crate uses `log` for logging, you should [set up logging in your program](https://docs.rs/log/latest/log/#available-logging-implementations).
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().logging(true).build();
     /// ```
     pub fn logging(mut self, enabled: bool) -> Self {
@@ -657,7 +687,7 @@ impl PurgerBuilder {
     /// Sets whether to trim whitespace from strings.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().trim(true).build();
     /// ```
     pub fn trim(mut self, enabled: bool) -> Self {
@@ -668,7 +698,7 @@ impl PurgerBuilder {
     /// Sets whether to create `.rvpacker-ignore` file from purged lines.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().create_ignore(true).build();
     /// ```
     pub fn create_ignore(mut self, enabled: bool) -> Self {
@@ -684,7 +714,7 @@ impl PurgerBuilder {
     /// - [`DuplicateMode::NoDuplicates`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
     ///
     /// # Example
-    /// ```no_run
+    /// ```compile_fail
     /// let purger = PurgerBuilder::new().duplicate_mode(DuplicateMode::AllowDuplicates);.build();
     /// ```
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {

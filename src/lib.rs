@@ -26,7 +26,7 @@ use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
 
 let mut reader = Reader::new();
 reader.set_flags(FileFlags::Map | FileFlags::Other);
-reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
+let result = reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 ```
 
 ### `write` module
@@ -42,7 +42,7 @@ use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
 
 let mut writer = Writer::new();
 writer.set_flags(FileFlags::Map | FileFlags::Other);
-writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
+let result = writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
 ```
 
 ### `purge` module
@@ -58,7 +58,7 @@ use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
 
 let mut purger = Purger::new();
 purger.set_flags(FileFlags::Map | FileFlags::Other);
-purger.write("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
+let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 ```
 
 ### `json` module
@@ -68,10 +68,10 @@ purger.write("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 #### Example
 
 ```rust
-use rvpacker_txt_rs_lib::json::{generate_json, write_json};
+use rvpacker_txt_rs_lib::{json::{generate, write}, ReadMode, EngineType};
 
-generate_json("C:/Game", "C:/Game", ReadMode::Default);
-write_json("C:/Game");
+let result = generate("C:/Game/Data", "C:/Game/json", ReadMode::Default, true);
+let result = write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce, true);
 ```
 
 ## License
@@ -94,8 +94,13 @@ pub mod read;
 pub mod types;
 pub mod write;
 
-pub use functions::{get_engine_extension, read_to_string_without_bom};
+pub use functions::{
+    get_engine_extension, parse_ignore, read_to_string_without_bom,
+};
 pub use purge::{Purger, PurgerBuilder};
 pub use read::{Reader, ReaderBuilder};
-pub use types::{EngineType, FileFlags, GameType, ReadMode};
+pub use types::{
+    DuplicateMode, EngineType, Error, FileFlags, FileResults, GameType,
+    Outcome, ProcessingMode, ReadMode, ResultVec,
+};
 pub use write::{Writer, WriterBuilder};
