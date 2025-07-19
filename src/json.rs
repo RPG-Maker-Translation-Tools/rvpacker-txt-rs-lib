@@ -26,7 +26,7 @@ pub fn generate<P: AsRef<Path>>(
     output_path: P,
     read_mode: ReadMode,
     logging: bool,
-) -> ResultVec {
+) -> Results {
     if read_mode.is_append() {
         return vec![Err(Error::AppendModeIsNotSupported)].into();
     }
@@ -40,7 +40,7 @@ pub fn generate<P: AsRef<Path>>(
     let result = create_dir_all(output_path)
         .map_err(|err| Error::CreateDirFailed {
             path: output_path.to_path_buf(),
-            err,
+            err: err.to_string(),
         })
         .map(|_| Outcome::GeneratedJSON(PathBuf::new()));
 
@@ -55,7 +55,7 @@ pub fn generate<P: AsRef<Path>>(
         Err(err) => {
             return vec![Err(Error::ReadDirFailed {
                 path: source_path.as_ref().to_path_buf(),
-                err,
+                err: err.to_string(),
             })]
             .into();
         }
@@ -85,13 +85,13 @@ pub fn generate<P: AsRef<Path>>(
             let path = entry.path();
             let content = read(&path).map_err(|err| Error::ReadFileFailed {
                 file: path.clone(),
-                err,
+                err: err.to_string(),
             })?;
             let loaded =
                 load_utf8(&content, INSTANCE_VAR_PREFIX).map_err(|err| {
                     Error::LoadFailed {
                         file: path.clone(),
-                        err,
+                        err: err.to_string(),
                     }
                 })?;
 
@@ -102,7 +102,7 @@ pub fn generate<P: AsRef<Path>>(
             let result = fs::write(output_file_path, json_string)
                 .map_err(|err| Error::WriteFileFailed {
                     file: path.clone(),
-                    err,
+                    err: err.to_string(),
                 })
                 .map(|_| Outcome::GeneratedJSON(path));
 
@@ -137,7 +137,7 @@ pub fn write<P: AsRef<Path>>(
     output_path: P,
     engine_type: EngineType,
     logging: bool,
-) -> ResultVec {
+) -> Results {
     let entries = read_dir(&json_path);
 
     let entries = match entries {
@@ -145,7 +145,7 @@ pub fn write<P: AsRef<Path>>(
         Err(err) => {
             return vec![Err(Error::ReadDirFailed {
                 path: json_path.as_ref().to_path_buf(),
-                err,
+                err: err.to_string(),
             })]
             .into();
         }
@@ -155,7 +155,7 @@ pub fn write<P: AsRef<Path>>(
     let result =
         create_dir_all(output_path).map_err(|err| Error::CreateDirFailed {
             path: output_path.to_path_buf(),
-            err,
+            err: err.to_string(),
         });
 
     if let Err(err) = result {
@@ -170,13 +170,13 @@ pub fn write<P: AsRef<Path>>(
             let content =
                 read_to_string(&path).map_err(|err| Error::ReadFileFailed {
                     file: path.clone(),
-                    err,
+                    err: err.to_string(),
                 })?;
 
             let json = from_str::<Value>(&content).map_err(|err| {
                 Error::JSONParseFailed {
                     file: path.clone(),
-                    err,
+                    err: err.to_string(),
                 }
             })?;
 
@@ -188,7 +188,7 @@ pub fn write<P: AsRef<Path>>(
             let result = fs::write(&output_file_path, dumped)
                 .map_err(|err| Error::WriteFileFailed {
                     file: output_file_path,
-                    err,
+                    err: err.to_string(),
                 })
                 .map(|_| Outcome::WrittenJSON(output_file.clone()));
 

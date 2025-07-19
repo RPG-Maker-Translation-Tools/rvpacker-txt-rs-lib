@@ -17,6 +17,15 @@ pub const fn get_engine_extension(engine_type: EngineType) -> &'static str {
 }
 
 /// Parses ignore file contents to `IgnoreMap`.
+///
+/// # Arguments
+/// - `ignore_file_path` - Path to the `.rvpacker-ignore` file.
+/// - `duplicate_mode` - [`DuplicateMode`], which was used during read.
+/// - `read` - Parse for reading or purging.
+///
+/// # Returns
+/// - `Ok(IgnoreMap)` if everything went fine.
+/// - `Err(Error::ReadFileFailed)` if cannot read file.
 pub fn parse_ignore(
     ignore_file_path: PathBuf,
     duplicate_mode: DuplicateMode,
@@ -32,7 +41,7 @@ pub fn parse_ignore(
         read_to_string(&ignore_file_path).map_err(|err| {
             Error::ReadFileFailed {
                 file: ignore_file_path,
-                err,
+                err: err.to_string(),
             }
         })?;
 

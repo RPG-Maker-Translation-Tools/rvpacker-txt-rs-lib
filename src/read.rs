@@ -65,7 +65,7 @@ impl<'a> MapReader<'a> {
         self
     }
 
-    pub fn read(self) -> ResultVec {
+    pub fn read(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -131,7 +131,7 @@ impl<'a> OtherReader<'a> {
         self
     }
 
-    pub fn read(self) -> ResultVec {
+    pub fn read(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -187,7 +187,7 @@ impl<'a> SystemReader<'a> {
         self
     }
 
-    pub fn read(self) -> ResultVec {
+    pub fn read(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -236,7 +236,7 @@ impl<'a> ScriptReader<'a> {
         self
     }
 
-    pub fn read(self) -> ResultVec {
+    pub fn read(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -285,7 +285,7 @@ impl<'a> PluginReader<'a> {
         self
     }
 
-    pub fn read(self) -> ResultVec {
+    pub fn read(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -498,7 +498,7 @@ impl Reader {
         create_dir_all(translation_path).map_err(|err| {
             Error::CreateDirFailed {
                 path: translation_path.to_path_buf(),
-                err,
+                err: err.to_string(),
             }
         })?;
 
@@ -513,7 +513,7 @@ impl Reader {
                     .ignore(self.ignore)
                     .trim(self.trim)
                     .duplicate_mode(self.duplicate_mode)
-                    .read();
+                    .read()?;
         }
 
         if self.file_flags.contains(FileFlags::Other) {
@@ -527,7 +527,7 @@ impl Reader {
                     .ignore(self.ignore)
                     .trim(self.trim)
                     .duplicate_mode(self.duplicate_mode)
-                    .read();
+                    .read()?;
         }
 
         if self.file_flags.contains(FileFlags::System) {
@@ -545,7 +545,7 @@ impl Reader {
             .logging(self.logging)
             .ignore(self.ignore)
             .trim(self.trim)
-            .read();
+            .read()?;
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
@@ -568,7 +568,7 @@ impl Reader {
                         .romanize(self.romanize)
                         .logging(self.logging)
                         .ignore(self.ignore)
-                        .read();
+                        .read()?;
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
@@ -582,7 +582,7 @@ impl Reader {
                         .romanize(self.romanize)
                         .logging(self.logging)
                         .ignore(self.ignore)
-                        .read();
+                        .read()?;
             }
         }
 

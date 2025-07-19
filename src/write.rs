@@ -50,7 +50,7 @@ impl<'a> MapWriter<'a> {
         self
     }
 
-    pub fn write(self) -> ResultVec {
+    pub fn write(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -102,7 +102,7 @@ impl<'a> OtherWriter<'a> {
         self
     }
 
-    pub fn write(self) -> ResultVec {
+    pub fn write(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -144,7 +144,7 @@ impl<'a> SystemWriter<'a> {
         self
     }
 
-    pub fn write(self) -> ResultVec {
+    pub fn write(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -179,7 +179,7 @@ impl<'a> PluginWriter<'a> {
         self
     }
 
-    pub fn write(self) -> ResultVec {
+    pub fn write(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -214,7 +214,7 @@ impl<'a> ScriptWriter<'a> {
         self
     }
 
-    pub fn write(self) -> ResultVec {
+    pub fn write(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -399,7 +399,7 @@ impl Writer {
 
         create_dir_all(output_path).map_err(|err| Error::CreateDirFailed {
             path: output_path.to_path_buf(),
-            err,
+            err: err.to_string(),
         })?;
 
         if self.file_flags.contains(FileFlags::Map) {
@@ -414,7 +414,7 @@ impl Writer {
             .logging(self.logging)
             .duplicate_mode(self.duplicate_mode)
             .trim(self.trim)
-            .write();
+            .write()?;
         }
 
         if self.file_flags.contains(FileFlags::Other) {
@@ -429,7 +429,7 @@ impl Writer {
             .logging(self.logging)
             .duplicate_mode(self.duplicate_mode)
             .trim(self.trim)
-            .write();
+            .write()?;
         }
 
         if self.file_flags.contains(FileFlags::System) {
@@ -445,7 +445,7 @@ impl Writer {
             .romanize(self.romanize)
             .logging(self.logging)
             .trim(self.trim)
-            .write();
+            .write()?;
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
@@ -468,7 +468,7 @@ impl Writer {
                 create_dir_all(&plugins_output_path).map_err(|err| {
                     Error::CreateDirFailed {
                         path: plugins_output_path.clone(),
-                        err,
+                        err: err.to_string(),
                     }
                 })?;
 
@@ -479,7 +479,7 @@ impl Writer {
                 )
                 .romanize(self.romanize)
                 .logging(self.logging)
-                .write();
+                .write()?;
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
@@ -493,7 +493,7 @@ impl Writer {
                 )
                 .romanize(self.romanize)
                 .logging(self.logging)
-                .write();
+                .write()?;
             }
         }
 

@@ -101,6 +101,6 @@ pub use purge::{Purger, PurgerBuilder};
 pub use read::{Reader, ReaderBuilder};
 pub use types::{
     DuplicateMode, EngineType, Error, FileFlags, FileResults, GameType,
-    Outcome, ProcessingMode, ReadMode, ResultVec,
+    Outcome, ProcessingMode, ReadMode, Results,
 };
 pub use write::{Writer, WriterBuilder};

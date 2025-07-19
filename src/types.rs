@@ -4,7 +4,7 @@ use getset::{Getters, MutGetters, Setters};
 use gxhash::{GxBuildHasher, HashSet};
 use indexmap::{IndexMap, IndexSet};
 use num_enum::FromPrimitive;
-use std::{hash::BuildHasher, io, mem::take, ops::Deref, path::PathBuf};
+use std::{hash::BuildHasher, mem::take, ops::Deref, path::PathBuf};
 use strum_macros::{Display, EnumIs};
 use thiserror::Error;
 
@@ -21,17 +21,19 @@ pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
 pub(crate) type Lines = IndexSetGx<String>;
 pub(crate) type TranslationDuplicateMap = Vec<(String, TranslationEntry)>;
 
-#[must_use = "this `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
 #[derive(From, Into, Deref, DerefMut, Debug, Default, IntoIterator)]
-pub struct ResultVec(Vec<Result<Outcome, Error>>);
+#[must_use = "this `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub struct Results(Vec<Result<Outcome, Error>>);
 
-#[must_use = "this `FileResults` struct of `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
 #[derive(Debug)]
+#[must_use = "this `FileResults` struct of `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct FileResults {
-    pub map: ResultVec,
-    pub other: ResultVec,
-    pub system: ResultVec,
-    pub scripts: ResultVec,
+    pub map: Results,
+    pub other: Results,
+    pub system: Results,
+    pub scripts: Results,
 }
 
 impl Default for FileResults {
@@ -60,31 +62,26 @@ impl IntoIterator for FileResults {
 }
 
 #[derive(Debug, Error)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub enum Error {
     /// Error for failed `fs::read_dir`.
     #[error("Reading `source_path` {path} failed with: {err}")]
-    ReadDirFailed { path: PathBuf, err: io::Error },
+    ReadDirFailed { path: PathBuf, err: String },
     /// Error for failed `fs::create_dir`.
     #[error("Create directory {path} failed with: {err}")]
-    CreateDirFailed { path: PathBuf, err: io::Error },
+    CreateDirFailed { path: PathBuf, err: String },
     /// Error for failed `fs::write`.
     #[error("Writing file {file} failed with: {err}")]
-    WriteFileFailed { file: PathBuf, err: io::Error },
+    WriteFileFailed { file: PathBuf, err: String },
     /// Error for failed `fs::read`.
     #[error("Read file {file} failed with: {err}")]
-    ReadFileFailed { file: PathBuf, err: io::Error },
+    ReadFileFailed { file: PathBuf, err: String },
     /// Error for failed `marshal_rs::load`.
     #[error("Loading RPG Maker file {file} failed with: {err}")]
-    LoadFailed {
-        file: PathBuf,
-        err: marshal_rs::LoadError,
-    },
+    LoadFailed { file: PathBuf, err: String },
     /// Error for failed `serde_json::from_str`.
     #[error("Parsing `.json` file {file} failed with: {err}")]
-    JSONParseFailed {
-        file: PathBuf,
-        err: serde_json::Error,
-    },
+    JSONParseFailed { file: PathBuf, err: String },
     /// Error for non-existant `source_path/../js/plugins.js`.
     #[error(
         "When operating on `MV/MZ` (`EngineType::New`) games and `FileFlags::Scripts` flag is set, parent directory of `source_path` must contain `js` directory with `plugins.js` file."
@@ -96,6 +93,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Display)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub enum Outcome {
     /// Outcome for already existing `.txt` file when `read_mode` is set to `Default`.
     #[strum(
@@ -548,6 +546,7 @@ impl RPGMFileType {
 
 bitflags! {
     #[derive(PartialEq, Debug, Clone, Copy)]
+    #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
     pub struct FileFlags: u8 {
         const None = 0;
         /// `Mapxxx.ext` files.

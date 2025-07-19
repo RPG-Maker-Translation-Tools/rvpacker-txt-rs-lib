@@ -126,7 +126,7 @@ pub struct Base<'a> {
     output_path: &'a Path,
 
     labels: Labels,
-    results: ResultVec,
+    results: Results,
 }
 
 impl<'a> Base<'a> {
@@ -169,7 +169,7 @@ impl<'a> Base<'a> {
             output_path,
 
             labels: Labels::new(engine_type),
-            results: ResultVec::default(),
+            results: Results::default(),
         }
     }
 
@@ -407,7 +407,7 @@ impl<'a> Base<'a> {
             Err(err) => {
                 self.push_result(Err(Error::WriteFileFailed {
                     file: output_file_path.clone(),
-                    err,
+                    err: err.to_string(),
                 }));
             }
         }
@@ -684,7 +684,7 @@ impl<'a> Base<'a> {
             let content = read_to_string_without_bom(&path).map_err(|err| {
                 Error::ReadFileFailed {
                     file: path.as_ref().to_path_buf(),
-                    err,
+                    err: err.to_string(),
                 }
             })?;
 
@@ -692,7 +692,7 @@ impl<'a> Base<'a> {
                 from_str::<serde_json::Value>(&content).map_err(|err| {
                     Error::JSONParseFailed {
                         file: path.as_ref().to_path_buf(),
-                        err,
+                        err: err.to_string(),
                     }
                 })?;
 
@@ -700,7 +700,7 @@ impl<'a> Base<'a> {
         } else {
             let content = read(&path).map_err(|err| Error::ReadFileFailed {
                 file: path.as_ref().to_path_buf(),
-                err,
+                err: err.to_string(),
             })?;
 
             let loaded = if self.file_type.is_scripts() {
@@ -710,29 +710,24 @@ impl<'a> Base<'a> {
             }
             .map_err(|err| Error::LoadFailed {
                 file: path.as_ref().to_path_buf(),
-                err,
+                err: err.to_string(),
             })?;
 
             Ok(loaded)
         }
     }
 
-    fn get_translation_maps(&mut self) -> ControlFlow<()> {
+    fn get_translation_maps(&mut self) -> Result<(), Error> {
         if !self.mode.is_read() || self.read_mode.is_append() {
             self.translation_maps.clear();
 
-            let translation = read_to_string(&self.text_file_path);
-            let translation = match translation {
-                Ok(translation) => translation,
-                Err(err) => {
-                    self.push_result(Err(Error::ReadFileFailed {
+            let translation =
+                read_to_string(&self.text_file_path).map_err(|err| {
+                    Error::ReadFileFailed {
                         file: self.text_file_path.clone(),
-                        err,
-                    }));
-
-                    return ControlFlow::Break(());
-                }
-            };
+                        err: err.to_string(),
+                    }
+                })?;
 
             let mut translation_lines =
                 translation.lines().enumerate().peekable();
@@ -779,7 +774,7 @@ impl<'a> Base<'a> {
 
             loop {
                 let Some((_, next)) = translation_lines.next() else {
-                    return ControlFlow::Continue(());
+                    return Ok(());
                 };
 
                 // Push the first line in iterator to comments
@@ -883,7 +878,7 @@ impl<'a> Base<'a> {
             }
         }
 
-        ControlFlow::Continue(())
+        Ok(())
     }
 
     /// Sets `self.translation_map` to the entry from `self.translation_maps`.
@@ -1304,7 +1299,7 @@ impl<'a> Base<'a> {
         self.results.push(result);
     }
 
-    fn results(&mut self) -> ResultVec {
+    fn results(&mut self) -> Results {
         take(&mut self.results)
     }
 }
@@ -1416,46 +1411,24 @@ impl<'a> MapBase<'a> {
         }
     }
 
-    fn process_maps(&mut self) {
-        let map_entries = read_dir(self.base.source_path);
-
-        let map_entries = match map_entries {
-            Ok(entries) => {
-                let engine_type = self.base.engine_type;
-                entries.flatten().filter_map(move |entry| {
-                    Self::filter_maps(entry, engine_type)
-                })
-            }
-            Err(err) => {
-                self.base.push_result(Err(Error::ReadDirFailed {
-                    path: self.base.source_path.to_path_buf(),
-                    err,
-                }));
-
-                return;
-            }
-        };
+    fn process_maps(&mut self) -> Result<(), Error> {
+        let engine_type = self.base.engine_type;
+        let map_entries = read_dir(self.base.source_path)
+            .map_err(|err| Error::ReadDirFailed {
+                path: self.base.source_path.to_path_buf(),
+                err: err.to_string(),
+            })?
+            .flatten()
+            .filter_map(move |entry| Self::filter_maps(entry, engine_type));
 
         let mapinfos_path =
             format!("MapInfos.{}", get_engine_extension(self.base.engine_type));
         let mapinfos = self
             .base
-            .parse_rpgm_file(self.base.source_path.join(mapinfos_path));
-
-        let mapinfos = match mapinfos {
-            Ok(mapinfos) => mapinfos,
-            Err(err) => {
-                self.base.push_result(Err(err));
-                return;
-            }
-        };
-
+            .parse_rpgm_file(self.base.source_path.join(mapinfos_path))?;
         self.base.reserve();
 
-        let flow = self.base.get_translation_maps();
-        if flow.is_break() {
-            return;
-        }
+        self.base.get_translation_maps()?;
 
         if self.base.duplicate_mode.is_remove()
             && !self.base.read_mode.is_append()
@@ -1665,16 +1638,18 @@ impl<'a> MapBase<'a> {
                 }
             }
         }
+
+        Ok(())
     }
 
-    pub fn process(mut self) -> ResultVec {
+    pub fn process(mut self) -> Result<Results, Error> {
         self.base.text_file_path = self.base.translation_path.join("maps.txt");
 
         if self.base.should_abort_read() {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
-        self.process_maps();
+        self.process_maps()?;
 
         // When writing, we call `write_output` on each `Mapxxx` file separately.
         if !self.base.mode.is_write() {
@@ -1682,7 +1657,7 @@ impl<'a> MapBase<'a> {
             self.base.write_output(Value::default());
         }
 
-        self.base.results()
+        Ok(self.base.results())
     }
 }
 
@@ -2172,24 +2147,20 @@ impl<'a> OtherBase<'a> {
         None
     }
 
-    pub fn process(mut self) -> ResultVec {
-        let entries = read_dir(self.base.source_path).map_err(|err| {
-            Error::ReadDirFailed {
+    pub fn process(mut self) -> Result<Results, Error> {
+        let entries = read_dir(self.base.source_path)
+            .map_err(|err| Error::ReadDirFailed {
                 path: self.base.source_path.to_path_buf(),
-                err,
-            }
-        });
-
-        let entries = match entries {
-            Ok(entries) => entries.flatten().filter_map(move |entry| {
+                err: err.to_string(),
+            })?
+            .flatten()
+            .filter_map(move |entry| {
                 Self::filter_other(
                     entry,
                     self.base.engine_type,
                     self.base.game_type,
                 )
-            }),
-            Err(err) => return ResultVec::from(vec![Err(err)]),
-        };
+            });
 
         if self.base.duplicate_mode.is_remove()
             && !self.base.read_mode.is_append()
@@ -2230,12 +2201,7 @@ impl<'a> OtherBase<'a> {
             }
 
             self.base.reserve();
-
-            let flow = self.base.get_translation_maps();
-            if flow.is_break() {
-                continue;
-            }
-
+            self.base.get_translation_maps()?;
             self.base.append_additional_data();
 
             let mut entry_value = match self.base.parse_rpgm_file(&path) {
@@ -2305,7 +2271,7 @@ impl<'a> OtherBase<'a> {
             self.base.write_output(entry_value);
         }
 
-        self.base.results()
+        Ok(self.base.results())
     }
 }
 
@@ -2439,29 +2405,17 @@ impl<'a> SystemBase<'a> {
         }
     }
 
-    pub fn process(mut self) -> ResultVec {
+    pub fn process(mut self) -> Result<Results, Error> {
         self.base.text_file_path =
             self.base.translation_path.join("system.txt");
 
         if self.base.should_abort_read() {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
         self.base.reserve();
-
-        let flow = self.base.get_translation_maps();
-        if flow.is_break() {
-            return self.base.results();
-        }
-
-        self.system_value =
-            match self.base.parse_rpgm_file(self.base.source_path) {
-                Ok(value) => value,
-                Err(err) => {
-                    self.base.push_result(Err(err));
-                    return self.base.results();
-                }
-            };
+        self.base.get_translation_maps()?;
+        self.system_value = self.base.parse_rpgm_file(self.base.source_path)?;
 
         let mut changed = false;
 
@@ -2526,11 +2480,11 @@ impl<'a> SystemBase<'a> {
         }
 
         if !changed {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
         self.base.write_output(self.system_value.take());
-        self.base.results()
+        Ok(self.base.results())
     }
 }
 
@@ -2700,23 +2654,20 @@ impl<'a> ScriptBase<'a> {
         }
     }
 
-    pub fn process(mut self) -> ResultVec {
+    pub fn process(mut self) -> Result<Results, Error> {
         self.base.text_file_path =
             self.base.translation_path.join("scripts.txt");
 
         if self.base.should_abort_read() {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
-        self.scripts_array =
-            match self.base.parse_rpgm_file(self.base.source_path) {
-                Ok(value) => unsafe { value.into_array().unwrap_unchecked() },
-                Err(err) => {
-                    self.base.push_result(Err(err));
-                    return self.base.results();
-                }
-            };
-
+        self.scripts_array = unsafe {
+            self.base
+                .parse_rpgm_file(self.base.source_path)?
+                .into_array()
+                .unwrap_unchecked()
+        };
         self.decode_scripts();
 
         let regexes = unsafe {
@@ -2731,11 +2682,7 @@ impl<'a> ScriptBase<'a> {
         };
 
         self.base.reserve();
-
-        let flow = self.base.get_translation_maps();
-        if flow.is_break() {
-            return self.base.results();
-        }
+        self.base.get_translation_maps()?;
 
         let mut changed = false;
 
@@ -2818,12 +2765,12 @@ impl<'a> ScriptBase<'a> {
         }
 
         if !changed {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
         self.base.write_output(Value::array(self.scripts_array));
 
-        self.base.results()
+        Ok(self.base.results())
     }
 }
 
@@ -2934,24 +2881,21 @@ impl<'a> PluginBase<'a> {
         }
     }
 
-    pub fn process(mut self) -> ResultVec {
+    pub fn process(mut self) -> Result<Results, Error> {
         self.base.text_file_path =
             self.base.translation_path.join("plugins.txt");
 
         if self.base.should_abort_read() {
-            return self.base.results();
+            return Ok(self.base.results());
         }
 
-        let plugins_content = read_to_string(self.base.source_path);
-        let plugins_content = match plugins_content {
-            Ok(content) => content,
-            Err(err) => {
-                return ResultVec::from(vec![Err(Error::ReadFileFailed {
+        let plugins_content =
+            read_to_string(self.base.source_path).map_err(|err| {
+                Error::ReadFileFailed {
                     file: self.base.source_path.to_path_buf(),
-                    err,
-                })]);
-            }
-        };
+                    err: err.to_string(),
+                }
+            })?;
 
         // '=' should always exist in plugins.js, panic is unlikely.
         let plugins_array =
@@ -2959,28 +2903,20 @@ impl<'a> PluginBase<'a> {
                 .1
                 .trim_end_matches([';', '\r', '\n']);
 
-        let value = from_str::<serde_json::Value>(plugins_array);
-
-        let value = match value {
-            Ok(value) => value,
-            Err(err) => {
-                return ResultVec::from(vec![Err(Error::JSONParseFailed {
+        let value =
+            from_str::<serde_json::Value>(plugins_array).map_err(|err| {
+                Error::JSONParseFailed {
                     file: self.base.source_path.to_path_buf(),
-                    err,
-                })]);
-            }
-        };
+                    err: err.to_string(),
+                }
+            })?;
 
         // Should always be array, panic is unlikely.
         self.plugins_array =
             unsafe { Value::from(value).into_array().unwrap_unchecked() };
 
         self.base.reserve();
-
-        let flow = self.base.get_translation_maps();
-        if flow.is_break() {
-            return self.base.results();
-        }
+        self.base.get_translation_maps()?;
 
         for (plugin_id, plugin_object) in
             mutable!(&self, Self).plugins_array.iter_mut().enumerate()
@@ -3007,6 +2943,6 @@ impl<'a> PluginBase<'a> {
         }
 
         self.base.write_output(Value::array(self.plugins_array));
-        self.base.results()
+        Ok(self.base.results())
     }
 }

@@ -62,7 +62,7 @@ impl<'a> MapPurger<'a> {
         self
     }
 
-    fn purge(self) -> ResultVec {
+    fn purge(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -123,7 +123,7 @@ impl<'a> OtherPurger<'a> {
         self
     }
 
-    fn purge(self) -> ResultVec {
+    fn purge(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -174,7 +174,7 @@ impl<'a> SystemPurger<'a> {
         self
     }
 
-    pub fn purge(self) -> ResultVec {
+    pub fn purge(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -218,7 +218,7 @@ impl<'a> PluginPurger<'a> {
         self
     }
 
-    pub fn purge(self) -> ResultVec {
+    pub fn purge(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -262,7 +262,7 @@ impl<'a> ScriptPurger<'a> {
         self
     }
 
-    pub fn purge(self) -> ResultVec {
+    pub fn purge(self) -> Result<Results, Error> {
         self.base.process()
     }
 }
@@ -465,7 +465,7 @@ impl Purger {
                     .trim(self.trim)
                     .duplicate_mode(self.duplicate_mode)
                     .create_ignore(self.create_ignore)
-                    .purge();
+                    .purge()?;
         }
 
         if self.file_flags.contains(FileFlags::Other) {
@@ -478,7 +478,7 @@ impl Purger {
                     .trim(self.trim)
                     .duplicate_mode(self.duplicate_mode)
                     .create_ignore(self.create_ignore)
-                    .purge();
+                    .purge()?;
         }
 
         if self.file_flags.contains(FileFlags::System) {
@@ -495,7 +495,7 @@ impl Purger {
             .logging(self.logging)
             .trim(self.trim)
             .create_ignore(self.create_ignore)
-            .purge();
+            .purge()?;
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
@@ -517,7 +517,7 @@ impl Purger {
                         .romanize(self.romanize)
                         .logging(self.logging)
                         .create_ignore(self.create_ignore)
-                        .purge();
+                        .purge()?;
             } else {
                 let scripts_file_path = source_path.join(format!(
                     "Scripts.{}",
@@ -530,7 +530,7 @@ impl Purger {
                         .romanize(self.romanize)
                         .logging(self.logging)
                         .create_ignore(self.create_ignore)
-                        .purge();
+                        .purge()?;
             }
         }
 
@@ -562,7 +562,7 @@ impl Purger {
             write(&ignore_file_path, contents).map_err(|err| {
                 Error::WriteFileFailed {
                     file: ignore_file_path,
-                    err,
+                    err: err.to_string(),
                 }
             })?;
         }
