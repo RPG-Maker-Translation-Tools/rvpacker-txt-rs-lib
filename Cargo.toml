@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "8.0.1"
+version = "9.0.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.80.0"
@@ -10,9 +10,6 @@ readme = "README.md"
 repository = "https://github.com/savannstm/rvpacker-txt-rs-lib"
 license-file = "LICENSE.md"
 
-[features]
-serde = ["dep:serde"]
-
 [dependencies]
 encoding_rs = "0.8.35"
 flate2 = "1.1.2"
@@ -20,15 +17,14 @@ indexmap = "2.10.0"
 marshal-rs = "1.1.1"
 regex = "1.11.1"
 serde_json = { version = "1.0.141", features = ["preserve_order"] }
-serde = { version = "1.0.219", optional = true }
+serde = { version = "1.0.219" }
 phf = { version = "0.12.1", features = ["macros"] }
 smallvec = "1.15.1"
 gxhash = "3.5.0"
 const_format = "0.2.34"
-bitflags = "2.9.1"
-strum_macros = "0.27.1"
+bitflags = { version = "2.9.1", features = ["serde"] }
+strum_macros = "0.27.2"
 thiserror = "2.0.12"
 num_enum = "0.7.4"
 getset = "0.1.6"
-derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "into", "into_iterator"] }
 log = "0.4.27"

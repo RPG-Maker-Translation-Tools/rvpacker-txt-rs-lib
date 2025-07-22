@@ -7,13 +7,8 @@ fn mz() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let purger = PurgerBuilder::new().build();
-    let results =
-        purger.purge(source_path, translation_path, EngineType::New)?;
-
-    for result in results {
-        result?;
-    }
+    let mut purger = PurgerBuilder::new().build();
+    purger.purge(source_path, translation_path, EngineType::New)?;
 
     Ok(())
 }
@@ -24,13 +19,8 @@ fn mv() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let purger = PurgerBuilder::new().build();
-    let results =
-        purger.purge(source_path, translation_path, EngineType::New)?;
-
-    for result in results {
-        result?;
-    }
+    let mut purger = PurgerBuilder::new().build();
+    purger.purge(source_path, translation_path, EngineType::New)?;
 
     Ok(())
 }
@@ -41,13 +31,8 @@ fn ace() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let purger = PurgerBuilder::new().build();
-    let results =
-        purger.purge(source_path, translation_path, EngineType::VXAce)?;
-
-    for result in results {
-        result?;
-    }
+    let mut purger = PurgerBuilder::new().build();
+    purger.purge(source_path, translation_path, EngineType::VXAce)?;
 
     Ok(())
 }
@@ -58,13 +43,8 @@ fn vx() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let purger = PurgerBuilder::new().build();
-    let results =
-        purger.purge(source_path, translation_path, EngineType::VX)?;
-
-    for result in results {
-        result?;
-    }
+    let mut purger = PurgerBuilder::new().build();
+    purger.purge(source_path, translation_path, EngineType::VX)?;
 
     Ok(())
 }
@@ -75,13 +55,8 @@ fn xp() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let purger = PurgerBuilder::new().build();
-    let results =
-        purger.purge(source_path, translation_path, EngineType::XP)?;
-
-    for result in results {
-        result?;
-    }
+    let mut purger = PurgerBuilder::new().build();
+    purger.purge(source_path, translation_path, EngineType::XP)?;
 
     Ok(())
 }

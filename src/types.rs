@@ -1,17 +1,13 @@
 use bitflags::bitflags;
-use derive_more::{Deref, DerefMut, From, Into, IntoIterator};
 use getset::{Getters, MutGetters, Setters};
 use gxhash::{GxBuildHasher, HashSet};
 use indexmap::{IndexMap, IndexSet};
 use num_enum::FromPrimitive;
-use std::{hash::BuildHasher, mem::take, ops::Deref, path::PathBuf};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::{Deserialize, Serialize, Serializer};
+use std::{hash::BuildHasher, io, mem::take, ops::Deref, path::PathBuf};
 use strum_macros::{Display, EnumIs};
 use thiserror::Error;
-
-#[cfg(feature = "serde")]
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 
 pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
 pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
@@ -20,127 +16,6 @@ pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
 pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
 pub(crate) type Lines = IndexSetGx<String>;
 pub(crate) type TranslationDuplicateMap = Vec<(String, TranslationEntry)>;
-
-#[derive(From, Into, Deref, DerefMut, Debug, Default, IntoIterator)]
-#[must_use = "this `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub struct Results(Vec<Result<Outcome, Error>>);
-
-#[derive(Debug)]
-#[must_use = "this `FileResults` struct of `Vec` of `Result`s may contain an `Err` variant, which should be handled"]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub struct FileResults {
-    pub map: Results,
-    pub other: Results,
-    pub system: Results,
-    pub scripts: Results,
-}
-
-impl Default for FileResults {
-    fn default() -> Self {
-        Self {
-            map: vec![Ok(Outcome::NotInFileFlags(FileFlags::Map))].into(),
-            other: vec![Ok(Outcome::NotInFileFlags(FileFlags::Other))].into(),
-            system: vec![Ok(Outcome::NotInFileFlags(FileFlags::System))].into(),
-            scripts: vec![Ok(Outcome::NotInFileFlags(FileFlags::Scripts))]
-                .into(),
-        }
-    }
-}
-
-impl IntoIterator for FileResults {
-    type Item = Result<Outcome, Error>;
-    type IntoIter = std::vec::IntoIter<Result<Outcome, Error>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        [self.map, self.other, self.system, self.scripts]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-}
-
-#[derive(Debug, Error)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub enum Error {
-    /// Error for failed `fs::read_dir`.
-    #[error("Reading `source_path` {path} failed with: {err}")]
-    ReadDirFailed { path: PathBuf, err: String },
-    /// Error for failed `fs::create_dir`.
-    #[error("Create directory {path} failed with: {err}")]
-    CreateDirFailed { path: PathBuf, err: String },
-    /// Error for failed `fs::write`.
-    #[error("Writing file {file} failed with: {err}")]
-    WriteFileFailed { file: PathBuf, err: String },
-    /// Error for failed `fs::read`.
-    #[error("Read file {file} failed with: {err}")]
-    ReadFileFailed { file: PathBuf, err: String },
-    /// Error for failed `marshal_rs::load`.
-    #[error("Loading RPG Maker file {file} failed with: {err}")]
-    LoadFailed { file: PathBuf, err: String },
-    /// Error for failed `serde_json::from_str`.
-    #[error("Parsing `.json` file {file} failed with: {err}")]
-    JSONParseFailed { file: PathBuf, err: String },
-    /// Error for non-existant `source_path/../js/plugins.js`.
-    #[error(
-        "When operating on `MV/MZ` (`EngineType::New`) games and `FileFlags::Scripts` flag is set, parent directory of `source_path` must contain `js` directory with `plugins.js` file."
-    )]
-    PluginsFileMissing,
-    /// Error for not supported `Append` `read_mode` in `json::generate`.
-    #[error("`Append` `read_mode` is not supported.")]
-    AppendModeIsNotSupported,
-}
-
-#[derive(Debug, Display)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub enum Outcome {
-    /// Outcome for already existing `.txt` file when `read_mode` is set to `Default`.
-    #[strum(
-        to_string = "{0:?}: File already exist. Set `read_mode` to `Append` to append new lines, or to `Force` to forcefully overwrite."
-    )]
-    TXTAlreadyExist(PathBuf),
-    /// Outcome for when `Mapxxx` file is not presented in `Mapinfos` file, therefore making it unused.
-    #[strum(
-        to_string = "{0}: The ID of this map is not presented in `Mapinfos` file, therefore it's never appears in game and unused, so it is skipped."
-    )]
-    MapIsUnused(String),
-    /// Outcome for when translation entry doesn't have any translation.
-    #[strum(
-        to_string = "{entry} ({file}): No translation exists for this entry, so it is skipped."
-    )]
-    NoTranslationForEntry { file: String, entry: String },
-    /// Outcome for successfully written file.
-    #[strum(to_string = "{0:?}: Successfully written file.")]
-    WrittenFile(PathBuf),
-    /// Outcome for successfully purged file.
-    #[strum(to_string = "{0:?}: Successfully purged file.")]
-    PurgedFile(PathBuf),
-    /// Outcome for successfully read file.
-    #[strum(to_string = "{0:?}: Successfully read file.")]
-    ReadFile(PathBuf),
-    /// Outcome for when file is not in `file_flags`, so it's skipped.
-    #[strum(
-        to_string = "Processing of {0:?} skipped, because it's not in the file flags."
-    )]
-    NotInFileFlags(FileFlags),
-    /// Outcome for when `json::generate` is called, `JSON` file already exist, and `read_mode` is set to default.
-    #[strum(
-        to_string = "{0:?}: JSON already exist. Set `read_mode` to `Force` to overwrite."
-    )]
-    JSONAlreadyExist(PathBuf),
-    /// Outcome for when `json::generate` is called on a MV/MZ `source_path` directory.
-    #[strum(
-        to_string = "MV/MZ engines are already JSON, so processing is skipped."
-    )]
-    MVMZAlreadyJSON,
-    /// Outcome for successfully generated JSON.
-    #[strum(to_string = "{0:?}: Succesfully generated JSON.")]
-    GeneratedJSON(PathBuf),
-    /// Outcome for successfully written JSON.
-    #[strum(to_string = "{0:?}: Succesfully written JSON.")]
-    WrittenJSON(PathBuf),
-}
 
 pub(crate) trait Comments {
     fn comments(&self) -> &Vec<String>;
@@ -155,153 +30,6 @@ impl Comments for IndexMapGx<String, TranslationEntry> {
     fn comments_mut(&mut self) -> &mut Vec<String> {
         unsafe { &mut self.first_mut().unwrap_unchecked().1.comments }
     }
-}
-
-pub trait IndexSetExt {
-    fn new() -> Self;
-    fn with_capacity(capacity: usize) -> Self;
-}
-
-impl<K, S: BuildHasher + Default> IndexSetExt for IndexSet<K, S> {
-    fn new() -> Self {
-        Self::with_hasher(S::default())
-    }
-
-    fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_and_hasher(capacity, S::default())
-    }
-}
-
-pub trait IndexMapExt {
-    fn new() -> Self;
-    fn with_capacity(capacity: usize) -> Self;
-}
-
-impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
-    fn new() -> Self {
-        Self::with_hasher(S::default())
-    }
-
-    fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_and_hasher(capacity, S::default())
-    }
-}
-
-#[derive(Debug, Default, Clone, Getters, Setters, MutGetters)]
-pub(crate) struct TranslationEntry {
-    #[getset(get = "pub", set = "pub")]
-    translation: String,
-    #[getset(get = "pub", set = "pub", get_mut = "pub")]
-    comments: Vec<String>,
-}
-
-impl TranslationEntry {
-    pub fn new(translation: String, comments: Vec<String>) -> Self {
-        Self {
-            translation,
-            comments,
-        }
-    }
-
-    pub fn parts(&self) -> (&String, &[String]) {
-        (&self.translation, &self.comments)
-    }
-}
-
-impl From<&str> for TranslationEntry {
-    fn from(value: &str) -> Self {
-        let mut entry = Self::default();
-        entry.set_translation(value.to_string());
-        entry
-    }
-}
-
-impl From<String> for TranslationEntry {
-    fn from(value: String) -> Self {
-        let mut entry = Self::default();
-        entry.set_translation(value);
-        entry
-    }
-}
-
-impl Deref for TranslationEntry {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.translation
-    }
-}
-
-#[derive(Clone, Copy, EnumIs, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
-)]
-#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
-#[repr(u8)]
-pub enum ProcessingMode {
-    #[default]
-    Read,
-    Write,
-    Purge,
-}
-
-#[derive(Clone, Copy, EnumIs, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
-)]
-#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
-#[repr(u8)]
-pub enum DuplicateMode {
-    #[default]
-    Allow,
-    Remove,
-}
-
-#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
-)]
-#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
-#[repr(u8)]
-pub enum GameType {
-    #[default]
-    None,
-    Termina,
-    LisaRPG,
-}
-
-#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
-)]
-#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
-#[repr(u8)]
-pub enum ReadMode {
-    #[default]
-    None,
-    Default,
-    Append,
-    Force,
-}
-
-#[derive(PartialEq, Clone, Copy, EnumIs, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(TryFromPrimitive, IntoPrimitive, Deserialize, Serialize)
-)]
-#[cfg_attr(feature = "serde", serde(into = "u8", try_from = "u8"))]
-#[repr(u8)]
-pub enum EngineType {
-    #[default]
-    /// MV/MZ
-    New,
-    VXAce,
-    VX,
-    XP,
 }
 
 /// 401 - Dialogue line.
@@ -319,7 +47,7 @@ pub enum EngineType {
 /// 655 - Line displayed in shop - from an external script. (**OLDER ENGINES ONLY!**)
 ///
 /// 324, 320 - Some used in-game line. (**probably NEWER ENGINES ONLY!**)
-#[derive(PartialEq, Clone, Copy, EnumIs, FromPrimitive)]
+#[derive(Clone, Copy, EnumIs, FromPrimitive)]
 #[repr(u16)]
 pub(crate) enum Code {
     Dialogue = 401,
@@ -345,7 +73,7 @@ impl Code {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs)]
+#[derive(Clone, Copy, EnumIs)]
 #[repr(u8)]
 pub(crate) enum Variable {
     Name,
@@ -394,7 +122,7 @@ impl EachLine for str {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct Labels {
     pub display_name: &'static str,
     pub events: &'static str,
@@ -479,7 +207,7 @@ impl Labels {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, EnumIs, Display, Default)]
+#[derive(Default, Clone, Copy, EnumIs, Display)]
 #[repr(u8)]
 pub(crate) enum RPGMFileType {
     #[default]
@@ -544,9 +272,188 @@ impl RPGMFileType {
     }
 }
 
+pub(crate) trait IndexMapExt {
+    fn with_capacity(capacity: usize) -> Self;
+}
+
+impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_hasher(capacity, S::default())
+    }
+}
+
+#[derive(Debug, Default, Clone, Getters, Setters, MutGetters)]
+pub(crate) struct TranslationEntry {
+    #[getset(get = "pub", set = "pub")]
+    translation: String,
+    #[getset(get = "pub", set = "pub", get_mut = "pub")]
+    comments: Vec<String>,
+}
+
+impl TranslationEntry {
+    pub fn new(translation: String, comments: Vec<String>) -> Self {
+        Self {
+            translation,
+            comments,
+        }
+    }
+
+    pub fn parts(&self) -> (&String, &[String]) {
+        (&self.translation, &self.comments)
+    }
+}
+
+impl From<&str> for TranslationEntry {
+    fn from(value: &str) -> Self {
+        let mut entry = Self::default();
+        entry.set_translation(value.to_string());
+        entry
+    }
+}
+
+impl From<String> for TranslationEntry {
+    fn from(value: String) -> Self {
+        let mut entry = Self::default();
+        entry.set_translation(value);
+        entry
+    }
+}
+
+impl Deref for TranslationEntry {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.translation
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}: IO error occurred: {1}")]
+    Io(PathBuf, io::Error),
+    #[error("Loading RPG Maker data failed with: {0}")]
+    Load(#[from] marshal_rs::LoadError),
+    #[error("Parsing JSON data failed with: {0}")]
+    JsonParse(#[from] serde_json::Error),
+    #[error(
+        "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
+    )]
+    NoTitle,
+}
+
+impl Serialize for Error {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    EnumIs,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Deserialize,
+    Serialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum Mode {
+    #[default]
+    Read,
+    Write,
+    Purge,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    EnumIs,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Deserialize,
+    Serialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum DuplicateMode {
+    #[default]
+    Allow,
+    Remove,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    EnumIs,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Deserialize,
+    Serialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum GameType {
+    #[default]
+    None,
+    Termina,
+    LisaRPG,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    EnumIs,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Deserialize,
+    Serialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum ReadMode {
+    #[default]
+    Default,
+    Append,
+    Force,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    EnumIs,
+    Default,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Deserialize,
+    Serialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum EngineType {
+    #[default]
+    /// MV/MZ
+    New,
+    VXAce,
+    VX,
+    XP,
+}
+
 bitflags! {
-    #[derive(PartialEq, Debug, Clone, Copy)]
-    #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+    #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+    #[serde(transparent)]
     pub struct FileFlags: u8 {
         const None = 0;
         /// `Mapxxx.ext` files.

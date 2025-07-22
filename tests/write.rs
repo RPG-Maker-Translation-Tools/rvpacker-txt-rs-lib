@@ -10,17 +10,13 @@ fn mz() -> Result<(), Box<dyn std::error::Error>> {
 
     create_dir_all(&output_path)?;
 
-    let writer = WriterBuilder::new().build();
-    let results = writer.write(
+    let mut writer = WriterBuilder::new().build();
+    writer.write(
         source_path,
         translation_path,
         output_path,
         EngineType::New,
     )?;
-
-    for result in results {
-        result?;
-    }
 
     Ok(())
 }
@@ -34,17 +30,13 @@ fn mv() -> Result<(), Box<dyn std::error::Error>> {
 
     create_dir_all(&output_path)?;
 
-    let writer = WriterBuilder::new().build();
-    let results = writer.write(
+    let mut writer = WriterBuilder::new().build();
+    writer.write(
         source_path,
         translation_path,
         output_path,
         EngineType::New,
     )?;
-
-    for result in results {
-        result?;
-    }
 
     Ok(())
 }
@@ -58,17 +50,13 @@ fn ace() -> Result<(), Box<dyn std::error::Error>> {
 
     create_dir_all(&output_path)?;
 
-    let writer = WriterBuilder::new().build();
-    let results = writer.write(
+    let mut writer = WriterBuilder::new().build();
+    writer.write(
         source_path,
         translation_path,
         output_path,
         EngineType::VXAce,
     )?;
-
-    for result in results {
-        result?;
-    }
 
     Ok(())
 }
@@ -82,17 +70,8 @@ fn vx() -> Result<(), Box<dyn std::error::Error>> {
 
     create_dir_all(&output_path)?;
 
-    let writer = WriterBuilder::new().build();
-    let results = writer.write(
-        source_path,
-        translation_path,
-        output_path,
-        EngineType::VX,
-    )?;
-
-    for result in results {
-        result?;
-    }
+    let mut writer = WriterBuilder::new().build();
+    writer.write(source_path, translation_path, output_path, EngineType::VX)?;
 
     Ok(())
 }
@@ -106,17 +85,8 @@ fn xp() -> Result<(), Box<dyn std::error::Error>> {
 
     create_dir_all(&output_path)?;
 
-    let writer = WriterBuilder::new().build();
-    let results = writer.write(
-        source_path,
-        translation_path,
-        output_path,
-        EngineType::XP,
-    )?;
-
-    for result in results {
-        result?;
-    }
+    let mut writer = WriterBuilder::new().build();
+    writer.write(source_path, translation_path, output_path, EngineType::XP)?;
 
     Ok(())
 }

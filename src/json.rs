@@ -1,122 +1,91 @@
-use crate::{constants::INSTANCE_VAR_PREFIX, get_engine_extension, types::*};
+use crate::{
+    constants::INSTANCE_VAR_PREFIX, core::get_engine_extension, types::*,
+};
 use marshal_rs::{Value, dump, load_utf8};
 use serde_json::{from_str, to_string_pretty};
 use std::{
-    fs::{self, create_dir_all, read, read_dir, read_to_string},
-    path::{Path, PathBuf},
+    fs::{self, read, read_dir, read_to_string},
+    path::Path,
 };
 
+/// Generates JSON representation of RPG Maker file, and returns the result, that can be converted back later with [`write_file`].
+///
+/// # Returns
+/// JSON representation as [`String`] or [`Error`], if deserializing `file_content` fails.
+pub fn generate_file(file_content: &[u8]) -> Result<String, Error> {
+    let loaded = load_utf8(file_content, INSTANCE_VAR_PREFIX)?;
+    Ok(unsafe { to_string_pretty(&loaded).unwrap_unchecked() })
+}
+
+/// Converts JSON representation of RPG Maker file, created with [`generate_file`] back to initial form.
+///
+/// # Returns
+/// RPG Maker data as [`Vec<u8>`] or [`Error`], if deserializing `file_content` fails.
+pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
+    let json = from_str::<Value>(file_content)?;
+    Ok(dump(json, None))
+}
+
 /// Generates JSON representations of older engine files (`.rxdata`, `.rvdata`, `.rvdata2`).
+///
+/// This function uses [`generate_file`] under the hood, and manages all system calls for you.
+///
+/// If `force` argument is not set, skips processing already existing files.
 ///
 /// # Arguments
 /// - `source_path` - Path to the directory containing RPG Maker files.
 /// - `output_path` - Path to the directory where `json` folder with `.json` files will be created.
-/// - `read_mode` - In which [`ReadMode`] to generate.
+/// - `force` - Whether to overwrite existing JSON representations.
 ///
 /// # Returns
-/// [`Vec`] of [`Result<Outcome, Error>`], where each `Result` marks the success/failure of generating a JSON representation.
+/// Returns [`Error`], if any system call or deserializing RPG Maker file fails.
 ///
 /// # Example
-/// ```
-/// use rvpacker_txt_rs_lib::{json::generate, ReadMode};
-/// let result = generate("C:/Game/Data", "C:/Game/json", ReadMode::Default, true);
+/// ```no_run
+/// use rvpacker_txt_rs_lib::{json::generate, Error};
+///
+/// fn main() -> Result<(), Error> {
+///     let result = generate("C:/Game/Data", "C:/Game/json", false)?;
+///     Ok(())
+/// }
 /// ```
 pub fn generate<P: AsRef<Path>>(
     source_path: P,
     output_path: P,
-    read_mode: ReadMode,
-    logging: bool,
-) -> Results {
-    if read_mode.is_append() {
-        return vec![Err(Error::AppendModeIsNotSupported)].into();
-    }
-
-    if source_path.as_ref().join("System.json").exists() {
-        return vec![Ok(Outcome::MVMZAlreadyJSON)].into();
-    }
-
-    let output_path = output_path.as_ref();
-
-    let result = create_dir_all(output_path)
-        .map_err(|err| Error::CreateDirFailed {
-            path: output_path.to_path_buf(),
-            err: err.to_string(),
-        })
-        .map(|_| Outcome::GeneratedJSON(PathBuf::new()));
-
-    if result.is_err() {
-        return vec![result].into();
-    };
-
-    let entries = read_dir(&source_path);
-
-    let entries = match entries {
-        Ok(entries) => entries,
-        Err(err) => {
-            return vec![Err(Error::ReadDirFailed {
-                path: source_path.as_ref().to_path_buf(),
-                err: err.to_string(),
-            })]
-            .into();
-        }
-    };
-
-    entries
+    force: bool,
+) -> Result<(), Error> {
+    for entry in read_dir(source_path.as_ref())
+        .map_err(|e| Error::Io(source_path.as_ref().to_path_buf(), e))?
         .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            let ext = path.extension()?.to_str()?;
+    {
+        let filename = entry.file_name();
+        let output_file_path = output_path
+            .as_ref()
+            .join(Path::new(&filename).with_extension("json"));
 
-            if ["rxdata", "rvdata", "rvdata2"].contains(&ext) {
-                Some(entry)
-            } else {
-                None
-            }
-        })
-        .map(|entry| {
-            let output_file =
-                PathBuf::from(entry.file_name()).with_extension("json");
-            let output_file_path = output_path.join(&output_file);
+        if output_file_path.exists() && force {
+            continue;
+        }
 
-            if output_file_path.exists() && !read_mode.is_force() {
-                return Ok(Outcome::JSONAlreadyExist(output_file_path));
-            }
+        let path = entry.path();
+        let content = read(&path).map_err(|e| Error::Io(path, e))?;
+        let json = generate_file(&content)?;
 
-            let path = entry.path();
-            let content = read(&path).map_err(|err| Error::ReadFileFailed {
-                file: path.clone(),
-                err: err.to_string(),
-            })?;
-            let loaded =
-                load_utf8(&content, INSTANCE_VAR_PREFIX).map_err(|err| {
-                    Error::LoadFailed {
-                        file: path.clone(),
-                        err: err.to_string(),
-                    }
-                })?;
+        fs::write(&output_file_path, json)
+            .map_err(|e| Error::Io(output_file_path, e))?;
 
-            // If `load` function succeeded, then returned Value is always stringifiable.
-            let json_string =
-                unsafe { to_string_pretty(&loaded).unwrap_unchecked() };
+        log::info!(
+            "{}: Successfully generated JSON.",
+            Path::new(&filename).display()
+        );
+    }
 
-            let result = fs::write(output_file_path, json_string)
-                .map_err(|err| Error::WriteFileFailed {
-                    file: path.clone(),
-                    err: err.to_string(),
-                })
-                .map(|_| Outcome::GeneratedJSON(path));
-
-            if result.is_ok() && logging {
-                println!("Generated JSON file: {}", output_file.display());
-            }
-
-            result
-        })
-        .collect::<Vec<_>>()
-        .into()
+    Ok(())
 }
 
-/// Writes `.json` representations created with `generate_json` back to their initial format.
+/// Writes `.json` representations created with [`generate`] back to their initial format.
+///
+/// This function uses [`write_file`] under the hood, and manages all system calls for you.
 ///
 /// # Arguments
 ///
@@ -125,79 +94,40 @@ pub fn generate<P: AsRef<Path>>(
 /// - `engine_type` - Engine type, to properly write file extensions.
 ///
 /// # Returns
-/// [`Vec`] of [`Result<Outcome, Error>`], where each `Result` marks the success/failure of writing a file.
+/// Returns [`Error`], if any system call or deserializing JSON file fails.
 ///
 /// # Example
-/// ```
-/// use rvpacker_txt_rs_lib::{json::write, EngineType};
-/// let result = write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce, true);
+/// ```no_run
+/// use rvpacker_txt_rs_lib::{json::write, EngineType, Error};
+///
+/// fn main() -> Result<(), Error> {
+///     let result = write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce);
+///     Ok(())
+/// }
 /// ```
 pub fn write<P: AsRef<Path>>(
     json_path: P,
     output_path: P,
     engine_type: EngineType,
-    logging: bool,
-) -> Results {
-    let entries = read_dir(&json_path);
+) -> Result<(), Error> {
+    for entry in read_dir(json_path.as_ref())
+        .map_err(|e| Error::Io(json_path.as_ref().to_path_buf(), e))?
+        .flatten()
+    {
+        let path = entry.path();
+        let content = read_to_string(&path).map_err(|e| Error::Io(path, e))?;
+        let written = write_file(&content)?;
 
-    let entries = match entries {
-        Ok(entries) => entries,
-        Err(err) => {
-            return vec![Err(Error::ReadDirFailed {
-                path: json_path.as_ref().to_path_buf(),
-                err: err.to_string(),
-            })]
-            .into();
-        }
-    };
+        let filename = entry.file_name();
+        let output_file_path = output_path.as_ref().join(
+            Path::new(&filename)
+                .with_extension(get_engine_extension(engine_type)),
+        );
+        fs::write(&output_file_path, written)
+            .map_err(|e| Error::Io(output_file_path, e))?;
 
-    let output_path = output_path.as_ref();
-    let result =
-        create_dir_all(output_path).map_err(|err| Error::CreateDirFailed {
-            path: output_path.to_path_buf(),
-            err: err.to_string(),
-        });
-
-    if let Err(err) = result {
-        return vec![Err(err)].into();
+        log::info!("{}: Successfully written.", Path::new(&filename).display());
     }
 
-    entries
-        .flatten()
-        .map(|entry| {
-            let path = entry.path();
-
-            let content =
-                read_to_string(&path).map_err(|err| Error::ReadFileFailed {
-                    file: path.clone(),
-                    err: err.to_string(),
-                })?;
-
-            let json = from_str::<Value>(&content).map_err(|err| {
-                Error::JSONParseFailed {
-                    file: path.clone(),
-                    err: err.to_string(),
-                }
-            })?;
-
-            let dumped = dump(json, None);
-
-            let output_file = PathBuf::from(entry.file_name())
-                .with_extension(get_engine_extension(engine_type));
-            let output_file_path = output_path.join(&output_file);
-            let result = fs::write(&output_file_path, dumped)
-                .map_err(|err| Error::WriteFileFailed {
-                    file: output_file_path,
-                    err: err.to_string(),
-                })
-                .map(|_| Outcome::WrittenJSON(output_file.clone()));
-
-            if result.is_ok() && logging {
-                println!("Written file: {}", output_file.display())
-            }
-
-            result
-        })
-        .collect::<Vec<_>>()
-        .into()
+    Ok(())
 }

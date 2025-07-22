@@ -11,96 +11,102 @@ It also provides the `json` module to convert `.rxdata`, `.rvdata` and `.rvdata2
 
 ## Features
 
-This crate exposes the main modules, that do all the heavy-lifting: `read`, `purge`, `write`, and `json`.
+This crate provides core structs and functions in `core` module, but also exports wrappers around those, like `Purger`, `Writer`, `Reader`.
 
-### `read` module
+### `Reader`/`Writer`/`Purger`
 
-`read` module provides the `Reader` struct, along with its `ReaderBuilder` builder version.
-
-`Reader` struct is used to parse the text of RPG Maker files from the specified directory to the `.txt` files in specified output directory.
+These structs abstract over the `core` module and process files, handling all system calls.
 
 #### Example
 
-```rust
-use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
+```no_run
+use rvpacker_txt_rs_lib::{Reader, Writer, Purger, Error, FileFlags, EngineType};
 
-let mut reader = Reader::new();
-reader.set_flags(FileFlags::Map | FileFlags::Other);
-let result = reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
+fn main() -> Result<(), Error> {
+    let mut reader = Reader::new();
+    reader.set_flags(FileFlags::Map | FileFlags::Other);
+    reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
+
+    let mut writer = Writer::new();
+    writer.set_flags(FileFlags::Map | FileFlags::Other);
+    writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce)?;
+
+    let mut purger = Purger::new();
+    purger.set_flags(FileFlags::Map | FileFlags::Other);
+    purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
+    Ok(())
+}
 ```
 
-### `write` module
+### `core` module
 
-`write` module provides the `Writer` struct, along with its `WriterBuilder` builder version.
-
-`Writer` struct is used to write the translation from the `.txt` files back to RPG Maker files, and output them to the specified output directory.
+This module provides structs `Base`, `MapBase`, `OtherBase`, `SystemBase`, `PluginBase` and `ScriptBase`.
 
 #### Example
 
-```rust
-use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
+```no_run
+use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, EngineType, ReadMode, Error};
+use std::fs::read;
 
-let mut writer = Writer::new();
-writer.set_flags(FileFlags::Map | FileFlags::Other);
-let result = writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
-```
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut base = Base::new(Mode::Read, EngineType::VXAce);
+    base.read_mode = ReadMode::Force;
 
-### `purge` module
+    let mut map_base = MapBase::new(&mut base);
 
-`purge` module provides the `Purger` struct, along with its `PurgerBuilder` builder version.
+    let mapinfos = read("C:/Game/Data/Mapinfos.rvdata2")?;
+    map_base.initialize_mapinfos(&mapinfos)?;
 
-`Purger` struct is used to purge the lines with empty translation from the `.txt` files.
+    let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
+    map_base.process("Map001.rvdata2", &map_file_content)?;
 
-#### Example
+    // To get the translation, you must use `translation` after processing all the maps.
+    let translation_data = map_base.translation();
 
-```rust
-use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
-
-let mut purger = Purger::new();
-purger.set_flags(FileFlags::Map | FileFlags::Other);
-let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
+    Ok(())
+}
 ```
 
 ### `json` module
 
-`json` module provides `generate_json` function to generate JSON representations of older engines' `rxdata`/`rvdata` files to review and edit them, and `write_json` function allows you to write these JSON representations back to their initial forms.
+`json` module provides `generate` and `write` functions to generate JSON representations of older engines' files and write them back respectively.
 
 #### Example
 
-```rust
-use rvpacker_txt_rs_lib::{json::{generate, write}, ReadMode, EngineType};
+```no_run
+use rvpacker_txt_rs_lib::{json::{generate, write}, EngineType, Error};
 
-let result = generate("C:/Game/Data", "C:/Game/json", ReadMode::Default, true);
-let result = write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce, true);
+fn main() -> Result<(), Error> {
+    generate("C:/Game/Data", "C:/Game/json", false)?;
+    write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce)?;
+    Ok(())
+}
 ```
 
 ## License
 
 Project is licensed under WTFPL.
 */
-
 #![allow(clippy::collapsible_else_if)]
 #![deny(clippy::use_self)]
 #![deny(clippy::redundant_clone)]
 #![deny(clippy::branches_sharing_code)]
 
-mod core;
-mod functions;
+mod processors;
 
 pub mod constants;
+pub mod core;
 pub mod json;
-pub mod purge;
-pub mod read;
 pub mod types;
-pub mod write;
 
-pub use functions::{
-    get_engine_extension, parse_ignore, read_to_string_without_bom,
+pub use constants::{
+    NEW_LINE, RVPACKER_IGNORE_FILE, RVPACKER_METADATA_FILE, SEPARATOR,
 };
-pub use purge::{Purger, PurgerBuilder};
-pub use read::{Reader, ReaderBuilder};
-pub use types::{
-    DuplicateMode, EngineType, Error, FileFlags, FileResults, GameType,
-    Outcome, ProcessingMode, ReadMode, Results,
+pub use core::{
+    filter_maps, filter_other, get_engine_extension, get_ini_title,
+    get_system_title, parse_ignore,
 };
-pub use write::{Writer, WriterBuilder};
+pub use processors::{
+    Purger, PurgerBuilder, Reader, ReaderBuilder, Writer, WriterBuilder,
+};
+pub use types::*;

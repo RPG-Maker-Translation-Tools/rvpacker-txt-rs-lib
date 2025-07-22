@@ -1,13 +1,10 @@
-use rvpacker_txt_rs_lib::{
-    purge::PurgerBuilder,
-    types::{EngineType, FileFlags},
-};
+use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, PurgerBuilder};
 
-fn main() {
-    let purger = PurgerBuilder::new()
+fn main() -> Result<(), Error> {
+    let mut purger = PurgerBuilder::new()
         .with_flags(FileFlags::Map | FileFlags::Other)
-        .logging(true)
         .build();
 
-    let result = purger.purge("data", "translation", EngineType::New);
+    purger.purge("C:/Game/www/data", "C:/Game/translation", EngineType::New)?;
+    Ok(())
 }
