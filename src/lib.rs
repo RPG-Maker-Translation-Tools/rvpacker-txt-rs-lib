@@ -17,6 +17,12 @@ This crate provides core structs and functions in `core` module, but also export
 
 These structs abstract over the `core` module and process files, handling all system calls.
 
+### Serialization/Deserialization
+
+All public enums and structs in this crate are serializable with `serde`.
+
+Flat enums that contain only number variants are serialized with `#[serde(into = "u8", try_from = "u8")]` attribute, which converts enums to a single u8 integer, representing the variant. The same applies to `FileFlags` struct.
+
 #### Example
 
 ```no_run
