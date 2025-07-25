@@ -453,7 +453,7 @@ pub enum EngineType {
 
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-    #[serde(transparent)]
+    #[serde(into = "u8", try_from = "u8")]
     pub struct FileFlags: u8 {
         const None = 0;
         /// `Mapxxx.ext` files.
@@ -464,6 +464,20 @@ bitflags! {
         const System = 4;
         /// `Scripts.ext`/`plugins.js` file.
         const Scripts = 8;
+    }
+}
+
+impl TryFrom<u8> for FileFlags {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(Self::from_bits_truncate(value))
+    }
+}
+
+impl From<FileFlags> for u8 {
+    fn from(value: FileFlags) -> Self {
+        value.bits()
     }
 }
 
