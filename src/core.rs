@@ -73,22 +73,25 @@ thread_local! {
         Regex::new(r"\r|\n|\r\n").unwrap_unchecked()
     });
     static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"\#").unwrap_unchecked()
+        Regex::new(r"\\#").unwrap_unchecked()
     });
 }
 
 trait CustomReplace {
-    fn replace_line_breaks(&self) -> Cow<'_, str>;
-    fn replace_new_line(&self) -> Cow<'_, str>;
+    /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the format that the library uses (`\#`).
+    fn normalize(&self) -> Cow<'_, str>;
+
+    /// Denormalizes library line break symbols to the format that RPG Maker uses (`\n`).
+    fn denormalize(&self) -> Cow<'_, str>;
 }
 
 impl CustomReplace for str {
-    fn replace_line_breaks(&self) -> Cow<'_, str> {
+    fn normalize(&self) -> Cow<'_, str> {
         LINE_BREAKS_RE.with(|re| re.replace_all(self, NEW_LINE))
     }
 
-    fn replace_new_line(&self) -> Cow<'_, str> {
-        LINE_BREAKS_RE.with(|re| re.replace_all(self, "\n"))
+    fn denormalize(&self) -> Cow<'_, str> {
+        NEW_LINE_RE.with(|re| re.replace_all(self, "\n"))
     }
 }
 
@@ -1009,10 +1012,7 @@ impl<'a> Base {
                             continue;
                         }
 
-                        (
-                            source.replace_new_line(),
-                            translation.replace_new_line(),
-                        )
+                        (source.denormalize(), translation.denormalize())
                     } else {
                         (source, translation)
                     };
@@ -1718,7 +1718,7 @@ impl<'a> MapBase<'a> {
                 let map_order = self.get_map_order(map_id).to_string();
                 let mut map_name = mutable!(self, Self).get_map_name(map_id);
 
-                let replaced_map_name = map_name.replace_line_breaks();
+                let replaced_map_name = map_name.normalize();
                 map_name = &replaced_map_name;
 
                 if self.base.read_mode.is_append() {
@@ -1790,7 +1790,7 @@ impl<'a> MapBase<'a> {
                         .rfind(|x| !x.is_empty())
                         .unwrap_or_default();
 
-                    let translation_replaced = translation.replace_new_line();
+                    let translation_replaced = translation.denormalize();
                     translation = &translation_replaced;
 
                     map_object[self.base.labels.display_name] =
@@ -1948,7 +1948,7 @@ impl<'a> MapBase<'a> {
                 display_name
                     .as_str()
                     .map(|name| {
-                        let name_replaced = name.replace_line_breaks();
+                        let name_replaced = name.normalize();
 
                         if self.base.romanize {
                             Base::romanize_string(&name_replaced)
@@ -3016,8 +3016,7 @@ impl<'a> ScriptBase<'a> {
                 {
                     let range = string_start_index + 1..global_index + i;
 
-                    let extracted_string =
-                        ruby_code[range.clone()].replace_line_breaks();
+                    let extracted_string = ruby_code[range.clone()].normalize();
 
                     if !extracted_string.is_empty()
                         && !strings.contains(extracted_string.as_ref())
@@ -3227,7 +3226,7 @@ impl<'a> PluginBase<'a> {
                     || value_string.starts_with("rgba"))
                     || key.is_some_and(|x| x.starts_with("LATIN"))
                 {
-                    let mut string = value_string.replace_line_breaks();
+                    let mut string = value_string.normalize();
 
                     string = if self.base.romanize {
                         Cow::Owned(Base::romanize_string(&string))
