@@ -2896,16 +2896,6 @@ impl<'a> ScriptBase<'a> {
                 let (extracted_strings, ranges) = self.extract_strings(&code);
 
                 if self.base.mode.is_write() {
-                    let mut buf = Vec::with_capacity(1024);
-
-                    unsafe {
-                        ZlibEncoder::new(&mut buf, Compression::default())
-                            .write_all(code.as_bytes())
-                            .unwrap_unchecked()
-                    };
-
-                    script[2] = Value::bytes(&buf);
-
                     for (mut extracted, range) in extracted_strings
                         .into_iter()
                         .zip(ranges)
@@ -2921,6 +2911,16 @@ impl<'a> ScriptBase<'a> {
                             code.replace_range(range, translated);
                         }
                     }
+
+                    let mut buf = Vec::with_capacity(1024);
+
+                    unsafe {
+                        ZlibEncoder::new(&mut buf, Compression::default())
+                            .write_all(code.as_bytes())
+                            .unwrap_unchecked()
+                    };
+
+                    script[2] = Value::bytes(&buf);
                 } else {
                     for mut extracted in extracted_strings
                         .into_iter()
