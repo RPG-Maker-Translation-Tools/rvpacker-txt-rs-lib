@@ -4,7 +4,7 @@ use crate::{
 use marshal_rs::{Value, dump, load_utf8};
 use serde_json::{from_str, to_string_pretty};
 use std::{
-    fs::{self, read, read_dir, read_to_string},
+    fs::{self, create_dir_all, read, read_dir, read_to_string},
     path::Path,
 };
 
@@ -54,6 +54,9 @@ pub fn generate<P: AsRef<Path>>(
     output_path: P,
     force: bool,
 ) -> Result<(), Error> {
+    create_dir_all(&output_path)
+        .map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
+
     for entry in read_dir(source_path.as_ref())
         .map_err(|e| Error::Io(source_path.as_ref().to_path_buf(), e))?
         .flatten()
@@ -110,6 +113,9 @@ pub fn write<P: AsRef<Path>>(
     output_path: P,
     engine_type: EngineType,
 ) -> Result<(), Error> {
+    create_dir_all(&output_path)
+        .map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
+
     for entry in read_dir(json_path.as_ref())
         .map_err(|e| Error::Io(json_path.as_ref().to_path_buf(), e))?
         .flatten()
