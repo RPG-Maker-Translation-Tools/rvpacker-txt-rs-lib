@@ -2463,11 +2463,11 @@ impl<'a> OtherBase<'a> {
         ];
 
         for (variable_label, variable_type) in variable_pairs {
-            let Some(value) = array.get(variable_label) else {
+            let Some(object) = array.get(variable_label) else {
                 continue;
             };
 
-            let Some(string) = self.base.extract_string(value, true) else {
+            let Some(string) = self.base.extract_string(object, true) else {
                 continue;
             };
 
@@ -2478,17 +2478,15 @@ impl<'a> OtherBase<'a> {
                 Cow::Borrowed(string)
             };
 
-            string = if !self.base.mode.is_read() {
-                Cow::Owned(
+            if !self.base.mode.is_read() {
+                string = Cow::Owned(
                     string
                         .lines()
                         .map(str::trim)
                         .collect::<Vec<_>>()
                         .join("\n"),
-                )
-            } else {
-                string
-            };
+                );
+            }
 
             let note_text = if self.base.game_type.is_termina()
                 && variable_type.is_description()
@@ -2498,14 +2496,11 @@ impl<'a> OtherBase<'a> {
                 None
             };
 
-            let this = mutable!(self, Self);
-            let Some(parsed) =
-                this.process_variable(&string, note_text, variable_type)
-            else {
-                if variable_type.is_name() {
-                    return;
-                }
-
+            let Some(parsed) = mutable!(self, Self).process_variable(
+                &string,
+                note_text,
+                variable_type,
+            ) else {
                 continue;
             };
 
