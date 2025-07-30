@@ -2422,6 +2422,7 @@ impl<'a> OtherBase<'a> {
         translated
     }
 
+    /// Processes an object from `CommonEvents` or `Troops` file.
     fn process_object(&mut self, object: &mut Value) {
         if self.base.file_type.is_troops() {
             // Troops always include pages, panic is unlikely.
@@ -2450,6 +2451,7 @@ impl<'a> OtherBase<'a> {
         }
     }
 
+    /// Processes an object array from `Actors`, `Armors`, `Classes`, `Enemies`, `Items`, `States`, `Weapons` files.
     fn process_array(&mut self, array: &mut Value) {
         let variable_pairs = [
             (self.base.labels.name, Variable::Name),
@@ -2581,7 +2583,14 @@ impl<'a> SystemBase<'a> {
     /// }
     /// ```
     pub fn initialize_translation(&mut self, translation: &str) {
+        // We don't want to disrupt the trim value, but this call mustn't use
+        // enabled trimming, so we temporary disable it and then re-enable.
+        let trim = self.base.trim;
+
+        self.base.trim = false;
         self.base.initialize_translation(translation);
+
+        self.base.trim = trim;
     }
 
     /// Processes the RPG Maker file content and returns:
@@ -2817,7 +2826,14 @@ impl<'a> ScriptBase<'a> {
     /// }
     /// ```
     pub fn initialize_translation(&mut self, translation: &str) {
+        // We don't want to disrupt the trim value, but this call mustn't use
+        // enabled trimming, so we temporary disable it and then re-enable.
+        let trim = self.base.trim;
+
+        self.base.trim = false;
         self.base.initialize_translation(translation);
+
+        self.base.trim = trim;
     }
 
     /// Processes the RPG Maker file content and returns:
@@ -3121,7 +3137,14 @@ impl<'a> PluginBase<'a> {
     /// }
     /// ```
     pub fn initialize_translation(&mut self, translation: &str) {
+        // We don't want to disrupt the trim value, but this call mustn't use
+        // enabled trimming, so we temporary disable it and then re-enable.
+        let trim = self.base.trim;
+
+        self.base.trim = false;
         self.base.initialize_translation(translation);
+
+        self.base.trim = trim;
     }
 
     /// Processes the RPG Maker file content and returns:
