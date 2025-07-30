@@ -1377,11 +1377,7 @@ impl<'a> Base {
     ///
     /// Will add purged entries to `self.ignore_entry` if `self.create_ignore` is true.
     fn purge_empty_translation(&mut self) {
-        let len_limit = if self.file_type.is_system() {
-            self.translation_map.len().wrapping_sub(1)
-        } else {
-            self.translation_map.len()
-        };
+        let len_limit = self.translation_map.len();
 
         self.translation_duplicate_map
             .reserve(self.translation_map.len());
@@ -2646,7 +2642,13 @@ impl<'a> SystemBase<'a> {
             self.base.get_ignore_entry(entry);
 
             if self.base.mode.is_purge() {
-                self.base.purge_empty_translation();
+                if entry_id != 7 {
+                    self.base.purge_empty_translation();
+                } else {
+                    self.base
+                        .translation_duplicate_map
+                        .extend(self.base.translation_map.drain(..));
+                }
             } else {
                 if self.base.mode.is_read() {
                     self.base
