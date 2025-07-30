@@ -42,14 +42,22 @@ impl Processor {
         let ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
         if self.base.ignore || self.base.create_ignore {
-            let ignore_file_content = read_to_string(&ignore_file_path)
-                .map_err(|e| Error::Io(ignore_file_path.clone(), e))?;
-
-            self.base.ignore_map = parse_ignore(
-                &ignore_file_content,
-                self.base.duplicate_mode,
-                true,
-            );
+            match read_to_string(&ignore_file_path)
+                .map_err(|e| Error::Io(ignore_file_path.clone(), e))
+            {
+                Ok(ignore_file_content) => {
+                    self.base.ignore_map = parse_ignore(
+                        &ignore_file_content,
+                        self.base.duplicate_mode,
+                        self.base.mode.is_read(),
+                    );
+                }
+                Err(err) => {
+                    if self.base.ignore {
+                        return Err(err);
+                    }
+                }
+            }
         }
 
         create_dir_all(if self.base.mode.is_read() {
