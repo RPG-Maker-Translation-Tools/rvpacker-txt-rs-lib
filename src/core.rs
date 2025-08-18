@@ -860,10 +860,15 @@ impl<'a> Base {
     /// # Arguments
     /// - `entry_name` - Name of the entry to get.
     fn reset_ignore_entry(&mut self, entry_name: &str) {
-        *self
-            .ignore_map
-            .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"))
-            .or_default() = take(&mut self.ignore_entry);
+        if self.ignore || self.create_ignore {
+            let entry_name: &str =
+                &format!("{file}: {entry_name}", file = self.file_type);
+
+            *self
+                .ignore_map
+                .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"))
+                .or_default() = take(&mut self.ignore_entry);
+        }
     }
 
     /// Parses RPG Maker file from passed content.
