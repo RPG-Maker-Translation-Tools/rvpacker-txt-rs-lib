@@ -1,7 +1,9 @@
 use crate::{
-    constants::INSTANCE_VAR_PREFIX, core::get_engine_extension, types::*,
+    constants::INSTANCE_VAR_PREFIX,
+    core::{ScriptBase, get_engine_extension},
+    types::*,
 };
-use marshal_rs::{Value, dump, load_utf8};
+use marshal_rs::{Value, dump, load_binary, load_utf8};
 use serde_json::{from_str, to_string_pretty};
 use std::{
     fs::{self, create_dir_all, read, read_dir, read_to_string},
@@ -62,19 +64,48 @@ pub fn generate<P: AsRef<Path>>(
         .flatten()
     {
         let filename = entry.file_name();
-        let output_file_path = output_path
+        let mut output_file_path = output_path
             .as_ref()
             .join(Path::new(&filename).with_extension("json"));
 
-        if output_file_path.exists() && force {
+        if !force && output_file_path.exists() {
             continue;
         }
 
         let path = entry.path();
         let content = read(&path).map_err(|e| Error::Io(path, e))?;
-        let json = generate_file(&content)?;
 
-        fs::write(&output_file_path, json)
+        let output_content =
+            if (unsafe { output_file_path.file_stem().unwrap_unchecked() }
+                == "Scripts")
+            {
+                let scripts_array = unsafe {
+                    load_binary(&content, INSTANCE_VAR_PREFIX)?
+                        .into_array()
+                        .unwrap_unchecked()
+                };
+
+                let (script_numbers, script_contents, script_names) =
+                    ScriptBase::decode_scripts(&scripts_array);
+
+                output_file_path.set_extension("rb");
+
+                script_numbers
+                    .into_iter()
+                    .zip(script_names)
+                    .zip(script_contents)
+                    .map(|((a, b), c)| {
+                        format!(
+                            "{a}<##>\n{b}<##>\n{c}\n<###>\n",
+                            c = c.replace("\r\n", "\n")
+                        )
+                    })
+                    .collect()
+            } else {
+                generate_file(&content)?
+            };
+
+        fs::write(&output_file_path, output_content)
             .map_err(|e| Error::Io(output_file_path, e))?;
 
         log::info!(
@@ -119,16 +150,56 @@ pub fn write<P: AsRef<Path>>(
     for entry in read_dir(json_path.as_ref())
         .map_err(|e| Error::Io(json_path.as_ref().to_path_buf(), e))?
         .flatten()
+        .filter(|x| {
+            Path::new(&x.file_name())
+                .extension()
+                .is_some_and(|ext| ext == "json" || ext == "rb")
+        })
     {
         let path = entry.path();
         let content = read_to_string(&path).map_err(|e| Error::Io(path, e))?;
-        let written = write_file(&content)?;
 
         let filename = entry.file_name();
         let output_file_path = output_path.as_ref().join(
             Path::new(&filename)
                 .with_extension(get_engine_extension(engine_type)),
         );
+
+        let written = if filename == "Scripts.rb" {
+            let mut script_numbers = Vec::new();
+            let mut script_contents = Vec::new();
+            let mut script_names = Vec::new();
+
+            for script in content.split("\n<###>\n") {
+                let mut split = script.split("<##>\n");
+
+                let number = unsafe {
+                    split
+                        .next()
+                        .unwrap_unchecked()
+                        .parse::<i32>()
+                        .unwrap_unchecked()
+                };
+                let name = unsafe { split.next().unwrap_unchecked() };
+                let content = unsafe { split.next().unwrap_unchecked() };
+
+                script_numbers.push(number);
+                script_contents.push(content);
+                script_names.push(name);
+            }
+
+            dump(
+                Value::array(ScriptBase::encode_scripts(
+                    &script_numbers,
+                    &script_contents,
+                    &script_names,
+                )),
+                None,
+            )
+        } else {
+            write_file(&content)?
+        };
+
         fs::write(&output_file_path, written)
             .map_err(|e| Error::Io(output_file_path, e))?;
 
