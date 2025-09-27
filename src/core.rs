@@ -25,6 +25,8 @@ macro_rules! mutable {
     }};
 }
 
+const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
 /// Newer RPG Maker versions store events in arrays while older versions use hash maps.
 #[repr(u8)]
 enum EventIterator<'a> {
@@ -347,7 +349,14 @@ pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
 ///     Ok(())
 /// }
 /// ```
-pub fn get_system_title(system_file_content: &str) -> Result<String, Error> {
+pub fn get_system_title(
+    mut system_file_content: &str,
+) -> Result<String, Error> {
+    // MZ includes Byte Order Mark in files.
+    if system_file_content.as_bytes().starts_with(&BOM) {
+        system_file_content = &system_file_content[3..];
+    }
+
     let system_file_value: serde_json::Value = from_str(system_file_content)?;
 
     system_file_value["gameTitle"]
@@ -883,8 +892,6 @@ impl<'a> Base {
     /// - `Err(Error)` - if was unabled to deserialize the file.
     fn parse_rpgm_file(&mut self, mut content: &[u8]) -> Result<Value, Error> {
         if self.engine_type.is_new() {
-            const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
-
             // MZ includes Byte Order Mark in files.
             if content.starts_with(&BOM) {
                 content = &content[3..]
@@ -2787,9 +2794,6 @@ impl<'a> SystemBase<'a> {
 
 pub struct ScriptBase<'a> {
     pub base: &'a mut Base,
-    scripts_array: Vec<Value>,
-    script_names: Vec<String>,
-    scripts_content: Vec<String>,
 }
 
 impl<'a> ScriptBase<'a> {
@@ -2807,12 +2811,7 @@ impl<'a> ScriptBase<'a> {
         base.reset();
         base.file_type = RPGMFileType::Scripts;
 
-        Self {
-            base,
-            scripts_array: Vec::new(),
-            script_names: Vec::new(),
-            scripts_content: Vec::new(),
-        }
+        Self { base }
     }
 
     /// Initializes the translation from `.txt` file contents.
@@ -2872,14 +2871,15 @@ impl<'a> ScriptBase<'a> {
     ///
     /// # Panics
     /// May panic if passed content is not `Scripts`.
-    pub fn process(mut self, content: &[u8]) -> Result<Vec<u8>, Error> {
-        self.scripts_array = unsafe {
+    pub fn process(self, content: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut scripts_array = unsafe {
             self.base
                 .parse_rpgm_file(content)?
                 .into_array()
                 .unwrap_unchecked()
         };
-        self.decode_scripts();
+        let (_, mut script_contents, mut script_names) =
+            Self::decode_scripts(&scripts_array);
 
         let regexes = unsafe {
             [
@@ -2892,13 +2892,11 @@ impl<'a> ScriptBase<'a> {
             ]
         };
 
-        for (((script_id, script), script_name), mut code) in
-            mutable!(&self, Self)
-                .scripts_array
-                .iter_mut()
-                .enumerate()
-                .zip(take(&mut self.script_names))
-                .zip(take(&mut self.scripts_content))
+        for (((script_id, script), script_name), mut code) in scripts_array
+            .iter_mut()
+            .enumerate()
+            .zip(take(&mut script_names))
+            .zip(take(&mut script_contents))
         {
             let script_id = script_id.to_string();
             let flow = self.base.get_translation_map(&script_id);
@@ -2976,7 +2974,7 @@ impl<'a> ScriptBase<'a> {
             self.base.reset_translation_map(&script_id);
         }
 
-        Ok(self.base.finish(Value::array(self.scripts_array)))
+        Ok(self.base.finish(Value::array(scripts_array)))
     }
 
     fn is_escaped(index: usize, string: &str) -> bool {
@@ -3063,12 +3061,20 @@ impl<'a> ScriptBase<'a> {
         (strings, ranges)
     }
 
-    fn decode_scripts(&mut self) {
-        self.scripts_content.reserve_exact(self.scripts_array.len());
-        self.script_names.reserve_exact(self.scripts_array.len());
+    pub fn decode_scripts(
+        scripts_array: &[Value],
+    ) -> (Vec<i32>, Vec<String>, Vec<String>) {
+        let mut script_numbers: Vec<i32> =
+            Vec::with_capacity(scripts_array.len());
+        let mut script_contents: Vec<String> =
+            Vec::with_capacity(scripts_array.len());
+        let mut script_names: Vec<String> =
+            Vec::with_capacity(scripts_array.len());
 
-        for script in self.scripts_array.iter() {
+        for script in scripts_array.iter() {
             // These always exist in scripts, panic is unlikely.
+            let script_number =
+                unsafe { script[0].as_int().unwrap_unchecked() };
             let script_name_data =
                 unsafe { script[1].as_byte_vec().unwrap_unchecked() };
             let script_data =
@@ -3095,12 +3101,44 @@ impl<'a> ScriptBase<'a> {
                 let (script_name_cow, _, _) = encoding.decode(script_name_data);
 
                 if !had_errors {
-                    self.scripts_content.push(script_cow.into());
-                    self.script_names.push(script_name_cow.into());
+                    script_numbers.push(script_number);
+                    script_contents.push(script_cow.into());
+                    script_names.push(script_name_cow.into());
                     break;
                 }
             }
         }
+
+        (script_numbers, script_contents, script_names)
+    }
+
+    pub fn encode_scripts(
+        script_numbers: &[i32],
+        script_contents: &[&str],
+        script_names: &[&str],
+    ) -> Vec<Value> {
+        let mut scripts_array = Vec::with_capacity(script_contents.len());
+
+        for ((content, name), number) in script_contents
+            .iter()
+            .zip(script_names.iter())
+            .zip(script_numbers)
+        {
+            let mut encoder =
+                ZlibEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(content.as_bytes()).unwrap();
+            let compressed_content = encoder.finish().unwrap();
+
+            let script_value = Value::array(vec![
+                Value::int(*number),
+                Value::string(name),
+                Value::bytes(&compressed_content),
+            ]);
+
+            scripts_array.push(script_value);
+        }
+
+        scripts_array
     }
 }
 
