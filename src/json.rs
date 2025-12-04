@@ -1,28 +1,43 @@
 use crate::{
     constants::INSTANCE_VAR_PREFIX,
     core::{ScriptBase, get_engine_extension},
-    types::*,
+    types::{EngineType, Error, Scripts},
 };
 use marshal_rs::{Value, dump, load_binary, load_utf8};
 use serde_json::{from_str, to_string_pretty};
 use std::{
+    fmt::Write,
     fs::{self, create_dir_all, read, read_dir, read_to_string},
     path::Path,
 };
 
-/// Generates JSON representation of RPG Maker file, and returns the result, that can be converted back later with [`write_file`].
+/// Generates JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`), and returns the result, that can be converted back later with [`write_file`].
 ///
 /// # Returns
-/// JSON representation as [`String`] or [`Error`], if deserializing `file_content` fails.
+///
+/// - [`String`] JSON representation of `file_content` RPG Maker file if successful.
+/// - [`Error`] otherwise.
+///
+/// # Errors
+///
+/// - [`Error::MarshalLoad`] - if parsing `file_content` Marshal data fails.
+///
 pub fn generate_file(file_content: &[u8]) -> Result<String, Error> {
     let loaded = load_utf8(file_content, INSTANCE_VAR_PREFIX)?;
     Ok(unsafe { to_string_pretty(&loaded).unwrap_unchecked() })
 }
 
-/// Converts JSON representation of RPG Maker file, created with [`generate_file`] back to initial form.
+/// Converts JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`) created with [`generate_file`] back to initial form.
 ///
 /// # Returns
-/// RPG Maker data as [`Vec<u8>`] or [`Error`], if deserializing `file_content` fails.
+///
+/// - [`Vec<u8>`]  Marshal data of `file_content` JSON content.
+/// - [`Error`] otherwise.
+///
+/// # Errors
+///
+/// - [`Error::JsonParse`] - if parsing `file_content` JSON fails.
+///
 pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
     let json = from_str::<Value>(file_content)?;
     Ok(dump(json, None))
@@ -34,13 +49,20 @@ pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
 ///
 /// If `force` argument is not set, skips processing already existing files.
 ///
-/// # Arguments
+/// # Parameters
 /// - `source_path` - Path to the directory containing RPG Maker files.
 /// - `output_path` - Path to the directory where `json` folder with `.json` files will be created.
 /// - `force` - Whether to overwrite existing JSON representations.
 ///
 /// # Returns
-/// Returns [`Error`], if any system call or deserializing RPG Maker file fails.
+///
+/// - Nothing if successful.
+/// - [`Error`] otherwise.
+///
+/// # Errors
+///
+/// - [`Error::Io`], if any I/O operation fails.
+/// - [`Error::MarshalLoad`], if deserializing RPG Maker file fails.
 ///
 /// # Example
 /// ```no_run
@@ -85,22 +107,24 @@ pub fn generate<P: AsRef<Path>>(
                         .unwrap_unchecked()
                 };
 
-                let (script_numbers, script_contents, script_names) =
-                    ScriptBase::decode_scripts(&scripts_array);
+                let scripts = ScriptBase::decode_scripts(&scripts_array);
 
                 output_file_path.set_extension("rb");
 
-                script_numbers
+                scripts
+                    .numbers
                     .into_iter()
-                    .zip(script_names)
-                    .zip(script_contents)
-                    .map(|((a, b), c)| {
-                        format!(
+                    .zip(scripts.names)
+                    .zip(scripts.contents)
+                    .fold(String::new(), |mut result, ((a, b), c)| {
+                        let _ = write!(
+                            result,
                             "{a}<##>\n{b}<##>\n{c}\n<###>\n",
                             c = c.replace("\r\n", "\n")
-                        )
+                        );
+
+                        result
                     })
-                    .collect()
             } else {
                 generate_file(&content)?
             };
@@ -121,14 +145,21 @@ pub fn generate<P: AsRef<Path>>(
 ///
 /// This function uses [`write_file`] under the hood, and manages all system calls for you.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// - `json_path` - Path to the directory containing `.json` representations.
 /// - `output_path` - Path to the directory, where output files in initial format will be created.
 /// - `engine_type` - Engine type, to properly write file extensions.
 ///
 /// # Returns
-/// Returns [`Error`], if any system call or deserializing JSON file fails.
+///
+/// - Nothing if successful.
+/// - [`Error`] otherwise.
+///
+/// # Errors
+///
+/// - [`Error::Io`], if any I/O operation fails.
+/// - [`Error::JsonParse`] - if parsing any JSON fails.
 ///
 /// # Example
 /// ```no_run
@@ -166,9 +197,11 @@ pub fn write<P: AsRef<Path>>(
         );
 
         let written = if filename == "Scripts.rb" {
-            let mut script_numbers = Vec::new();
-            let mut script_contents = Vec::new();
-            let mut script_names = Vec::new();
+            let mut scripts = Scripts::new(
+                Vec::with_capacity(256),
+                Vec::with_capacity(256),
+                Vec::with_capacity(256),
+            );
 
             for script in content.split("\n<###>\n") {
                 let mut split = script.split("<##>\n");
@@ -183,19 +216,12 @@ pub fn write<P: AsRef<Path>>(
                 let name = unsafe { split.next().unwrap_unchecked() };
                 let content = unsafe { split.next().unwrap_unchecked() };
 
-                script_numbers.push(number);
-                script_contents.push(content);
-                script_names.push(name);
+                scripts.numbers.push(number);
+                scripts.contents.push(content.to_string());
+                scripts.names.push(name.to_string());
             }
 
-            dump(
-                Value::array(ScriptBase::encode_scripts(
-                    &script_numbers,
-                    &script_contents,
-                    &script_names,
-                )),
-                None,
-            )
+            dump(Value::array(ScriptBase::encode_scripts(&scripts)), None)
         } else {
             write_file(&content)?
         };

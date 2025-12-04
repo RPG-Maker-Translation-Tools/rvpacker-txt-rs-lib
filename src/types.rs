@@ -101,7 +101,7 @@ pub(crate) trait EachLine {
 
 impl EachLine for str {
     #[inline]
-    /// Return a Vec of strings splitted by lines (inclusive), akin to each_line in Ruby
+    /// Return a [`Vec`] of strings splitted by lines (inclusive), akin to `each_line` in Ruby
     fn each_line(&self) -> Vec<String> {
         let mut result = Vec::with_capacity(1024);
         let mut current_line = String::new();
@@ -332,7 +332,7 @@ pub enum Error {
     #[error("{0}: IO error occurred: {1}")]
     Io(PathBuf, io::Error),
     #[error("Loading RPG Maker data failed with: {0}")]
-    Load(#[from] marshal_rs::LoadError),
+    MarshalLoad(#[from] marshal_rs::LoadError),
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
     #[error(
@@ -456,14 +456,18 @@ bitflags! {
     #[serde(into = "u8", try_from = "u8")]
     pub struct FileFlags: u8 {
         const None = 0;
+
         /// `Mapxxx.ext` files.
-        const Map = 1;
+        const Map = 1 << 0;
+
         /// All files, other than map, system, and scripts/plugins.
-        const Other = 2;
+        const Other = 1 << 1;
+
         /// `System.ext` file.
-        const System = 4;
+        const System = 1 << 2;
+
         /// `Scripts.ext`/`plugins.js` file.
-        const Scripts = 8;
+        const Scripts = 1 << 3;
     }
 }
 
@@ -484,5 +488,95 @@ impl From<FileFlags> for u8 {
 impl Default for FileFlags {
     fn default() -> Self {
         Self::all()
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+    #[serde(into = "u8", try_from = "u8")]
+    pub struct BaseFlags: u8 {
+        /// Disable all processing flags. Default value.
+        const None = 0;
+
+        /// Convert all encountered Unicode/CJK typographic/punctuation symbols to their Western/ASCII equivalents.
+        ///
+        /// That includes characters like Japanese quotation marks, for example `「」` are converted to `''` single quotes.
+        ///
+        /// This flag **must be set on write or purge** if it was set on read.
+        const Romanize = 1 << 0;
+
+        /// Trim leading and trailing whitespace from all encountered text.
+        ///
+        /// This flag **must be set on write or purge** if it was set on read.
+        const Trim = 1 << 1;
+
+        /// Use ignore entries from `.rvpacker-ignore` file.
+        ///
+        /// Prior to using this function, you may need to create `.rvpacker-ignore` file by purging with [`BaseFlags::CreateIgnore`] argument.
+        ///
+        /// Only used on reads with [`ReadMode::Append`] to bypass entries that were previously purged.
+        const Ignore = 1 << 2;
+
+        /// Create `.rvpacker-ignore` file with ignore entries from purged entries.
+        ///
+        /// Only used on purge.
+        const CreateIgnore = 1 << 3;
+
+        /// No effect, for convenience.
+        const DisableCustomProcessing = 1 << 4;
+    }
+}
+
+impl Default for BaseFlags {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl TryFrom<u8> for BaseFlags {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(Self::from_bits_truncate(value))
+    }
+}
+
+impl From<BaseFlags> for u8 {
+    fn from(value: BaseFlags) -> Self {
+        value.bits()
+    }
+}
+
+pub enum ProcessedData {
+    RPGMData(Vec<u8>),
+    TranslationData(Vec<u8>),
+}
+
+impl std::convert::AsRef<[u8]> for ProcessedData {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::RPGMData(vec) | Self::TranslationData(vec) => vec,
+        }
+    }
+}
+
+pub struct Scripts {
+    pub numbers: Vec<i32>,
+    pub contents: Vec<String>,
+    pub names: Vec<String>,
+}
+
+impl Scripts {
+    #[must_use]
+    pub fn new(
+        numbers: Vec<i32>,
+        contents: Vec<String>,
+        names: Vec<String>,
+    ) -> Self {
+        Self {
+            numbers,
+            contents,
+            names,
+        }
     }
 }

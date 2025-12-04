@@ -1,4 +1,14 @@
-use crate::{constants::*, core::*, types::*};
+use crate::{
+    BaseFlags,
+    constants::RVPACKER_IGNORE_FILE,
+    core::{
+        Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
+        filter_maps, filter_other, get_engine_extension, parse_ignore,
+    },
+    types::{
+        DuplicateMode, EngineType, Error, FileFlags, GameType, Mode, ReadMode,
+    },
+};
 use std::{
     fs::{create_dir_all, read, read_dir, read_to_string, write},
     mem::take,
@@ -18,14 +28,13 @@ impl Processor {
         engine_type: EngineType,
         source_path: P,
         translation_path: P,
-        output_path: Option<P>,
+        output_path: Option<&P>,
     ) -> Result<(), Error> {
         if self.file_flags.is_empty() {
             return Ok(());
         }
 
-        self.base.mode = mode;
-        self.base.set_engine_type(engine_type);
+        self.base = Base::new(mode, engine_type);
 
         let default_path = PathBuf::default();
 
@@ -41,7 +50,11 @@ impl Processor {
 
         let ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
-        if self.base.ignore || self.base.create_ignore {
+        if self
+            .base
+            .flags
+            .contains(BaseFlags::CreateIgnore | BaseFlags::Ignore)
+        {
             match read_to_string(&ignore_file_path)
                 .map_err(|e| Error::Io(ignore_file_path.clone(), e))
             {
@@ -53,7 +66,7 @@ impl Processor {
                     );
                 }
                 Err(err) => {
-                    if self.base.ignore {
+                    if self.base.flags.contains(BaseFlags::Ignore) {
                         return Err(err);
                     }
                 }
@@ -100,7 +113,7 @@ impl Processor {
         };
 
         if self.file_flags.contains(FileFlags::Map) {
-            let base_ref = unsafe { &mut *(&mut self.base as *mut Base) };
+            let base_ref = unsafe { &mut *(&raw mut self.base) };
             let mut map_base = MapBase::new(base_ref);
 
             let mapinfos_path = source_path.join(format!(
@@ -121,8 +134,8 @@ impl Processor {
             for map_entry in filter_maps(entries, engine_type) {
                 let path = map_entry.path();
                 let filename = path.file_name().unwrap().to_str().unwrap();
-                let content = read(&path)
-                    .map_err(|e| Error::Io(path.to_path_buf(), e))?;
+                let content =
+                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
                 let data = map_base.process(filename, &content)?;
 
                 if self.base.mode.is_write() {
@@ -150,7 +163,7 @@ impl Processor {
             .flatten();
 
         if self.file_flags.contains(FileFlags::Other) {
-            let base_ref = unsafe { &mut *(&mut self.base as *mut Base) };
+            let base_ref = unsafe { &mut *(&raw mut self.base) };
             let mut other_base = OtherBase::new(base_ref);
 
             for map_entry in
@@ -168,8 +181,8 @@ impl Processor {
                     other_base.initialize_translation(filename, &translation);
                 }
 
-                let content = read(&path)
-                    .map_err(|e| Error::Io(path.to_path_buf(), e))?;
+                let content =
+                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
                 let data = other_base.process(filename, &content)?;
 
                 let output_file_path = if self.base.mode.is_write() {
@@ -189,7 +202,7 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let base_ref = unsafe { &mut *(&mut self.base as *mut Base) };
+            let base_ref = unsafe { &mut *(&raw mut self.base) };
             let mut system_base = SystemBase::new(base_ref);
 
             if self.base.read_mode.is_append() || !self.base.mode.is_read() {
@@ -219,7 +232,7 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
-            let base_ref = unsafe { &mut *(&mut self.base as *mut Base) };
+            let base_ref = unsafe { &mut *(&raw mut self.base) };
 
             if engine_type.is_new() {
                 let mut plugin_base = PluginBase::new(base_ref);
@@ -286,7 +299,7 @@ impl Processor {
             }
         }
 
-        if self.base.create_ignore {
+        if self.base.flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
             let contents: String = take(&mut self.base.ignore_map)
@@ -322,19 +335,17 @@ impl Processor {
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set them.
 /// - `read_mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set it.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Reader::set_romanize`].
-/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use [`Reader::set_ignore`] to set it.
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Reader::set_trim`] to set it.
+/// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
 ///
 /// let mut reader = Reader::new();
-/// reader.set_flags(FileFlags::Map | FileFlags::Other);
+/// reader.set_files(FileFlags::Map | FileFlags::Other);
 /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
 #[derive(Default)]
@@ -353,19 +364,20 @@ impl Reader {
     ///
     /// let mut reader = Reader::new();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
+    /// There's four `FileFlags` variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
@@ -373,9 +385,9 @@ impl Reader {
     /// use rvpacker_txt_rs_lib::{Reader, FileFlags};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_flags(FileFlags::Map | FileFlags::Other);
+    /// reader.set_files(FileFlags::Map | FileFlags::Other);
     /// ```
-    pub fn set_flags(&mut self, flags: FileFlags) {
+    pub fn set_files(&mut self, flags: FileFlags) {
         self.processor.file_flags = flags;
     }
 
@@ -386,7 +398,7 @@ impl Reader {
     /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
     /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
@@ -402,13 +414,13 @@ impl Reader {
 
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -422,47 +434,23 @@ impl Reader {
         self.processor.base.game_type = game_type;
     }
 
-    /// Enables or disables romanization of the parsed text.
+    /// Sets the flags of the processor.
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
+    /// # Parameters
     ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::Reader;
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_romanize(true);
-    /// ```
-    pub fn set_romanize(&mut self, enabled: bool) {
-        self.processor.base.romanize = enabled;
-    }
-
-    /// Sets whether to ignore entries from `.rvpacker-ignore` file.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::Reader;
+    /// use rvpacker_txt_rs_lib::{Reader, BaseFlags};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_ignore(true);
+    /// reader.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn set_ignore(&mut self, enabled: bool) {
-        self.processor.base.ignore = enabled;
-    }
-
-    /// Sets whether to trim whitespace from strings.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, DuplicateMode};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_trim(true);
-    /// ```
-    pub fn set_trim(&mut self, enabled: bool) {
-        self.processor.base.trim = enabled;
+    pub fn set_flags(&mut self, flags: BaseFlags) {
+        self.processor.base.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
@@ -487,10 +475,16 @@ impl Reader {
     ///
     /// Make sure you've configured the reader as you desire before calling it.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `source_path` - Path to the directory containing RPG Maker files.
     /// - `translation_path` - Path to the directory where `.txt` files will be created.
     /// - `engine_type` - Engine type of the source RPG Maker files.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Io`] - if any I/O operation fails.
+    /// - [`Error::JsonParse`] - if parsing any JSON fails.
+    /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
     ///
     /// # Example
     /// ```no_run
@@ -522,18 +516,16 @@ impl Reader {
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`ReaderBuilder::with_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`ReaderBuilder::with_files`] to set them.
 /// - `read_mode`: Defines the read strategy. Use [`ReaderBuilder::read_mode`] to set it.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`ReaderBuilder::game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`ReaderBuilder::romanize`].
-/// - `ignore`: Ignores entries from `.rvpacker-ignore` file. Use [`ReaderBuilder::ignore`] to set it.
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`ReaderBuilder::trim`] to set it.
+/// - `flags`: Indicates different modes of processing the text. Use [`ReaderBuilder::with_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```
 /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags, GameType};
 ///
-/// let mut reader = ReaderBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+/// let mut reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
 /// ```
 #[derive(Default)]
 pub struct ReaderBuilder {
@@ -551,28 +543,30 @@ impl ReaderBuilder {
     ///
     /// let mut reader = ReaderBuilder::new().build();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
+    /// There's four `FileFlags` variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags};
     ///
-    /// let reader = ReaderBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+    /// let reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
     /// ```
-    pub fn with_flags(mut self, flags: FileFlags) -> Self {
+    #[must_use]
+    pub fn with_files(mut self, flags: FileFlags) -> Self {
         self.reader.processor.file_flags = flags;
         self
     }
@@ -584,7 +578,7 @@ impl ReaderBuilder {
     /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
     /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
@@ -593,6 +587,7 @@ impl ReaderBuilder {
     ///
     /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default).build();
     /// ```
+    #[must_use]
     pub fn read_mode(mut self, mode: ReadMode) -> Self {
         self.reader.processor.base.read_mode = mode;
         self
@@ -600,13 +595,13 @@ impl ReaderBuilder {
 
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -615,51 +610,29 @@ impl ReaderBuilder {
     ///
     /// let reader = ReaderBuilder::new().game_type(GameType::Termina).build();
     /// ```
+    #[must_use]
     pub fn game_type(mut self, game_type: GameType) -> Self {
         self.reader.processor.base.game_type = game_type;
         self
     }
 
-    /// Enables or disables romanization of the parsed text.
+    /// Sets the flags of the processor.
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
+    /// # Parameters
     ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::ReaderBuilder;
-    ///
-    /// let reader = ReaderBuilder::new().romanize(true).build();
-    /// ```
-    pub fn romanize(mut self, enabled: bool) -> Self {
-        self.reader.processor.base.romanize = enabled;
-        self
-    }
-
-    /// Sets whether to ignore entries from `.rvpacker-ignore` file.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::ReaderBuilder;
+    /// use rvpacker_txt_rs_lib::{ReaderBuilder, BaseFlags};
     ///
-    /// let reader = ReaderBuilder::new().ignore(true).build();
+    /// let mut reader = ReaderBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn ignore(mut self, enabled: bool) -> Self {
-        self.reader.processor.base.ignore = enabled;
-        self
-    }
-
-    /// Sets whether to trim whitespace from strings.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::ReaderBuilder;
-    ///
-    /// let reader = ReaderBuilder::new().trim(true).build();
-    /// ```
-    pub fn trim(mut self, enabled: bool) -> Self {
-        self.reader.processor.base.trim = enabled;
+    #[must_use]
+    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
+        self.reader.processor.base.flags = flags;
         self
     }
 
@@ -674,12 +647,14 @@ impl ReaderBuilder {
     ///
     /// let reader = ReaderBuilder::new().duplicate_mode(DuplicateMode::Allow).build();
     /// ```
+    #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
         self.reader.processor.base.duplicate_mode = mode;
         self
     }
 
     /// Builds and returns the [`Reader`].
+    #[must_use]
     pub fn build(self) -> Reader {
         self.reader
     }
@@ -690,17 +665,16 @@ impl ReaderBuilder {
 /// The [`Writer`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper writing.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_files`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Writer::set_romanize`].
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Writer::set_trim`] to set it.
+/// - `flags`: Indicates different modes of processing the text. Use [`Writer::set_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
 ///
 /// let mut writer = Writer::new();
-/// writer.set_flags(FileFlags::Map | FileFlags::Other);
+/// writer.set_files(FileFlags::Map | FileFlags::Other);
 /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
 /// ```
 #[derive(Default)]
@@ -719,19 +693,20 @@ impl Writer {
     ///
     /// let mut writer = Writer::new();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
+    /// There's four `FileFlags` variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
@@ -739,9 +714,9 @@ impl Writer {
     /// use rvpacker_txt_rs_lib::{Writer, FileFlags};
     ///
     /// let mut writer = Writer::new();
-    /// writer.set_flags(FileFlags::Map | FileFlags::Other);
+    /// writer.set_files(FileFlags::Map | FileFlags::Other);
     /// ```
-    pub fn set_flags(&mut self, file_flags: FileFlags) {
+    pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
     }
 
@@ -749,13 +724,13 @@ impl Writer {
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -769,38 +744,23 @@ impl Writer {
         self.processor.base.game_type = game_type;
     }
 
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    /// Sets the flags of the processor.
     ///
-    /// Enables or disables romanization of the parsed text.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// # Parameters
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::Writer;
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_romanize(true);
-    /// ```
-    pub fn set_romanize(&mut self, enabled: bool) {
-        self.processor.base.romanize = enabled;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets whether to trim whitespace from strings.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::Writer;
+    /// use rvpacker_txt_rs_lib::{Writer, BaseFlags};
     ///
     /// let mut writer = Writer::new();
-    /// writer.set_trim(true);
+    /// writer.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn set_trim(&mut self, enabled: bool) {
-        self.processor.base.trim = enabled;
+    pub fn set_flags(&mut self, flags: BaseFlags) {
+        self.processor.base.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
@@ -826,7 +786,7 @@ impl Writer {
     ///
     /// Make sure you've configured the writer with the same options as reader before calling it.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `source_path` - Path to the directory containing source RPG Maker files.
     ///
     ///   For `MV/MZ` engines, parent directory of `source_path` must contain `js` directory.
@@ -842,6 +802,18 @@ impl Writer {
     /// let mut writer = Writer::new();
     /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
     /// ```
+    ///
+    /// # Returns
+    ///
+    /// - Nothing on success.
+    /// - [`Error`] otherwise.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Io`] on I/O error.
+    /// - [`Error::MarshalLoad`] on RPG Maker XP/VX/VXAce file parsing fail.
+    /// - [`Error::JsonParse`] on JSON file parsing fail.
+    ///
     pub fn write<P: AsRef<Path>>(
         &mut self,
         source_path: P,
@@ -854,7 +826,7 @@ impl Writer {
             engine_type,
             source_path,
             translation_path,
-            Some(output_path),
+            Some(&output_path),
         )?;
         Ok(())
     }
@@ -865,16 +837,15 @@ impl Writer {
 /// The [`Writer`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper writing.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`WriterBuilder::with_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`WriterBuilder::with_files`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`WriterBuilder::game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`WriterBuilder::romanize`].
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`WriterBuilder::trim`] to set it.
+/// - `flags`: Indicates different modes of processing the text. Use [`WriterBuilder::with_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```
 /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags, GameType};
 ///
-/// let mut writer = WriterBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+/// let mut writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
 /// ```
 #[derive(Default)]
 pub struct WriterBuilder {
@@ -892,28 +863,30 @@ impl WriterBuilder {
     ///
     /// let mut writer = WriterBuilder::new().build();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed.
     ///
-    /// There's four FileFlags variants:
+    /// There's four `FileFlags` variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags};
     ///
-    /// let writer = WriterBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+    /// let writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
     /// ```
-    pub fn with_flags(mut self, flags: FileFlags) -> Self {
+    #[must_use]
+    pub fn with_files(mut self, flags: FileFlags) -> Self {
         self.writer.processor.file_flags = flags;
         self
     }
@@ -922,13 +895,13 @@ impl WriterBuilder {
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -937,42 +910,29 @@ impl WriterBuilder {
     ///
     /// let writer = WriterBuilder::new().game_type(GameType::Termina).build();
     /// ```
+    #[must_use]
     pub fn game_type(mut self, game_type: GameType) -> Self {
         self.writer.processor.base.game_type = game_type;
         self
     }
 
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    /// Sets the flags of the processor.
     ///
-    /// Enables or disables romanization of the parsed text.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// # Parameters
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::WriterBuilder;
-    ///
-    /// let writer = WriterBuilder::new().romanize(true).build();
-    /// ```
-    pub fn romanize(mut self, enabled: bool) -> Self {
-        self.writer.processor.base.romanize = enabled;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets whether to trim whitespace from strings.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::WriterBuilder;
+    /// use rvpacker_txt_rs_lib::{WriterBuilder, BaseFlags};
     ///
-    /// let writer = WriterBuilder::new().trim(true).build();
+    /// let mut writer = WriterBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn trim(mut self, enabled: bool) -> Self {
-        self.writer.processor.base.trim = enabled;
+    #[must_use]
+    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
+        self.writer.processor.base.flags = flags;
         self
     }
 
@@ -989,12 +949,14 @@ impl WriterBuilder {
     ///
     /// let writer = WriterBuilder::new().duplicate_mode(DuplicateMode::Remove).build();
     /// ```
+    #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
         self.writer.processor.base.duplicate_mode = mode;
         self
     }
 
     /// Builds and returns the [`Writer`].
+    #[must_use]
     pub fn build(self) -> Writer {
         self.writer
     }
@@ -1005,19 +967,16 @@ impl WriterBuilder {
 /// The [`Purger`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_files`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`Purger::set_romanize`].
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`Purger::set_trim`] to set it.
-/// - `create_ignore`: If enabled, creates `.rvpacker-ignore` file from purged lines, that can be used in
-///   `Reader` struct when its `ignore` option is set.
+/// - `flags`: Indicates different modes of processing the text. Use [`Purger::set_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
 ///
 /// let mut purger = Purger::new();
-/// purger.set_flags(FileFlags::Map | FileFlags::Other);
+/// purger.set_files(FileFlags::Map | FileFlags::Other);
 /// let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
 #[derive(Default)]
@@ -1036,6 +995,7 @@ impl Purger {
     ///
     /// let mut purger = Purger::new();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -1048,17 +1008,17 @@ impl Purger {
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
-    /// - `flags` - A `FileFlags` value indicating the file types to include.
+    /// # Parameters
+    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```
     /// use rvpacker_txt_rs_lib::{Purger, FileFlags};
     ///
     /// let mut purger = Purger::new();
-    /// purger.set_flags(FileFlags::Map | FileFlags::Other);
+    /// purger.set_files(FileFlags::Map | FileFlags::Other);
     /// ```
-    pub fn set_flags(&mut self, file_flags: FileFlags) {
+    pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
     }
 
@@ -1066,13 +1026,13 @@ impl Purger {
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -1086,51 +1046,23 @@ impl Purger {
         self.processor.base.game_type = game_type;
     }
 
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    /// Sets the flags of the processor.
     ///
-    /// Enables or disables romanization of the parsed text.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// # Parameters
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::Purger;
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_romanize(true);
-    /// ```
-    pub fn set_romanize(&mut self, enabled: bool) {
-        self.processor.base.romanize = enabled;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets whether to trim whitespace from strings.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::Purger;
+    /// use rvpacker_txt_rs_lib::{Purger, BaseFlags};
     ///
     /// let mut purger = Purger::new();
-    /// purger.set_trim(true);
+    /// purger.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn set_trim(&mut self, enabled: bool) {
-        self.processor.base.trim = enabled;
-    }
-
-    /// Sets whether to create `.rvpacker-ignore` file from purged lines.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::Purger;
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_create_ignore(true);
-    /// ```
-    pub fn set_create_ignore(&mut self, enabled: bool) {
-        self.processor.base.create_ignore = enabled;
+    pub fn set_flags(&mut self, flags: BaseFlags) {
+        self.processor.base.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
@@ -1155,10 +1087,16 @@ impl Purger {
     ///
     /// Make sure you've configured the purger with the same options as reader before calling it.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `source_path` - Path to the directory containing RPG Maker files.
     /// - `translation_path` - Path to the directory containing `.txt` translation files.
     /// - `engine_type` - Engine type of the source RPG Maker files.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Io`] - if any I/O operation fails.
+    /// - [`Error::JsonParse`] - if parsing any JSON fails.
+    /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
     ///
     /// # Example
     /// ```no_run
@@ -1189,18 +1127,15 @@ impl Purger {
 /// The `Purger` struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_flags`] to set them.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_files`] to set them.
 /// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`PurgerBuilder::game_type`] to set it.
-/// - `romanize`: Enables or disables romanization of parsed text. For more info, and to set it, see [`PurgerBuilder::romanize`].
-/// - `trim`: Removes leading and trailing whitespace from extracted strings. Use [`PurgerBuilder::trim`] to set it.
-/// - `create_ignore`: If enabled, creates `.rvpacker-ignore` file from purged lines, that can be used in
-///   `Reader` struct when its `ignore` option is set.
+/// - `flags`: Indicates different modes of processing the text. Use [`PurgerBuilder::with_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
 /// ```
 /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags, GameType};
 ///
-/// let mut purger = PurgerBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+/// let mut purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
 /// ```
 #[derive(Default)]
 pub struct PurgerBuilder {
@@ -1218,6 +1153,7 @@ impl PurgerBuilder {
     ///
     /// let mut purger = PurgerBuilder::new().build();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -1230,16 +1166,17 @@ impl PurgerBuilder {
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     ///
-    /// # Arguments
-    /// - `flags` - A `FileFlags` value indicating the file types to include.
+    /// # Parameters
+    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags};
     ///
-    /// let purger = PurgerBuilder::new().with_flags(FileFlags::Map | FileFlags::Other).build();
+    /// let purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
     /// ```
-    pub fn with_flags(mut self, file_flags: FileFlags) -> Self {
+    #[must_use]
+    pub fn with_files(mut self, file_flags: FileFlags) -> Self {
         self.purger.processor.file_flags = file_flags;
         self
     }
@@ -1248,13 +1185,13 @@ impl PurgerBuilder {
     ///
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and LisaRPG series games ([`GameType::LisaRPG`]).
+    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
     ///
     /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
     ///
-    /// For example, in LisaRPG games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
+    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
     ///
-    /// # Arguments
+    /// # Parameters
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
@@ -1263,55 +1200,29 @@ impl PurgerBuilder {
     ///
     /// let purger = PurgerBuilder::new().game_type(GameType::Termina).build();
     /// ```
+    #[must_use]
     pub fn game_type(mut self, game_type: GameType) -> Self {
         self.purger.processor.base.game_type = game_type;
         self
     }
 
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    /// Sets the flags of the processor.
     ///
-    /// Enables or disables romanization of the parsed text.
+    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
     ///
-    /// Essentially, this flag just replaces Eastern symbols in strings to their Western equivalents.
+    /// # Parameters
     ///
-    /// For example, 「」 Eastern (Japanese) quotation marks will be replaced by `''`.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::PurgerBuilder;
-    ///
-    /// let purger = PurgerBuilder::new().romanize(true).build();
-    /// ```
-    pub fn romanize(mut self, enabled: bool) -> Self {
-        self.purger.processor.base.romanize = enabled;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets whether to trim whitespace from strings.
+    /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
     /// ```
-    /// use rvpacker_txt_rs_lib::PurgerBuilder;
+    /// use rvpacker_txt_rs_lib::{PurgerBuilder, BaseFlags};
     ///
-    /// let purger = PurgerBuilder::new().trim(true).build();
+    /// let mut purger = PurgerBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
-    pub fn trim(mut self, enabled: bool) -> Self {
-        self.purger.processor.base.trim = enabled;
-        self
-    }
-
-    /// Sets whether to create `.rvpacker-ignore` file from purged lines.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::PurgerBuilder;
-    ///
-    /// let purger = PurgerBuilder::new().create_ignore(true).build();
-    /// ```
-    pub fn create_ignore(mut self, enabled: bool) -> Self {
-        self.purger.processor.base.create_ignore = enabled;
+    #[must_use]
+    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
+        self.purger.processor.base.flags = flags;
         self
     }
 
@@ -1328,12 +1239,14 @@ impl PurgerBuilder {
     ///
     /// let purger = PurgerBuilder::new().duplicate_mode(DuplicateMode::Allow).build();
     /// ```
+    #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
         self.purger.processor.base.duplicate_mode = mode;
         self
     }
 
     /// Builds and returns the [`Purger`].
+    #[must_use]
     pub fn build(self) -> Purger {
         self.purger
     }
