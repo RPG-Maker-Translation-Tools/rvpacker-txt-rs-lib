@@ -65,6 +65,7 @@ pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
 /// - [`Error::MarshalLoad`], if deserializing RPG Maker file fails.
 ///
 /// # Example
+///
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{json::generate, Error};
 ///
@@ -162,6 +163,7 @@ pub fn generate<P: AsRef<Path>>(
 /// - [`Error::JsonParse`] - if parsing any JSON fails.
 ///
 /// # Example
+///
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{json::write, EngineType, Error};
 ///

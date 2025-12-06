@@ -339,6 +339,10 @@ pub enum Error {
         "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
     )]
     NoTitle,
+    #[error(
+        "Base mode is not `ReadMode::Default` or `ReadMode::Force`, but no translation was supplied."
+    )]
+    NoTranslation,
 }
 
 impl Serialize for Error {
@@ -347,6 +351,64 @@ impl Serialize for Error {
         S: Serializer,
     {
         self.to_string().serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, Copy, EnumIs, Deserialize, Serialize)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum Mode {
+    Read(ReadMode),
+    Write = 3,
+    Purge = 4,
+}
+
+impl Mode {
+    #[must_use]
+    pub const fn is_append(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Append))
+    }
+
+    #[must_use]
+    pub const fn is_default(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Default | ReadMode::Force))
+    }
+
+    #[must_use]
+    pub const fn is_force(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Force))
+    }
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Read(ReadMode::Default)
+    }
+}
+
+impl From<Mode> for u8 {
+    fn from(val: Mode) -> Self {
+        match val {
+            Mode::Read(m) => m.into(),
+            Mode::Write => 3,
+            Mode::Purge => 4,
+        }
+    }
+}
+
+impl TryFrom<u8> for Mode {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            3 => Ok(Mode::Write),
+            4 => Ok(Mode::Purge),
+            v => {
+                let r: ReadMode =
+                    v.try_into().map_err(|_| "invalid ReadMode value")?;
+                Ok(Mode::Read(r))
+            }
+        }
     }
 }
 
@@ -363,26 +425,10 @@ impl Serialize for Error {
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
-pub enum Mode {
-    #[default]
-    Read,
-    Write,
-    Purge,
-}
-
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    EnumIs,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
-)]
-#[serde(into = "u8", try_from = "u8")]
-#[repr(u8)]
+/// Sets, what to do with duplicates. Works only for map and other files.
+///
+/// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
+/// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
 pub enum DuplicateMode {
     #[default]
     Allow,
@@ -402,6 +448,13 @@ pub enum DuplicateMode {
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
+/// Game type for custom processing.
+///
+/// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
+///
+/// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
+///
+/// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
 pub enum GameType {
     #[default]
     None,
@@ -422,6 +475,11 @@ pub enum GameType {
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
+/// There's three read modes:
+///
+/// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
+/// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
+/// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
 pub enum ReadMode {
     #[default]
     Default,
@@ -454,9 +512,12 @@ pub enum EngineType {
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
+    /// There's four [`FileFlags`] variants:
+    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
+    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::System`] - enables `System.txt` file processing.
+    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     pub struct FileFlags: u8 {
-        const None = 0;
-
         /// `Mapxxx.ext` files.
         const Map = 1 << 0;
 
@@ -494,10 +555,10 @@ impl Default for FileFlags {
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
+    /// Indicates different modes of processing the text.
+    ///
+    /// Check each flag to see what it does.
     pub struct BaseFlags: u8 {
-        /// Disable all processing flags. Default value.
-        const None = 0;
-
         /// Convert all encountered Unicode/CJK typographic/punctuation symbols to their Western/ASCII equivalents.
         ///
         /// That includes characters like Japanese quotation marks, for example `「」` are converted to `''` single quotes.
@@ -529,7 +590,7 @@ bitflags! {
 
 impl Default for BaseFlags {
     fn default() -> Self {
-        Self::None
+        Self::empty()
     }
 }
 

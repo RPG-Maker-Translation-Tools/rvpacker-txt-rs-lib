@@ -18,20 +18,20 @@ These structs abstract over the `core` module and process files, handling all sy
 
 #### Example
 
-```rust
+```rust no_run
 use rvpacker_txt_rs_lib::{Reader, Writer, Purger, Error, FileFlags, EngineType};
 
 fn main() -> Result<(), Error> {
     let mut reader = Reader::new();
-    reader.set_flags(FileFlags::Map | FileFlags::Other);
+    reader.set_files(FileFlags::Map | FileFlags::Other);
     reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
 
     let mut writer = Writer::new();
-    writer.set_flags(FileFlags::Map | FileFlags::Other);
+    writer.set_files(FileFlags::Map | FileFlags::Other);
     writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce)?;
 
     let mut purger = Purger::new();
-    purger.set_flags(FileFlags::Map | FileFlags::Other);
+    purger.set_files(FileFlags::Map | FileFlags::Other);
     purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
     Ok(())
 }
@@ -43,21 +43,17 @@ This module provides structs `Base`, `MapBase`, `OtherBase`, `SystemBase`, `Plug
 
 #### Example
 
-```rust
-use rvpacker_txt_rs_lib::{Base, MapBase, Mode, EngineType, ReadMode};
+```rust no_run
+use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, EngineType, ReadMode};
 use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut base = Base::new(Mode::Read, EngineType::VXAce);
-    base.read_mode = ReadMode::Force;
-
+    let mut base = Base::new(Mode::Read(ReadMode::Force), EngineType::VXAce);
     let mut map_base = MapBase::new(&mut base);
 
     let mapinfos = read("C:/Game/Data/Mapinfos.rvdata2")?;
-    map_base.initialize_mapinfos(&mapinfos)?;
-
     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
-    map_base.process("Map001.rvdata2", &map_file_content)?;
+    map_base.process("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
 
     // To get the translation, you must use `translation` after processing all the maps.
     let translation_data = map_base.translation();
@@ -72,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #### Example
 
-```rust
+```rust no_run
 use rvpacker_txt_rs_lib::{json::{generate, write}, EngineType, Error};
 
 fn main() -> Result<(), Error> {

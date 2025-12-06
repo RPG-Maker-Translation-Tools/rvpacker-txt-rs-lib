@@ -1,12 +1,12 @@
 use crate::{
-    BaseFlags,
     constants::RVPACKER_IGNORE_FILE,
     core::{
         Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
         filter_maps, filter_other, get_engine_extension, parse_ignore,
     },
     types::{
-        DuplicateMode, EngineType, Error, FileFlags, GameType, Mode, ReadMode,
+        BaseFlags, DuplicateMode, EngineType, Error, FileFlags, GameType, Mode,
+        ReadMode,
     },
 };
 use std::{
@@ -18,13 +18,15 @@ use std::{
 #[derive(Default)]
 pub(crate) struct Processor {
     pub file_flags: FileFlags,
-    pub base: Base,
+    pub mode: Mode,
+    pub game_type: GameType,
+    pub flags: BaseFlags,
+    pub duplicate_mode: DuplicateMode,
 }
 
 impl Processor {
     pub fn process<P: AsRef<Path>>(
         &mut self,
-        mode: Mode,
         engine_type: EngineType,
         source_path: P,
         translation_path: P,
@@ -34,14 +36,17 @@ impl Processor {
             return Ok(());
         }
 
-        self.base = Base::new(mode, engine_type);
+        let mut base = Base::new(self.mode, engine_type);
+        base.flags = self.flags;
+        base.duplicate_mode = self.duplicate_mode;
+        base.game_type = self.game_type;
 
         let default_path = PathBuf::default();
 
         let (source_path, translation_path, output_path) = (
             source_path.as_ref(),
             translation_path.as_ref(),
-            if let Some(ref path) = output_path {
+            if let Some(path) = &output_path {
                 path.as_ref()
             } else {
                 default_path.as_path()
@@ -50,8 +55,7 @@ impl Processor {
 
         let ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
-        if self
-            .base
+        if base
             .flags
             .contains(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
@@ -59,28 +63,28 @@ impl Processor {
                 .map_err(|e| Error::Io(ignore_file_path.clone(), e))
             {
                 Ok(ignore_file_content) => {
-                    self.base.ignore_map = parse_ignore(
+                    base.ignore_map = parse_ignore(
                         &ignore_file_content,
-                        self.base.duplicate_mode,
-                        self.base.mode.is_read(),
+                        base.duplicate_mode,
+                        base.mode.is_read(),
                     );
                 }
                 Err(err) => {
-                    if self.base.flags.contains(BaseFlags::Ignore) {
+                    if base.flags.contains(BaseFlags::Ignore) {
                         return Err(err);
                     }
                 }
             }
         }
 
-        create_dir_all(if self.base.mode.is_read() {
+        create_dir_all(if base.mode.is_read() {
             translation_path
         } else {
             output_path
         })
         .map_err(|e| {
             Error::Io(
-                if self.base.mode.is_read() {
+                if base.mode.is_read() {
                     translation_path.to_path_buf()
                 } else {
                     output_path.to_path_buf()
@@ -95,7 +99,7 @@ impl Processor {
             "Data"
         });
 
-        if self.base.mode.is_write() {
+        if base.mode.is_write() {
             create_dir_all(&data_output_path)
                 .map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
@@ -104,16 +108,16 @@ impl Processor {
             .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
             .flatten();
 
-        let msg = if self.base.mode.is_write() {
+        let msg = if base.mode.is_write() {
             "Successfully written."
-        } else if self.base.mode.is_read() {
+        } else if base.mode.is_read() {
             "Successfully read."
         } else {
             "Successfully purged."
         };
 
         if self.file_flags.contains(FileFlags::Map) {
-            let base_ref = unsafe { &mut *(&raw mut self.base) };
+            let base_ref = unsafe { &mut *(&raw mut base) };
             let mut map_base = MapBase::new(base_ref);
 
             let mapinfos_path = source_path.join(format!(
@@ -122,13 +126,15 @@ impl Processor {
             ));
             let mapinfos = read(&mapinfos_path)
                 .map_err(|e| Error::Io(mapinfos_path, e))?;
-            map_base.initialize_mapinfos(&mapinfos)?;
 
-            if self.base.read_mode.is_append() || !self.base.mode.is_read() {
+            let mut translation = None;
+
+            if base.mode.is_append() || !base.mode.is_read() {
                 let translation_file_path = translation_path.join("maps.txt");
-                let translation = read_to_string(&translation_file_path)
-                    .map_err(|e| Error::Io(translation_file_path, e))?;
-                map_base.initialize_translation(&translation);
+                translation = Some(
+                    read_to_string(&translation_file_path)
+                        .map_err(|e| Error::Io(translation_file_path, e))?,
+                );
             }
 
             for map_entry in filter_maps(entries, engine_type) {
@@ -136,9 +142,14 @@ impl Processor {
                 let filename = path.file_name().unwrap().to_str().unwrap();
                 let content =
                     read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-                let data = map_base.process(filename, &content)?;
+                let data = map_base.process(
+                    filename,
+                    &content,
+                    &mapinfos,
+                    translation.as_deref(),
+                )?;
 
-                if self.base.mode.is_write() {
+                if base.mode.is_write() {
                     if let Some(data) = data {
                         let output_file_path = data_output_path.join(filename);
                         write(&output_file_path, data)
@@ -149,7 +160,7 @@ impl Processor {
                 log::info!("{filename}: {msg}");
             }
 
-            if !self.base.mode.is_write() {
+            if !base.mode.is_write() {
                 let translation_data = map_base.translation();
                 let translation_file_path = translation_path.join("maps.txt");
 
@@ -163,29 +174,34 @@ impl Processor {
             .flatten();
 
         if self.file_flags.contains(FileFlags::Other) {
-            let base_ref = unsafe { &mut *(&raw mut self.base) };
+            let base_ref = unsafe { &mut *(&raw mut base) };
             let mut other_base = OtherBase::new(base_ref);
 
-            for map_entry in
-                filter_other(entries, engine_type, self.base.game_type)
+            for map_entry in filter_other(entries, engine_type, base.game_type)
             {
                 let path = map_entry.path();
                 let filename = path.file_name().unwrap().to_str().unwrap();
 
-                if self.base.read_mode.is_append() || !self.base.mode.is_read()
-                {
+                let mut translation = None;
+
+                if base.mode.is_append() || !base.mode.is_read() {
                     let translation_path = translation_path
                         .join(Path::new(filename).with_extension("txt"));
-                    let translation = read_to_string(&translation_path)
-                        .map_err(|e| Error::Io(translation_path, e))?;
-                    other_base.initialize_translation(filename, &translation);
+                    translation = Some(
+                        read_to_string(&translation_path)
+                            .map_err(|e| Error::Io(translation_path, e))?,
+                    );
                 }
 
                 let content =
                     read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-                let data = other_base.process(filename, &content)?;
+                let data = other_base.process(
+                    filename,
+                    &content,
+                    translation.as_deref(),
+                )?;
 
-                let output_file_path = if self.base.mode.is_write() {
+                let output_file_path = if base.mode.is_write() {
                     data_output_path.join(filename)
                 } else {
                     translation_path.join(
@@ -202,14 +218,17 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let base_ref = unsafe { &mut *(&raw mut self.base) };
-            let mut system_base = SystemBase::new(base_ref);
+            let base_ref = unsafe { &mut *(&raw mut base) };
+            let system_base = SystemBase::new(base_ref);
 
-            if self.base.read_mode.is_append() || !self.base.mode.is_read() {
+            let mut translation = None;
+
+            if base.mode.is_append() || !base.mode.is_read() {
                 let translation_path = translation_path.join("system.txt");
-                let translation = read_to_string(&translation_path)
-                    .map_err(|e| Error::Io(translation_path, e))?;
-                system_base.initialize_translation(&translation);
+                translation = Some(
+                    read_to_string(&translation_path)
+                        .map_err(|e| Error::Io(translation_path, e))?,
+                );
             }
 
             let filename =
@@ -217,9 +236,10 @@ impl Processor {
             let system_file_path = source_path.join(&filename);
             let system_file_data = read(&system_file_path)
                 .map_err(|e| Error::Io(system_file_path, e))?;
-            let data = system_base.process(&system_file_data)?;
+            let data = system_base
+                .process(&system_file_data, translation.as_deref())?;
 
-            let output_file_path = if self.base.mode.is_write() {
+            let output_file_path = if base.mode.is_write() {
                 data_output_path.join(&filename)
             } else {
                 translation_path.join("system.txt")
@@ -232,17 +252,18 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
-            let base_ref = unsafe { &mut *(&raw mut self.base) };
+            let base_ref = unsafe { &mut *(&raw mut base) };
 
             if engine_type.is_new() {
-                let mut plugin_base = PluginBase::new(base_ref);
+                let plugin_base = PluginBase::new(base_ref);
+                let mut translation = None;
 
-                if self.base.read_mode.is_append() || !self.base.mode.is_read()
-                {
+                if base.mode.is_append() || !base.mode.is_read() {
                     let translation_path = translation_path.join("plugins.txt");
-                    let translation = read_to_string(&translation_path)
-                        .map_err(|e| Error::Io(translation_path, e))?;
-                    plugin_base.initialize_translation(&translation);
+                    translation = Some(
+                        read_to_string(&translation_path)
+                            .map_err(|e| Error::Io(translation_path, e))?,
+                    );
                 }
 
                 let plugins_file_path = unsafe {
@@ -253,9 +274,10 @@ impl Processor {
                 };
                 let plugins_file_data = read(&plugins_file_path)
                     .map_err(|e| Error::Io(plugins_file_path, e))?;
-                let data = plugin_base.process(&plugins_file_data)?;
+                let data = plugin_base
+                    .process(&plugins_file_data, translation.as_deref())?;
 
-                let output_file_path = if self.base.mode.is_write() {
+                let output_file_path = if base.mode.is_write() {
                     let js_output_path = output_path.join("js");
                     create_dir_all(&js_output_path)
                         .map_err(|e| Error::Io(js_output_path, e))?;
@@ -269,14 +291,15 @@ impl Processor {
 
                 log::info!("plugins.js: {msg}");
             } else {
-                let mut script_base = ScriptBase::new(base_ref);
+                let script_base = ScriptBase::new(base_ref);
+                let mut translation = None;
 
-                if self.base.read_mode.is_append() || !self.base.mode.is_read()
-                {
+                if base.mode.is_append() || !base.mode.is_read() {
                     let translation_path = translation_path.join("scripts.txt");
-                    let translation = read_to_string(&translation_path)
-                        .map_err(|e| Error::Io(translation_path, e))?;
-                    script_base.initialize_translation(&translation);
+                    translation = Some(
+                        read_to_string(&translation_path)
+                            .map_err(|e| Error::Io(translation_path, e))?,
+                    );
                 }
 
                 let filename =
@@ -284,9 +307,10 @@ impl Processor {
                 let scripts_file_path = source_path.join(&filename);
                 let scripts_file_data = read(&scripts_file_path)
                     .map_err(|e| Error::Io(scripts_file_path, e))?;
-                let data = script_base.process(&scripts_file_data)?;
+                let data = script_base
+                    .process(&scripts_file_data, translation.as_deref())?;
 
-                let output_file_path = if self.base.mode.is_write() {
+                let output_file_path = if base.mode.is_write() {
                     data_output_path.join(&filename)
                 } else {
                     translation_path.join("scripts.txt")
@@ -299,12 +323,12 @@ impl Processor {
             }
         }
 
-        if self.base.flags.contains(BaseFlags::CreateIgnore) {
+        if base.flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
-            let contents: String = take(&mut self.base.ignore_map)
-                .into_iter()
-                .fold(String::new(), |mut output, (file, lines)| {
+            let contents: String = take(&mut base.ignore_map).into_iter().fold(
+                String::new(),
+                |mut output, (file, lines)| {
                     let _ = write!(
                         output,
                         "{}\n{}",
@@ -319,7 +343,8 @@ impl Processor {
                     );
 
                     output
-                });
+                },
+            );
 
             write(&ignore_file_path, contents)
                 .map_err(|e| Error::Io(ignore_file_path, e))?;
@@ -335,12 +360,14 @@ impl Processor {
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set them.
-/// - `read_mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set it.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set it.
+///
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set.
+/// - `mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set.
 /// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
+///
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
 ///
@@ -366,21 +393,22 @@ impl Reader {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            processor: Processor {
+                mode: Mode::Read(ReadMode::Default),
+                ..Default::default()
+            },
+        }
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four `FileFlags` variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Reader, FileFlags};
     ///
@@ -391,17 +419,14 @@ impl Reader {
         self.processor.file_flags = flags;
     }
 
-    /// Sets the read mode that affects how data is parsed.
-    ///
-    /// There's only three read modes:
-    /// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
-    /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
-    /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
+    /// Sets the read mode that affects how data is parsed. See [`ReadMode`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Reader, ReadMode};
     ///
@@ -409,21 +434,19 @@ impl Reader {
     /// reader.set_read_mode(ReadMode::Default);
     /// ```
     pub fn set_read_mode(&mut self, mode: ReadMode) {
-        self.processor.base.read_mode = mode;
+        self.processor.mode = Mode::Read(mode);
     }
 
     /// Sets the game type for custom processing.
     ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `game_type` - A [`GameType`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Reader, GameType};
     ///
@@ -431,7 +454,7 @@ impl Reader {
     /// reader.set_game_type(GameType::Termina);
     /// ```
     pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.base.game_type = game_type;
+        self.processor.game_type = game_type;
     }
 
     /// Sets the flags of the processor.
@@ -443,6 +466,7 @@ impl Reader {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Reader, BaseFlags};
     ///
@@ -450,17 +474,19 @@ impl Reader {
     /// reader.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.base.flags = flags;
+        self.processor.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
-    /// Sets, what to do with duplicates.
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Reader, DuplicateMode};
     ///
@@ -468,7 +494,7 @@ impl Reader {
     /// reader.set_duplicate_mode(DuplicateMode::Allow);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.base.duplicate_mode = mode;
+        self.processor.duplicate_mode = mode;
     }
 
     /// Reads the RPG Maker files from `source_path` to `.txt` files in `translation_path`.
@@ -476,6 +502,7 @@ impl Reader {
     /// Make sure you've configured the reader as you desire before calling it.
     ///
     /// # Parameters
+    ///
     /// - `source_path` - Path to the directory containing RPG Maker files.
     /// - `translation_path` - Path to the directory where `.txt` files will be created.
     /// - `engine_type` - Engine type of the source RPG Maker files.
@@ -487,6 +514,7 @@ impl Reader {
     /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
     ///
     /// # Example
+    ///
     /// ```no_run
     /// use rvpacker_txt_rs_lib::{Reader, EngineType};
     ///
@@ -500,7 +528,6 @@ impl Reader {
         engine_type: EngineType,
     ) -> Result<(), Error> {
         self.processor.process(
-            Mode::Read,
             engine_type,
             source_path,
             translation_path,
@@ -516,12 +543,15 @@ impl Reader {
 /// which files are selected, and how text content is filtered.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`ReaderBuilder::with_files`] to set them.
-/// - `read_mode`: Defines the read strategy. Use [`ReaderBuilder::read_mode`] to set it.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`ReaderBuilder::game_type`] to set it.
-/// - `flags`: Indicates different modes of processing the text. Use [`ReaderBuilder::with_flags`]. For more info, see [`BaseFlags`].
+///
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set. See [`FileFlags`] for more info.
+/// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`] to set. See [`BaseFlags`] for more info.
+/// - `read_mode`: Indicates the mode to read in. Use [`Reader::set_read_mode`] to set. See [`ReadMode`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set. See [`GameType`] for more info.
+/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Reader::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
 ///
 /// # Example
+///
 /// ```
 /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags, GameType};
 ///
@@ -538,6 +568,7 @@ impl ReaderBuilder {
     /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::ReaderBuilder;
     ///
@@ -548,18 +579,14 @@ impl ReaderBuilder {
         Self::default()
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four `FileFlags` variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
+    ///
+    /// - `flags` - [`FileFlags`] bitflags indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags};
     ///
@@ -568,51 +595,6 @@ impl ReaderBuilder {
     #[must_use]
     pub fn with_files(mut self, flags: FileFlags) -> Self {
         self.reader.processor.file_flags = flags;
-        self
-    }
-
-    /// Sets the read mode that affects how data is parsed.
-    ///
-    /// There's only three read modes:
-    /// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
-    /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
-    /// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
-    ///
-    /// # Parameters
-    /// - `mode` - A [`ReadMode`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, ReadMode};
-    ///
-    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default).build();
-    /// ```
-    #[must_use]
-    pub fn read_mode(mut self, mode: ReadMode) -> Self {
-        self.reader.processor.base.read_mode = mode;
-        self
-    }
-
-    /// Sets the game type for custom processing.
-    ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-    ///
-    /// # Parameters
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, GameType};
-    ///
-    /// let reader = ReaderBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.reader.processor.base.game_type = game_type;
         self
     }
 
@@ -625,6 +607,7 @@ impl ReaderBuilder {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, BaseFlags};
     ///
@@ -632,16 +615,37 @@ impl ReaderBuilder {
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.reader.processor.base.flags = flags;
+        self.reader.processor.flags = flags;
         self
     }
 
-    /// Sets, what to do with duplicates. Works only for map and other files.
+    /// Sets the read mode that affects how data is parsed. See [`ReadMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`ReadMode`] variant.
     ///
     /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{ReaderBuilder, ReadMode};
+    ///
+    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default).build();
+    /// ```
+    #[must_use]
+    pub fn read_mode(mut self, mode: ReadMode) -> Self {
+        self.reader.processor.mode = Mode::Read(mode);
+        self
+    }
+
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
+    ///
+    /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, DuplicateMode};
     ///
@@ -649,7 +653,26 @@ impl ReaderBuilder {
     /// ```
     #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.reader.processor.base.duplicate_mode = mode;
+        self.reader.processor.duplicate_mode = mode;
+        self
+    }
+
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `game_type` - A [`GameType`] variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{ReaderBuilder, GameType};
+    ///
+    /// let reader = ReaderBuilder::new().game_type(GameType::Termina).build();
+    /// ```
+    #[must_use]
+    pub fn game_type(mut self, game_type: GameType) -> Self {
+        self.reader.processor.game_type = game_type;
         self
     }
 
@@ -662,14 +685,17 @@ impl ReaderBuilder {
 
 /// A struct used for writing translation from `.txt` files back to RPG Maker files.
 ///
-/// The [`Writer`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper writing.
+/// The [`Writer`] struct, essentially, should receive the same options as [`Reader`], to ensure proper writing.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_files`] to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set it.
-/// - `flags`: Indicates different modes of processing the text. Use [`Writer::set_flags`]. For more info, see [`BaseFlags`].
+///
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_files`] to set. See [`FileFlags`] for more info.
+/// - `flags`: Indicates different modes of processing the text. Use [`Writer::set_flags`] to set. See [`BaseFlags`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set. See [`GameType`] for more info.
+/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Writer::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
 ///
 /// # Example
+///
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
 ///
@@ -688,6 +714,7 @@ impl Writer {
     /// By default, all four file flags are set (all files will be written), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::Writer;
     ///
@@ -695,21 +722,22 @@ impl Writer {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            processor: Processor {
+                mode: Mode::Write,
+                ..Default::default()
+            },
+        }
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four `FileFlags` variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Writer, FileFlags};
     ///
@@ -718,30 +746,6 @@ impl Writer {
     /// ```
     pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing.
-    ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-    ///
-    /// # Parameters
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Writer, GameType};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_game_type(GameType::Termina);
-    /// ```
-    pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.base.game_type = game_type;
     }
 
     /// Sets the flags of the processor.
@@ -753,6 +757,7 @@ impl Writer {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Writer, BaseFlags};
     ///
@@ -760,17 +765,19 @@ impl Writer {
     /// writer.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.base.flags = flags;
+        self.processor.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
-    /// Sets, what to do with duplicates. Works only for map and other files.
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Writer, DuplicateMode};
     ///
@@ -778,7 +785,27 @@ impl Writer {
     /// writer.set_duplicate_mode(DuplicateMode::Allow);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.base.duplicate_mode = mode;
+        self.processor.duplicate_mode = mode;
+    }
+
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `game_type` - A [`GameType`] variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{Writer, GameType};
+    ///
+    /// let mut writer = Writer::new();
+    /// writer.set_game_type(GameType::Termina);
+    /// ```
+    pub fn set_game_type(&mut self, game_type: GameType) {
+        self.processor.game_type = game_type;
     }
 
     /// Writes the translation from `.txt` files in `translation_path`, and outputs modified
@@ -787,6 +814,7 @@ impl Writer {
     /// Make sure you've configured the writer with the same options as reader before calling it.
     ///
     /// # Parameters
+    ///
     /// - `source_path` - Path to the directory containing source RPG Maker files.
     ///
     ///   For `MV/MZ` engines, parent directory of `source_path` must contain `js` directory.
@@ -796,6 +824,7 @@ impl Writer {
     /// - `engine_type` - Engine type of the source RPG Maker files.
     ///
     /// # Example
+    ///
     /// ```no_run
     /// use rvpacker_txt_rs_lib::{Writer, EngineType};
     ///
@@ -822,7 +851,6 @@ impl Writer {
         engine_type: EngineType,
     ) -> Result<(), Error> {
         self.processor.process(
-            Mode::Write,
             engine_type,
             source_path,
             translation_path,
@@ -834,14 +862,15 @@ impl Writer {
 
 /// A builder struct for [`Writer`].
 ///
-/// The [`Writer`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper writing.
+/// The [`Writer`] struct, essentially, should receive the same options as [`Reader`], to ensure proper writing.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`WriterBuilder::with_files`] to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`WriterBuilder::game_type`] to set it.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`WriterBuilder::with_files`] to set.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`WriterBuilder::game_type`] to set.
 /// - `flags`: Indicates different modes of processing the text. Use [`WriterBuilder::with_flags`]. For more info, see [`BaseFlags`].
 ///
 /// # Example
+///
 /// ```
 /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags, GameType};
 ///
@@ -858,6 +887,7 @@ impl WriterBuilder {
     /// By default, all four file flags are set (all files will be written), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::WriterBuilder;
     ///
@@ -868,18 +898,14 @@ impl WriterBuilder {
         Self::default()
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four `FileFlags` variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags};
     ///
@@ -888,31 +914,6 @@ impl WriterBuilder {
     #[must_use]
     pub fn with_files(mut self, flags: FileFlags) -> Self {
         self.writer.processor.file_flags = flags;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing.
-    ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-    ///
-    /// # Parameters
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{WriterBuilder, GameType};
-    ///
-    /// let writer = WriterBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.writer.processor.base.game_type = game_type;
         self
     }
 
@@ -925,6 +926,7 @@ impl WriterBuilder {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, BaseFlags};
     ///
@@ -932,18 +934,20 @@ impl WriterBuilder {
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.writer.processor.base.flags = flags;
+        self.writer.processor.flags = flags;
         self
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
-    /// Sets, what to do with duplicates. Works only for map and other files.
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, DuplicateMode};
     ///
@@ -951,7 +955,28 @@ impl WriterBuilder {
     /// ```
     #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.writer.processor.base.duplicate_mode = mode;
+        self.writer.processor.duplicate_mode = mode;
+        self
+    }
+
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `game_type` - A [`GameType`] variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{WriterBuilder, GameType};
+    ///
+    /// let writer = WriterBuilder::new().game_type(GameType::Termina).build();
+    /// ```
+    #[must_use]
+    pub fn game_type(mut self, game_type: GameType) -> Self {
+        self.writer.processor.game_type = game_type;
         self
     }
 
@@ -964,14 +989,16 @@ impl WriterBuilder {
 
 /// A struct used for purging lines with no translation from `.txt` files.
 ///
-/// The [`Purger`] struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
+/// The [`Purger`] struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_files`] to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set it.
-/// - `flags`: Indicates different modes of processing the text. Use [`Purger::set_flags`]. For more info, see [`BaseFlags`].
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_files`] to set. See [`FileFlags`] for more info.
+/// - `flags`: Indicates different modes of processing the text. Use [`Purger::set_flags`] to set. See [`BaseFlags`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set. See [`GameType`] for more info.
+/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Purger::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
 ///
 /// # Example
+///
 /// ```no_run
 /// use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
 ///
@@ -990,6 +1017,7 @@ impl Purger {
     /// By default, all four file flags are set (all files will be purged), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::Purger;
     ///
@@ -997,21 +1025,22 @@ impl Purger {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            processor: Processor {
+                mode: Mode::Purge,
+                ..Default::default()
+            },
+        }
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four [`FileFlags`] variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Purger, FileFlags};
     ///
@@ -1020,30 +1049,6 @@ impl Purger {
     /// ```
     pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing.
-    ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to `GameType::LisaRPG`, this prefix is not included to the output `.txt` files.
-    ///
-    /// # Parameters
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Purger, GameType};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_game_type(GameType::Termina);
-    /// ```
-    pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.base.game_type = game_type;
     }
 
     /// Sets the flags of the processor.
@@ -1055,6 +1060,7 @@ impl Purger {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Purger, BaseFlags};
     ///
@@ -1062,17 +1068,19 @@ impl Purger {
     /// purger.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.base.flags = flags;
+        self.processor.flags = flags;
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
-    /// Sets, what to do with duplicates. Works only for map and other files.
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{Purger, DuplicateMode};
     ///
@@ -1080,7 +1088,27 @@ impl Purger {
     /// purger.set_duplicate_mode(DuplicateMode::Allow);
     /// ```
     pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.base.duplicate_mode = mode;
+        self.processor.duplicate_mode = mode;
+    }
+
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `game_type` - A [`GameType`] variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{Purger, GameType};
+    ///
+    /// let mut purger = Purger::new();
+    /// purger.set_game_type(GameType::Termina);
+    /// ```
+    pub fn set_game_type(&mut self, game_type: GameType) {
+        self.processor.game_type = game_type;
     }
 
     /// Purges the lines with no translation from `.txt` files in `translation_path`, using source RPG Maker files from `source_path`.
@@ -1088,6 +1116,7 @@ impl Purger {
     /// Make sure you've configured the purger with the same options as reader before calling it.
     ///
     /// # Parameters
+    ///
     /// - `source_path` - Path to the directory containing RPG Maker files.
     /// - `translation_path` - Path to the directory containing `.txt` translation files.
     /// - `engine_type` - Engine type of the source RPG Maker files.
@@ -1099,6 +1128,7 @@ impl Purger {
     /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
     ///
     /// # Example
+    ///
     /// ```no_run
     /// use rvpacker_txt_rs_lib::{Purger, EngineType};
     ///
@@ -1112,7 +1142,6 @@ impl Purger {
         engine_type: EngineType,
     ) -> Result<(), Error> {
         self.processor.process(
-            Mode::Purge,
             engine_type,
             source_path,
             translation_path,
@@ -1124,14 +1153,16 @@ impl Purger {
 
 /// A builder struct for [`Purger`].
 ///
-/// The `Purger` struct, essentially, should receive the same options, as [`Reader`], to ensure proper purging.
+/// The `Purger` struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
 ///
 /// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_files`] to set them.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`PurgerBuilder::game_type`] to set it.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_files`] to set.
 /// - `flags`: Indicates different modes of processing the text. Use [`PurgerBuilder::with_flags`]. For more info, see [`BaseFlags`].
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`PurgerBuilder::game_type`] to set.
+/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`PurgerBuilder::duplicate_mode`] to set.
 ///
 /// # Example
+///
 /// ```
 /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags, GameType};
 ///
@@ -1148,6 +1179,7 @@ impl PurgerBuilder {
     /// By default, all four file flags are set (all files will be purged), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::PurgerBuilder;
     ///
@@ -1158,18 +1190,14 @@ impl PurgerBuilder {
         Self::default()
     }
 
-    /// Sets the file flags to determine which RPG Maker files will be parsed.
-    ///
-    /// There's four [`FileFlags`] variants:
-    /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
-    /// - [`FileFlags::System`] - enables `System.txt` file processing.
-    /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
     ///
     /// # Parameters
+    ///
     /// - `flags` - A [`FileFlags`] value indicating the file types to include.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags};
     ///
@@ -1178,31 +1206,6 @@ impl PurgerBuilder {
     #[must_use]
     pub fn with_files(mut self, file_flags: FileFlags) -> Self {
         self.purger.processor.file_flags = file_flags;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing.
-    ///
-    /// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-    ///
-    /// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-    ///
-    /// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-    ///
-    /// # Parameters
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::{PurgerBuilder, GameType};
-    ///
-    /// let purger = PurgerBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.purger.processor.base.game_type = game_type;
         self
     }
 
@@ -1215,6 +1218,7 @@ impl PurgerBuilder {
     /// - `flags` - [`BaseFlags`] bitflags.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, BaseFlags};
     ///
@@ -1222,18 +1226,20 @@ impl PurgerBuilder {
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.purger.processor.base.flags = flags;
+        self.purger.processor.flags = flags;
         self
     }
 
     /// This function must have the same value that was passed to it in [`Reader`] struct.
     ///
-    /// Sets, what to do with duplicates. Works only for map and other files.
+    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
     ///
-    /// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-    /// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+    /// # Parameters
+    ///
+    /// - `mode` - A [`DuplicateMode`] variant.
     ///
     /// # Example
+    ///
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, DuplicateMode};
     ///
@@ -1241,7 +1247,28 @@ impl PurgerBuilder {
     /// ```
     #[must_use]
     pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.purger.processor.base.duplicate_mode = mode;
+        self.purger.processor.duplicate_mode = mode;
+        self
+    }
+
+    /// This function must have the same value that was passed to it in [`Reader`] struct.
+    ///
+    /// Sets the game type for custom processing. See [`GameType`] for more info.
+    ///
+    /// # Parameters
+    ///
+    /// - `game_type` - A [`GameType`] variant.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{PurgerBuilder, GameType};
+    ///
+    /// let purger = PurgerBuilder::new().game_type(GameType::Termina).build();
+    /// ```
+    #[must_use]
+    pub fn game_type(mut self, game_type: GameType) -> Self {
+        self.purger.processor.game_type = game_type;
         self
     }
 
