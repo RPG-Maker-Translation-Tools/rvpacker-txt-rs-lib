@@ -34,7 +34,6 @@ use std::{
     mem::{replace, take},
     ops::{ControlFlow, Range},
     path::Path,
-    str::FromStr,
 };
 
 macro_rules! mutable {
@@ -122,14 +121,14 @@ impl CustomReplace for str {
 ///
 /// # Parameters
 /// - `entries` - Entries read with [`std::fs::read_dir`].
-/// - `engine_type` - [`EngineType`] of entries.
+/// - `engine_extension` - [`&str`] corresponding to the extension of read entries.
 ///
 /// # Returns
 /// Filtered iterator containing only `Map` entries.
-pub fn filter_maps(
-    entries: impl Iterator<Item = DirEntry>,
-    engine_type: EngineType,
-) -> impl Iterator<Item = DirEntry> {
+pub fn filter_maps<'a>(
+    entries: impl Iterator<Item = &'a DirEntry>,
+    engine_extension: &'a str,
+) -> impl Iterator<Item = &'a DirEntry> {
     entries.filter_map(move |entry| {
         if !entry.file_type().ok()?.is_file() {
             return None;
@@ -141,10 +140,11 @@ pub fn filter_maps(
 
         if filename_str.starts_with("Map")
             && filename_str.as_bytes().get(3)?.is_ascii_digit()
-            && extension == get_engine_extension(engine_type)
+            && extension == engine_extension
         {
             return Some(entry);
         }
+
         None
     })
 }
@@ -153,16 +153,16 @@ pub fn filter_maps(
 ///
 /// # Parameters
 /// - `entries` - Entries read with [`std::fs::read_dir`].
-/// - `engine_type` - [`EngineType`] of entries.
+/// - `engine_extension` - [`&str`] corresponding to the extension of read entries.
 /// - `game_type` - [`GameType`] of entries.
 ///
 /// # Returns
 /// Filtered iterator containing only other entries.
-pub fn filter_other(
-    entries: impl Iterator<Item = DirEntry>,
-    engine_type: EngineType,
+pub fn filter_other<'a>(
+    entries: impl Iterator<Item = &'a DirEntry>,
+    engine_extension: &'a str,
     game_type: GameType,
-) -> impl Iterator<Item = DirEntry> {
+) -> impl Iterator<Item = &'a DirEntry> {
     entries.filter_map(move |entry| {
         if !entry.file_type().ok()?.is_file() {
             return None;
@@ -177,9 +177,7 @@ pub fn filter_other(
 
         let file_type = RPGMFileType::from_filename(basename);
 
-        if extension == get_engine_extension(engine_type)
-            && file_type.is_other()
-        {
+        if extension == engine_extension && file_type.is_other() {
             if game_type.is_termina() && file_type.is_states() {
                 return None;
             }
@@ -414,6 +412,7 @@ pub struct Base {
     pub ignore_map: IgnoreMap,
     ignore_entry: IgnoreEntry,
 
+    translation_initialized: bool,
     lines: Lines,
     translation_map: TranslationMap,
     translation_maps: IndexMapGx<String, TranslationMap>,
@@ -450,6 +449,7 @@ impl<'a> Base {
         self.translation_maps.clear();
         self.translation_duplicate_map.clear();
         self.lines_lengths.clear();
+        self.translation_initialized = false;
     }
 
     fn process_parameter(
@@ -880,7 +880,7 @@ impl<'a> Base {
     fn get_ignore_entry(&mut self, entry_name: &str) {
         if self
             .flags
-            .contains(BaseFlags::CreateIgnore | BaseFlags::Ignore)
+            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
             let mut entry_name: &str =
                 &format!("{file}: {entry_name}", file = self.file_type);
@@ -910,7 +910,7 @@ impl<'a> Base {
     fn reset_ignore_entry(&mut self, entry_name: &str) {
         if self
             .flags
-            .contains(BaseFlags::CreateIgnore | BaseFlags::Ignore)
+            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
             let entry_name: &str =
                 &format!("{file}: {entry_name}", file = self.file_type);
@@ -967,10 +967,19 @@ impl<'a> Base {
     /// # Parameters
     ///
     /// - `translation` - translation file content to parse.
-    fn initialize_translation(&mut self, translation: &str) {
-        if !self.mode.is_force() && !self.mode.is_append() {
-            return;
+    fn initialize_translation(
+        &mut self,
+        translation: Option<&str>,
+    ) -> Result<(), Error> {
+        if self.mode.is_any_default() || self.translation_initialized {
+            return Ok(());
         }
+
+        let Some(translation) = translation else {
+            return Err(Error::NoTranslation);
+        };
+
+        self.translation_initialized = true;
 
         let trim = if self.file_type.is_map() || self.file_type.is_other() {
             self.flags.contains(BaseFlags::Trim)
@@ -1024,7 +1033,7 @@ impl<'a> Base {
         loop {
             let Some((_, next)) = translation_lines.next() else {
                 // Translation drained
-                return;
+                return Ok(());
             };
 
             // Push the first line in iterator to comments
@@ -1470,7 +1479,7 @@ impl<'a> Base {
 
     /// Purges entries with empty translation from `self.translation_map`, and drains the resulting entries to `self.translation_duplicate_map`.
     ///
-    /// Will add purged entries to `self.ignore_entry` if `self.flags.contains(BaseFlags::CreateIgnore)` is true.
+    /// Will add purged entries to `self.ignore_entry` if `self.flags` contains [`BaseFlags::CreateIgnore`].
     fn purge_empty_translation(&mut self) {
         let len_limit = self.translation_map.len();
 
@@ -1760,12 +1769,8 @@ impl<'a> MapBase<'a> {
             self.mapinfos = self.base.parse_rpgm_file(mapinfos)?;
         }
 
-        if !self.base.mode.is_default() {
-            let Some(translation) = translation else {
-                return Err(Error::NoTranslation);
-            };
-
-            self.base.initialize_translation(translation);
+        if !self.base.mode.is_any_default() {
+            self.base.initialize_translation(translation)?;
         }
 
         let map_id = Self::parse_map_id(filename);
@@ -2086,6 +2091,7 @@ impl<'a> OtherBase<'a> {
     ///
     /// # Returns
     ///
+    /// - [`None`], if `mode` is [`Mode::Write`] and no translation exists.
     /// - Processed data as [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
@@ -2119,16 +2125,13 @@ impl<'a> OtherBase<'a> {
         filename: &str,
         content: &[u8],
         translation: Option<&str>,
-    ) -> Result<ProcessedData, Error> {
-        if !self.base.mode.is_default() {
-            let Some(translation) = translation else {
-                return Err(Error::NoTranslation);
-            };
-
-            self.base.initialize_translation(translation);
-        }
-
+    ) -> Result<Option<ProcessedData>, Error> {
         self.base.file_type = RPGMFileType::from_filename(filename);
+
+        if !self.base.mode.is_any_default() {
+            self.base.translation_initialized = false;
+            self.base.initialize_translation(translation)?;
+        }
 
         self.base.append_additional_data();
         let mut entry_value = self.base.parse_rpgm_file(content)?;
@@ -2137,6 +2140,8 @@ impl<'a> OtherBase<'a> {
         // SAFETY: All "other" entries are always arrays.
         let object_array =
             unsafe { entry_value.as_array_mut().unwrap_unchecked() };
+
+        let mut written = false;
 
         // Skipping one, because the first entry is always null.
         for object in object_array.iter_mut().skip(1) {
@@ -2152,6 +2157,7 @@ impl<'a> OtherBase<'a> {
                 continue;
             }
 
+            written = true;
             self.base.get_ignore_entry(&event_id);
 
             if self.base.mode.is_purge() {
@@ -2183,7 +2189,11 @@ impl<'a> OtherBase<'a> {
             self.base.reset_translation_map(&event_id);
         }
 
-        Ok(self.base.finish(entry_value))
+        if !written {
+            return Ok(None);
+        }
+
+        Ok(Some(self.base.finish(entry_value)))
     }
 
     fn process_variable_termina(
@@ -2664,6 +2674,7 @@ impl<'a> SystemBase<'a> {
     ///
     /// # Returns
     ///
+    /// - [`None`] if `mode` is [`Mode::Write`] and no translation exists.
     /// - Processed data as [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
@@ -2696,16 +2707,13 @@ impl<'a> SystemBase<'a> {
         mut self,
         content: &[u8],
         translation: Option<&str>,
-    ) -> Result<ProcessedData, Error> {
-        if !self.base.mode.is_default() {
-            let Some(translation) = translation else {
-                return Err(Error::NoTranslation);
-            };
-
-            self.base.initialize_translation(translation);
+    ) -> Result<Option<ProcessedData>, Error> {
+        if !self.base.mode.is_any_default() {
+            self.base.initialize_translation(translation)?;
         }
 
         self.system_value = self.base.parse_rpgm_file(content)?;
+        let mut written = false;
 
         for (entry_id, entry) in [
             "Armor Types",
@@ -2725,6 +2733,7 @@ impl<'a> SystemBase<'a> {
                 continue;
             }
 
+            written = true;
             self.base.get_ignore_entry(entry);
 
             if self.base.mode.is_purge() {
@@ -2775,7 +2784,11 @@ impl<'a> SystemBase<'a> {
             self.base.reset_translation_map(entry);
         }
 
-        Ok(self.base.finish(self.system_value.take()))
+        if !written {
+            return Ok(None);
+        }
+
+        Ok(Some(self.base.finish(self.system_value.take())))
     }
 
     fn process_terms(&mut self) {
@@ -2896,6 +2909,7 @@ impl<'a> ScriptBase<'a> {
     ///
     /// # Returns
     ///
+    /// - [`None`], if `mode` is [`Mode::Write`] and no translation exists.
     /// - Processed data as [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
@@ -2928,13 +2942,9 @@ impl<'a> ScriptBase<'a> {
         self,
         content: &[u8],
         translation: Option<&str>,
-    ) -> Result<ProcessedData, Error> {
-        if !self.base.mode.is_default() {
-            let Some(translation) = translation else {
-                return Err(Error::NoTranslation);
-            };
-
-            self.base.initialize_translation(translation);
+    ) -> Result<Option<ProcessedData>, Error> {
+        if !self.base.mode.is_any_default() {
+            self.base.initialize_translation(translation)?;
         }
 
         // SAFETY: Scripts are always array.
@@ -2958,6 +2968,8 @@ impl<'a> ScriptBase<'a> {
             ]
         };
 
+        let mut written = false;
+
         for (((script_id, script), script_name), mut code) in scripts_array
             .iter_mut()
             .enumerate()
@@ -2970,6 +2982,7 @@ impl<'a> ScriptBase<'a> {
                 continue;
             }
 
+            written = true;
             self.base.get_ignore_entry(&script_id);
 
             if self.base.mode.is_purge() {
@@ -3048,7 +3061,11 @@ impl<'a> ScriptBase<'a> {
             self.base.reset_translation_map(&script_id);
         }
 
-        Ok(self.base.finish(Value::array(scripts_array)))
+        if !written {
+            return Ok(None);
+        }
+
+        Ok(Some(self.base.finish(Value::array(scripts_array))))
     }
 
     fn is_escaped(index: usize, string: &str) -> bool {
@@ -3258,6 +3275,7 @@ impl<'a> PluginBase<'a> {
     ///
     /// # Returns
     ///
+    /// - [`None`], if `mode` is [`Mode::Write`] and no translation exists.
     /// - Processed data as [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
@@ -3289,13 +3307,9 @@ impl<'a> PluginBase<'a> {
         mut self,
         content: &[u8],
         translation: Option<&str>,
-    ) -> Result<ProcessedData, Error> {
-        if !self.base.mode.is_default() {
-            let Some(translation) = translation else {
-                return Err(Error::NoTranslation);
-            };
-
-            self.base.initialize_translation(translation);
+    ) -> Result<Option<ProcessedData>, Error> {
+        if !self.base.mode.is_any_default() {
+            self.base.initialize_translation(translation)?;
         }
 
         // SAFETY: Plugins content should always be like `plugins = [...]`.
@@ -3309,10 +3323,12 @@ impl<'a> PluginBase<'a> {
 
         // SAFETY: Plugins are always array.
         let mut plugins_array = unsafe {
-            Value::from_str(plugins_array_str)?
+            Value::from(from_str::<serde_json::Value>(plugins_array_str)?)
                 .into_array()
                 .unwrap_unchecked()
         };
+
+        let mut written = false;
 
         for (plugin_id, plugin_object) in plugins_array.iter_mut().enumerate() {
             // SAFETY: Each plugin always contains name.
@@ -3325,6 +3341,7 @@ impl<'a> PluginBase<'a> {
                 continue;
             }
 
+            written = true;
             self.base.get_ignore_entry(plugin_id);
 
             if self.base.mode.is_purge() {
@@ -3339,7 +3356,11 @@ impl<'a> PluginBase<'a> {
             self.base.reset_translation_map(plugin_id);
         }
 
-        Ok(self.base.finish(Value::array(plugins_array)))
+        if !written {
+            return Ok(None);
+        }
+
+        Ok(Some(self.base.finish(Value::array(plugins_array))))
     }
 
     fn parse_plugin(&mut self, key: Option<&str>, value: &mut Value) {

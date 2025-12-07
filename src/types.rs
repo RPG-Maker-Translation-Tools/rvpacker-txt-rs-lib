@@ -371,6 +371,11 @@ impl Mode {
 
     #[must_use]
     pub const fn is_default(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Default))
+    }
+
+    #[must_use]
+    pub const fn is_any_default(self) -> bool {
         matches!(self, Self::Read(ReadMode::Default | ReadMode::Force))
     }
 

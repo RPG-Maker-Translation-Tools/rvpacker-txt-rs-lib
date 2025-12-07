@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use std::{
-    fs::{create_dir_all, read, read_dir, read_to_string, write},
+    fs::{DirEntry, create_dir_all, read, read_dir, read_to_string, write},
     mem::take,
     path::{Path, PathBuf},
 };
@@ -36,62 +36,52 @@ impl Processor {
             return Ok(());
         }
 
+        let source_path = source_path.as_ref();
+        let translation_path = translation_path.as_ref();
+        let output_path =
+            output_path.map_or_else(|| Path::new(""), |x| x.as_ref());
+
         let mut base = Base::new(self.mode, engine_type);
         base.flags = self.flags;
         base.duplicate_mode = self.duplicate_mode;
         base.game_type = self.game_type;
 
-        let default_path = PathBuf::default();
-
-        let (source_path, translation_path, output_path) = (
-            source_path.as_ref(),
-            translation_path.as_ref(),
-            if let Some(path) = &output_path {
-                path.as_ref()
-            } else {
-                default_path.as_path()
-            },
-        );
-
-        let ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
+        let mut ignore_file_path = PathBuf::new();
 
         if base
             .flags
-            .contains(BaseFlags::CreateIgnore | BaseFlags::Ignore)
+            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
-            match read_to_string(&ignore_file_path)
-                .map_err(|e| Error::Io(ignore_file_path.clone(), e))
-            {
-                Ok(ignore_file_content) => {
+            ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
+
+            let ignore_file_content = read_to_string(&ignore_file_path)
+                .map_err(|e| Error::Io(ignore_file_path.clone(), e));
+
+            match ignore_file_content {
+                Ok(content) => {
                     base.ignore_map = parse_ignore(
-                        &ignore_file_content,
+                        &content,
                         base.duplicate_mode,
                         base.mode.is_read(),
                     );
                 }
-                Err(err) => {
-                    if base.flags.contains(BaseFlags::Ignore) {
-                        return Err(err);
-                    }
+
+                Err(err) if base.flags.contains(BaseFlags::Ignore) => {
+                    return Err(err);
                 }
+
+                _ => {}
             }
         }
 
-        create_dir_all(if base.mode.is_read() {
+        let output_dir = if base.mode.is_read() {
             translation_path
         } else {
             output_path
-        })
-        .map_err(|e| {
-            Error::Io(
-                if base.mode.is_read() {
-                    translation_path.to_path_buf()
-                } else {
-                    output_path.to_path_buf()
-                },
-                e,
-            )
-        })?;
+        };
+
+        create_dir_all(output_dir)
+            .map_err(|e| Error::Io(output_dir.to_path_buf(), e))?;
 
         let data_output_path = output_path.join(if engine_type.is_new() {
             "data"
@@ -104,222 +94,238 @@ impl Processor {
                 .map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
 
-        let entries = read_dir(source_path)
-            .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
-            .flatten();
-
-        let msg = if base.mode.is_write() {
-            "Successfully written."
-        } else if base.mode.is_read() {
-            "Successfully read."
-        } else {
-            "Successfully purged."
+        let msg = match base.mode {
+            Mode::Read(_) => "Successfully read.",
+            Mode::Write => "Successfully written.",
+            Mode::Purge => "Successfully purged.",
         };
 
+        let base_ref = unsafe { &mut *(&raw mut base) };
+        let load_translation = |p: &Path| -> Result<Option<String>, Error> {
+            if base_ref.mode.is_any_default() {
+                return Ok(None);
+            }
+
+            read_to_string(p)
+                .map_err(|e| Error::Io(p.to_path_buf(), e))
+                .map(Some)
+        };
+
+        let entries: Vec<DirEntry> = read_dir(source_path)
+            .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
+            .flatten()
+            .collect();
+
+        let base_ref = unsafe { &mut *(&raw mut base) };
+        let engine_extension = get_engine_extension(engine_type);
+
         if self.file_flags.contains(FileFlags::Map) {
-            let base_ref = unsafe { &mut *(&raw mut base) };
             let mut map_base = MapBase::new(base_ref);
 
-            let mapinfos_path = source_path.join(format!(
-                "Mapinfos.{}",
-                get_engine_extension(engine_type)
-            ));
+            let mapinfos_path =
+                source_path.join(format!("Mapinfos.{engine_extension}"));
             let mapinfos = read(&mapinfos_path)
                 .map_err(|e| Error::Io(mapinfos_path, e))?;
 
-            let mut translation = None;
+            let translation_file_path = translation_path.join("maps.txt");
 
-            if base.mode.is_append() || !base.mode.is_read() {
-                let translation_file_path = translation_path.join("maps.txt");
-                translation = Some(
-                    read_to_string(&translation_file_path)
-                        .map_err(|e| Error::Io(translation_file_path, e))?,
+            if base.mode.is_default() && translation_file_path.exists() {
+                log::info!(
+                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                    translation_file_path.display()
                 );
-            }
+            } else {
+                let translation = load_translation(&translation_file_path)?;
 
-            for map_entry in filter_maps(entries, engine_type) {
-                let path = map_entry.path();
-                let filename = path.file_name().unwrap().to_str().unwrap();
-                let content =
-                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-                let data = map_base.process(
-                    filename,
-                    &content,
-                    &mapinfos,
-                    translation.as_deref(),
-                )?;
+                for entry in filter_maps(entries.iter(), engine_extension) {
+                    let path = entry.path();
+                    let filename =
+                        path.file_name().and_then(|p| p.to_str()).unwrap();
 
-                if base.mode.is_write() {
-                    if let Some(data) = data {
-                        let output_file_path = data_output_path.join(filename);
-                        write(&output_file_path, data)
-                            .map_err(|e| Error::Io(output_file_path, e))?;
+                    let content =
+                        read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+                    let result = map_base.process(
+                        filename,
+                        &content,
+                        &mapinfos,
+                        translation.as_deref(),
+                    )?;
+
+                    if base.mode.is_write() {
+                        if let Some(result) = result {
+                            let output_path = data_output_path.join(filename);
+                            write(&output_path, result)
+                                .map_err(|e| Error::Io(output_path, e))?;
+                        }
                     }
+
+                    log::info!("{filename}: {msg}");
                 }
 
-                log::info!("{filename}: {msg}");
-            }
-
-            if !base.mode.is_write() {
-                let translation_data = map_base.translation();
-                let translation_file_path = translation_path.join("maps.txt");
-
-                write(&translation_file_path, translation_data)
-                    .map_err(|e| Error::Io(translation_file_path, e))?;
+                if !base.mode.is_write() {
+                    write(&translation_file_path, map_base.translation())
+                        .map_err(|e| Error::Io(translation_file_path, e))?;
+                }
             }
         }
 
-        let entries = read_dir(source_path)
-            .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
-            .flatten();
-
         if self.file_flags.contains(FileFlags::Other) {
-            let base_ref = unsafe { &mut *(&raw mut base) };
             let mut other_base = OtherBase::new(base_ref);
 
-            for map_entry in filter_other(entries, engine_type, base.game_type)
+            for entry in
+                filter_other(entries.iter(), engine_extension, base.game_type)
             {
-                let path = map_entry.path();
-                let filename = path.file_name().unwrap().to_str().unwrap();
+                let path = entry.path();
+                let filename =
+                    path.file_name().and_then(|p| p.to_str()).unwrap();
 
-                let mut translation = None;
+                let translation_file_path = translation_path.join(
+                    Path::new(&filename.to_ascii_lowercase())
+                        .with_extension("txt"),
+                );
 
-                if base.mode.is_append() || !base.mode.is_read() {
-                    let translation_path = translation_path
-                        .join(Path::new(filename).with_extension("txt"));
-                    translation = Some(
-                        read_to_string(&translation_path)
-                            .map_err(|e| Error::Io(translation_path, e))?,
+                if base.mode.is_default() && translation_file_path.exists() {
+                    log::info!(
+                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                        translation_file_path.display()
                     );
-                }
-
-                let content =
-                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-                let data = other_base.process(
-                    filename,
-                    &content,
-                    translation.as_deref(),
-                )?;
-
-                let output_file_path = if base.mode.is_write() {
-                    data_output_path.join(filename)
                 } else {
-                    translation_path.join(
-                        Path::new(&filename.to_ascii_lowercase())
-                            .with_extension("txt"),
-                    )
-                };
+                    let translation = load_translation(&translation_file_path)?;
 
-                write(&output_file_path, data)
-                    .map_err(|e| Error::Io(output_file_path, e))?;
+                    let content =
+                        read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+                    let data = other_base.process(
+                        filename,
+                        &content,
+                        translation.as_deref(),
+                    )?;
 
-                log::info!("{filename}: {msg}");
+                    let output_file_path = if base.mode.is_write() {
+                        data_output_path.join(filename)
+                    } else {
+                        translation_file_path
+                    };
+
+                    if let Some(data) = data {
+                        write(&output_file_path, data)
+                            .map_err(|e| Error::Io(output_file_path, e))?;
+                    }
+
+                    log::info!("{filename}: {msg}");
+                }
             }
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let base_ref = unsafe { &mut *(&raw mut base) };
             let system_base = SystemBase::new(base_ref);
 
-            let mut translation = None;
+            let translation_file_path = translation_path.join("system.txt");
 
-            if base.mode.is_append() || !base.mode.is_read() {
-                let translation_path = translation_path.join("system.txt");
-                translation = Some(
-                    read_to_string(&translation_path)
-                        .map_err(|e| Error::Io(translation_path, e))?,
+            if base.mode.is_default() && translation_file_path.exists() {
+                log::info!(
+                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                    translation_file_path.display()
                 );
-            }
-
-            let filename =
-                format!("System.{}", get_engine_extension(engine_type));
-            let system_file_path = source_path.join(&filename);
-            let system_file_data = read(&system_file_path)
-                .map_err(|e| Error::Io(system_file_path, e))?;
-            let data = system_base
-                .process(&system_file_data, translation.as_deref())?;
-
-            let output_file_path = if base.mode.is_write() {
-                data_output_path.join(&filename)
             } else {
-                translation_path.join("system.txt")
-            };
+                let translation = load_translation(&translation_file_path)?;
 
-            write(&output_file_path, data)
-                .map_err(|e| Error::Io(output_file_path, e))?;
+                let filename = format!("System.{engine_extension}");
+                let system_file_path = source_path.join(&filename);
+                let system_data = read(&system_file_path)
+                    .map_err(|e| Error::Io(system_file_path, e))?;
 
-            log::info!("{filename}: {msg}");
+                let data = system_base
+                    .process(&system_data, translation.as_deref())?;
+
+                let output_path = if base.mode.is_write() {
+                    data_output_path.join(&filename)
+                } else {
+                    translation_file_path
+                };
+
+                if let Some(data) = data {
+                    write(&output_path, data)
+                        .map_err(|e| Error::Io(output_path, e))?;
+                }
+
+                log::info!("{filename}: {msg}");
+            }
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
-            let base_ref = unsafe { &mut *(&raw mut base) };
-
             if engine_type.is_new() {
                 let plugin_base = PluginBase::new(base_ref);
-                let mut translation = None;
 
-                if base.mode.is_append() || !base.mode.is_read() {
-                    let translation_path = translation_path.join("plugins.txt");
-                    translation = Some(
-                        read_to_string(&translation_path)
-                            .map_err(|e| Error::Io(translation_path, e))?,
+                let translation_file_path =
+                    translation_path.join("plugins.txt");
+
+                if base.mode.is_default() && translation_file_path.exists() {
+                    log::info!(
+                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                        translation_file_path.display()
                     );
-                }
-
-                let plugins_file_path = unsafe {
-                    source_path
-                        .parent()
-                        .unwrap_unchecked()
-                        .join("js/plugins.js")
-                };
-                let plugins_file_data = read(&plugins_file_path)
-                    .map_err(|e| Error::Io(plugins_file_path, e))?;
-                let data = plugin_base
-                    .process(&plugins_file_data, translation.as_deref())?;
-
-                let output_file_path = if base.mode.is_write() {
-                    let js_output_path = output_path.join("js");
-                    create_dir_all(&js_output_path)
-                        .map_err(|e| Error::Io(js_output_path, e))?;
-                    output_path.join("js/plugins.js")
                 } else {
-                    translation_path.join("plugins.txt")
-                };
+                    let translation = load_translation(&translation_file_path)?;
 
-                write(&output_file_path, data)
-                    .map_err(|e| Error::Io(output_file_path, e))?;
+                    let plugins_file_path =
+                        source_path.parent().unwrap().join("js/plugins.js");
+                    let content = read(&plugins_file_path)
+                        .map_err(|e| Error::Io(plugins_file_path, e))?;
 
-                log::info!("plugins.js: {msg}");
+                    let data = plugin_base
+                        .process(&content, translation.as_deref())?;
+
+                    let output_path = if base.mode.is_write() {
+                        let js_output_path = output_path.join("js");
+                        create_dir_all(&js_output_path)
+                            .map_err(|e| Error::Io(js_output_path, e))?;
+                        output_path.join("js/plugins.js")
+                    } else {
+                        translation_file_path
+                    };
+
+                    if let Some(data) = data {
+                        write(&output_path, data)
+                            .map_err(|e| Error::Io(output_path, e))?;
+                    }
+
+                    log::info!("plugins.js: {msg}");
+                }
             } else {
                 let script_base = ScriptBase::new(base_ref);
-                let mut translation = None;
 
-                if base.mode.is_append() || !base.mode.is_read() {
-                    let translation_path = translation_path.join("scripts.txt");
-                    translation = Some(
-                        read_to_string(&translation_path)
-                            .map_err(|e| Error::Io(translation_path, e))?,
+                let translation_file_path =
+                    translation_path.join("scripts.txt");
+
+                if base.mode.is_default() && translation_file_path.exists() {
+                    log::info!(
+                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                        translation_file_path.display()
                     );
-                }
-
-                let filename =
-                    format!("Scripts.{}", get_engine_extension(engine_type));
-                let scripts_file_path = source_path.join(&filename);
-                let scripts_file_data = read(&scripts_file_path)
-                    .map_err(|e| Error::Io(scripts_file_path, e))?;
-                let data = script_base
-                    .process(&scripts_file_data, translation.as_deref())?;
-
-                let output_file_path = if base.mode.is_write() {
-                    data_output_path.join(&filename)
                 } else {
-                    translation_path.join("scripts.txt")
-                };
+                    let translation = load_translation(&translation_file_path)?;
 
-                write(&output_file_path, data)
-                    .map_err(|e| Error::Io(output_file_path, e))?;
+                    let filename = format!("Scripts.{engine_extension}");
+                    let scripts_file_path = source_path.join(&filename);
+                    let content = read(&scripts_file_path)
+                        .map_err(|e| Error::Io(scripts_file_path, e))?;
 
-                log::info!("{filename}: {msg}");
+                    let data = script_base
+                        .process(&content, translation.as_deref())?;
+
+                    let output_path = if base.mode.is_write() {
+                        data_output_path.join(&filename)
+                    } else {
+                        translation_file_path
+                    };
+
+                    if let Some(data) = data {
+                        write(&output_path, data)
+                            .map_err(|e| Error::Io(output_path, e))?;
+                    }
+
+                    log::info!("{filename}: {msg}");
+                }
             }
         }
 
@@ -375,9 +381,19 @@ impl Processor {
 /// reader.set_files(FileFlags::Map | FileFlags::Other);
 /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
-#[derive(Default)]
 pub struct Reader {
     processor: Processor,
+}
+
+impl Default for Reader {
+    fn default() -> Self {
+        Self {
+            processor: Processor {
+                mode: Mode::Read(ReadMode::Default),
+                ..Default::default()
+            },
+        }
+    }
 }
 
 impl Reader {
@@ -393,12 +409,7 @@ impl Reader {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Read(ReadMode::Default),
-                ..Default::default()
-            },
-        }
+        Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
@@ -703,9 +714,19 @@ impl ReaderBuilder {
 /// writer.set_files(FileFlags::Map | FileFlags::Other);
 /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
 /// ```
-#[derive(Default)]
 pub struct Writer {
     processor: Processor,
+}
+
+impl Default for Writer {
+    fn default() -> Self {
+        Self {
+            processor: Processor {
+                mode: Mode::Write,
+                ..Default::default()
+            },
+        }
+    }
 }
 
 impl Writer {
@@ -722,12 +743,7 @@ impl Writer {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Write,
-                ..Default::default()
-            },
-        }
+        Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
@@ -1006,9 +1022,19 @@ impl WriterBuilder {
 /// purger.set_files(FileFlags::Map | FileFlags::Other);
 /// let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
-#[derive(Default)]
 pub struct Purger {
     processor: Processor,
+}
+
+impl Default for Purger {
+    fn default() -> Self {
+        Self {
+            processor: Processor {
+                mode: Mode::Purge,
+                ..Default::default()
+            },
+        }
+    }
 }
 
 impl Purger {
@@ -1025,12 +1051,7 @@ impl Purger {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Purge,
-                ..Default::default()
-            },
-        }
+        Self::default()
     }
 
     /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
