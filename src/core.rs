@@ -1,37 +1,35 @@
 #[allow(unused_imports)]
 use crate::types::ReadMode;
 use crate::{
-    BaseFlags, ProcessedData,
+    BaseFlags, CommentPos, IndexSetExt, ProcessedData,
     constants::{
-        ADDITIONAL_HASHMAP_LABEL, AT_POSITION_MSG, COMMENT_PREFIX,
-        COMMENT_SUFFIX, COULD_NOT_SPLIT_LINE_MSG, EVENT_ID_COMMENT,
-        EVENT_NAME_COMMENT, IGNORE_ENTRY_COMMENT, IN_FILE_MSG,
-        INSTANCE_VAR_PREFIX, MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ID_COMMENT,
-        MAP_NAME_COMMENT, MAP_ORDER_COMMENT, NEW_LINE, PLUGIN_ID_COMMENT,
-        PLUGIN_NAME_COMMENT, SCRIPT_ID_COMMENT, SCRIPT_NAME_COMMENT, SEPARATOR,
-        SYMBOLS, SYSTEM_ENTRY_COMMENT,
+        AT_POSITION_MSG, COMMENT_PREFIX, COMMENT_SUFFIX,
+        COULD_NOT_SPLIT_LINE_MSG, ID_COMMENT, IGNORE_ENTRY_COMMENT,
+        IN_FILE_MSG, INSTANCE_VAR_PREFIX, MAP_DISPLAY_NAME_COMMENT_PREFIX,
+        MAP_ORDER_COMMENT, NAME_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS,
     },
     types::{
-        Code, Comments, DuplicateMode, EachLine, EngineType, Error, GameType,
+        Code, DuplicateMode, EachLine, EngineType, Error, GameType,
         IgnoreEntry, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode,
         RPGMFileType, Scripts, TranslationDuplicateMap, TranslationEntry,
         TranslationMap, Variable,
     },
 };
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use gxhash::HashSetExt;
+use gxhash::{HashMap, HashMapExt, HashSetExt};
 use indexmap::map::Entry;
+use log::warn;
 use marshal_rs::{Get, Value, ValueType, dump, load_binary, load_utf8};
 use regex::Regex;
-use serde_json::{from_str, to_vec};
-use smallvec::SmallVec;
+use serde_json::{Value as SerdeValue, from_str, to_vec};
+use smallvec::{SmallVec, smallvec};
 use std::{
     borrow::Cow,
     cell::LazyCell,
     fmt::Write as FmtWrite,
     fs::DirEntry,
     io::{Read, Write},
-    mem::{replace, take},
+    mem::{take, transmute},
     ops::{ControlFlow, Range},
     path::Path,
 };
@@ -234,9 +232,11 @@ pub fn parse_ignore(
             [..unsafe { first_entry_comment.find(':').unwrap_unchecked() }];
     }
 
-    ignore_map.reserve(256);
-    ignore_map
-        .insert(first_entry_comment.into(), IgnoreEntry::with_capacity(128));
+    ignore_map.reserve_exact(256);
+    ignore_map.insert(
+        first_entry_comment.to_string(),
+        IgnoreEntry::with_capacity(128),
+    );
 
     let mut ignore_entry =
         unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
@@ -312,8 +312,8 @@ pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
         b == b' ' || b == b'\t' || b == b'\r'
     }
 
-    fn split_lines(data: &[u8]) -> Vec<&[u8]> {
-        let mut lines = Vec::with_capacity(4);
+    fn split_lines(data: &[u8]) -> SmallVec<[&[u8]; 4]> {
+        let mut lines = SmallVec::with_capacity(4);
         let mut start = 0;
         let mut i = 0;
 
@@ -393,7 +393,7 @@ pub fn get_system_title(
         system_file_content = &system_file_content[BOM.len()..];
     }
 
-    let system_file_value: serde_json::Value = from_str(system_file_content)?;
+    let system_file_value: SerdeValue = from_str(system_file_content)?;
 
     system_file_value["gameTitle"]
         .as_str()
@@ -401,7 +401,6 @@ pub fn get_system_title(
         .ok_or(Error::NoTitle)
 }
 
-#[derive(Default)]
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
@@ -410,17 +409,61 @@ pub struct Base {
     pub duplicate_mode: DuplicateMode,
 
     pub ignore_map: IgnoreMap,
-    ignore_entry: IgnoreEntry,
+    ignore_entry: &'static mut IgnoreEntry,
 
     translation_initialized: bool,
+    additional_data_written: bool,
+    map_events: bool,
+
     lines: Lines,
-    translation_map: TranslationMap,
-    translation_maps: IndexMapGx<String, TranslationMap>,
+    lines_lengths: Vec<u32>,
+    lines_ids: Vec<u16>,
+
+    metadata: HashMap<u16, SmallVec<[String; 4]>>,
+
+    translation_map: &'static mut TranslationMap,
+    leaked_translation_map_reference: &'static mut TranslationMap,
+    translation_maps: IndexMapGx<u16, TranslationMap>,
     translation_duplicate_map: TranslationDuplicateMap,
-    lines_lengths: Vec<usize>,
 
     file_type: RPGMFileType,
     labels: Labels,
+}
+
+impl Default for Base {
+    fn default() -> Self {
+        let leaked_translation_map =
+            Box::leak(Box::new(TranslationMap::default()));
+
+        Self {
+            mode: Mode::Read(ReadMode::Default(false)),
+            flags: BaseFlags::empty(),
+            game_type: GameType::None,
+            engine_type: EngineType::New,
+            duplicate_mode: DuplicateMode::Remove,
+
+            ignore_map: IgnoreMap::default(),
+            ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
+
+            translation_initialized: false,
+            additional_data_written: false,
+            map_events: false,
+
+            lines: Lines::default(),
+            lines_lengths: Vec::default(),
+            lines_ids: Vec::default(),
+
+            metadata: HashMap::default(),
+
+            translation_map: mutable!(leaked_translation_map, TranslationMap),
+            leaked_translation_map_reference: leaked_translation_map,
+            translation_maps: IndexMapGx::default(),
+            translation_duplicate_map: TranslationDuplicateMap::default(),
+
+            file_type: RPGMFileType::Invalid,
+            labels: Labels::default(),
+        }
+    }
 }
 
 impl<'a> Base {
@@ -436,6 +479,24 @@ impl<'a> Base {
             mode,
             engine_type,
             labels: Labels::new(engine_type),
+            lines: Lines::with_capacity(512),
+            lines_lengths: Vec::with_capacity(1024),
+            lines_ids: Vec::with_capacity(1024),
+
+            metadata: HashMap::with_capacity(1024),
+            translation_map: Box::leak(Box::new(
+                TranslationMap::with_capacity(512),
+            )),
+            translation_maps: IndexMapGx::with_capacity(1024),
+
+            // SAFETY: If `flags` contain neither `BaseFlags::Ignore` or `BaseFlags::CreateIgnore`, this entry is simply unused.
+            // Also we're dereferncing from 16 because Rust fucking prevents null dereferencing in debug mode (who asked for this?)
+            ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
+
+            translation_duplicate_map: TranslationDuplicateMap::with_capacity(
+                4192,
+            ),
+
             ..Default::default()
         }
     }
@@ -444,12 +505,22 @@ impl<'a> Base {
     ///
     /// This function is used by file-specific bases' constructors, so you generally mustn't call it manually.
     pub fn reset(&mut self) {
+        self.translation_initialized = false;
+
         self.lines.clear();
-        self.translation_map.clear();
+        self.lines_lengths.clear();
+        self.lines_ids.clear();
+
+        self.metadata.clear();
+
+        self.reset_translation_map();
         self.translation_maps.clear();
         self.translation_duplicate_map.clear();
-        self.lines_lengths.clear();
-        self.translation_initialized = false;
+    }
+
+    pub fn reset_translation_map(&mut self) {
+        self.translation_map =
+            mutable!(self.leaked_translation_map_reference, TranslationMap);
     }
 
     fn process_parameter(
@@ -498,7 +569,8 @@ impl<'a> Base {
                     }
                 }
             }
-            _ => {} // custom processing for other games
+            // custom processing for other games
+            GameType::None => {}
         }
 
         if !self.engine_type.is_new() {
@@ -560,84 +632,6 @@ impl<'a> Base {
         }
     }
 
-    /// Returns the RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
-    ///
-    /// # Parameters
-    ///
-    /// - `value` - [`Value`] to use on write.
-    ///
-    /// # Returns
-    ///
-    /// RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
-    ///
-    fn finish(&mut self, value: Value) -> ProcessedData {
-        self.flush_translation(true);
-
-        let output_content = if self.mode.is_write() {
-            ProcessedData::RPGMData(if self.file_type.is_plugins() {
-                ["var $plugins =\n".as_bytes(), unsafe {
-                    &to_vec(&serde_json::Value::from(value)).unwrap_unchecked()
-                }]
-                .concat()
-            } else if self.engine_type.is_new() {
-                unsafe {
-                    to_vec(&serde_json::Value::from(value)).unwrap_unchecked()
-                }
-            } else {
-                dump(
-                    value,
-                    if self.file_type.is_scripts() {
-                        None
-                    } else {
-                        INSTANCE_VAR_PREFIX
-                    },
-                )
-            })
-        } else {
-            let mut output_content = self
-                .translation_duplicate_map
-                .iter()
-                .map(|(source, translation_entry)| {
-                    let (translation, comments) = translation_entry.parts();
-                    let mut string = String::with_capacity(
-                        source.len()
-                            + SEPARATOR.len()
-                            + translation.len()
-                            + comments.iter().map(String::len).sum::<usize>()
-                            + 1,
-                    );
-
-                    for comment in comments {
-                        string.push_str(comment);
-                        string.push('\n');
-                    }
-
-                    if !source.is_empty() {
-                        string.push_str(source);
-                        string.push_str(SEPARATOR);
-                    }
-
-                    if !translation.is_empty() {
-                        string.push_str(translation);
-                    }
-
-                    if !source.is_empty() || !translation.is_empty() {
-                        string.push('\n');
-                    }
-
-                    string
-                })
-                .collect::<String>()
-                .into_bytes();
-            output_content.pop();
-            ProcessedData::TranslationData(output_content)
-        };
-
-        self.lines.clear();
-        self.translation_duplicate_map.clear();
-        output_content
-    }
-
     fn process_param(
         &mut self,
         value: &mut Value,
@@ -677,15 +671,17 @@ impl<'a> Base {
     /// - `string` - String to insert in `self.lines`.
     ///
     fn insert_string(&mut self, string: Cow<'_, str>) {
-        if !self.mode.is_write() {
-            if self.flags.contains(BaseFlags::Ignore)
-                && self.ignore_entry.contains(string.as_ref())
-            {
-                return;
-            }
-
-            self.lines.insert(string.into_owned());
+        if self.mode.is_write() {
+            return;
         }
+
+        if self.flags.contains(BaseFlags::Ignore)
+            && self.ignore_entry.contains(string.as_ref())
+        {
+            return;
+        }
+
+        self.lines.insert(string.into_owned());
     }
 
     fn join_dialogue_lines(
@@ -866,24 +862,21 @@ impl<'a> Base {
         }
     }
 
-    /// Gets ignore entry from `self.ignore_map` by `entry_name`.
+    /// Gets ignore entry from `self.ignore_map` by `id`.
     ///
     /// Skips getting an entry if `self.flags` do not contain [`BaseFlags::Ignore`] or [`BaseFlags::CreateIgnore`].
     ///
     /// # Parameters
     ///
-    /// - `entry_name` - Name of the entry to get.
+    /// - `id` - ID of the entry to get.
     ///
-    /// # Note
-    ///
-    /// This function moves ignore entry from `self.ignore_map`, so it must be moved back with [`Base::reset_ignore_entry`] later.
-    fn get_ignore_entry(&mut self, entry_name: &str) {
+    fn get_ignore_entry(&mut self, id: u16) {
         if self
             .flags
             .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
             let mut entry_name: &str =
-                &format!("{file}: {entry_name}", file = self.file_type);
+                &format!("{file}: {id}", file = self.file_type);
 
             if self.flags.contains(BaseFlags::Ignore)
                 && self.duplicate_mode.is_remove()
@@ -892,33 +885,18 @@ impl<'a> Base {
                     [..unsafe { entry_name.find(':').unwrap_unchecked() }];
             }
 
-            self.ignore_entry = take(
+            // SAFETY: We're bypassing lifetime and ownership rules here, converting `&'a IgnoreEntry` to `&'static IgnoreEntry`
+            // Because compiler doesn't understand that the access to `self.ignore_entry` is optional based on `self.flags`.
+            let static_entry = mutable!(
                 self.ignore_map
                     .entry(format!(
                         "{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"
                     ))
                     .or_default(),
+                IgnoreEntry
             );
-        }
-    }
 
-    /// Moves ignore entry owned by `self.ignore_entry` back to `self.ignore_map`.
-    ///
-    /// # Parameters
-    ///
-    /// - `entry_name` - Name of the entry to get.
-    fn reset_ignore_entry(&mut self, entry_name: &str) {
-        if self
-            .flags
-            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
-        {
-            let entry_name: &str =
-                &format!("{file}: {entry_name}", file = self.file_type);
-
-            *self
-                .ignore_map
-                .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"))
-                .or_default() = take(&mut self.ignore_entry);
+            self.ignore_entry = static_entry;
         }
     }
 
@@ -939,6 +917,7 @@ impl<'a> Base {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
+    ///
     fn parse_rpgm_file(&mut self, mut content: &[u8]) -> Result<Value, Error> {
         if self.engine_type.is_new() {
             // MZ includes Byte Order Mark in files.
@@ -946,7 +925,7 @@ impl<'a> Base {
                 content = &content[3..];
             }
 
-            let parsed = from_str::<serde_json::Value>(unsafe {
+            let parsed = from_str::<SerdeValue>(unsafe {
                 std::str::from_utf8_unchecked(content)
             })?;
 
@@ -967,11 +946,12 @@ impl<'a> Base {
     /// # Parameters
     ///
     /// - `translation` - translation file content to parse.
+    ///
     fn initialize_translation(
         &mut self,
         translation: Option<&str>,
     ) -> Result<(), Error> {
-        if self.mode.is_any_default() || self.translation_initialized {
+        if self.mode.is_default() || self.translation_initialized {
             return Ok(());
         }
 
@@ -991,58 +971,50 @@ impl<'a> Base {
 
         let mut translation_lines = translation.lines().enumerate().peekable();
 
-        let map_start_comment_prefix = if self.file_type.is_map() {
-            MAP_ID_COMMENT
-        } else if self.file_type.is_other() {
-            if self.game_type.is_termina() && self.file_type.is_items() {
-                for _ in 0..4 {
-                    let (_, item_category_line) =
-                        unsafe { translation_lines.next().unwrap_unchecked() };
+        if self.game_type.is_termina() && self.file_type.is_items() {
+            for _ in 0..4 {
+                let (_, item_category_line) =
+                    unsafe { translation_lines.next().unwrap_unchecked() };
 
-                    if item_category_line.starts_with("<Menu Category") {
-                        let (source, translation) = unsafe {
-                            item_category_line
-                                .split_once(SEPARATOR)
-                                .unwrap_unchecked()
-                        };
+                if item_category_line.starts_with("<Menu Category") {
+                    let (source, translation) = unsafe {
+                        item_category_line
+                            .split_once(SEPARATOR)
+                            .unwrap_unchecked()
+                    };
 
-                        self.translation_map
-                            .insert(source.into(), translation.into());
-                    } else {
-                        panic!(
-                            "items.txt in Fear & Hunger 2: Termina should start with 4 `Menu Category` entries."
-                        );
-                    }
+                    self.translation_map
+                        .insert(source.into(), translation.into());
+                } else {
+                    panic!(
+                        "items.txt in Fear & Hunger 2: Termina should start with 4 `Menu Category` entries."
+                    );
                 }
-
-                self.translation_maps.insert(
-                    ADDITIONAL_HASHMAP_LABEL.into(),
-                    take(&mut self.translation_map),
-                );
             }
 
-            EVENT_ID_COMMENT
-        } else if self.file_type.is_system() {
-            SYSTEM_ENTRY_COMMENT
-        } else if self.file_type.is_plugins() {
-            PLUGIN_ID_COMMENT
-        } else {
-            SCRIPT_ID_COMMENT
-        };
+            self.translation_maps
+                .insert(u16::MAX, self.translation_map.drain(..).collect());
+        }
 
         loop {
             let Some((_, next)) = translation_lines.next() else {
                 // Translation drained
-                return Ok(());
+                break;
             };
 
-            // Push the first line in iterator to comments
-            // If it's not a comment, then something is wrong.
-            let mut comments = Vec::with_capacity(4);
-            comments.push(next.into());
+            let mut comments: SmallVec<[String; 4]> =
+                smallvec![String::new(); 4];
+
+            let id = next
+                .strip_prefix(ID_COMMENT)
+                .and_then(|n| n.strip_prefix(SEPARATOR))
+                .and_then(|n| n.trim_end().parse::<u16>().ok())
+                .unwrap();
+
+            let mut first = true;
 
             while let Some((_, line)) = translation_lines.peek() {
-                if line.starts_with(map_start_comment_prefix) {
+                if line.starts_with(ID_COMMENT) {
                     break;
                 }
 
@@ -1050,7 +1022,35 @@ impl<'a> Base {
                     unsafe { translation_lines.next().unwrap_unchecked() };
 
                 if line.starts_with(COMMENT_PREFIX) {
-                    comments.push(line.to_string());
+                    if first {
+                        let pos = CommentPos::from_str(line);
+
+                        // TODO: Handle top-level comments that don't correspond to required here
+                        if pos == CommentPos::None {
+                            continue;
+                        }
+
+                        if pos == CommentPos::DisplayName {
+                            let suffix_pos =
+                                line.rfind(COMMENT_SUFFIX).unwrap();
+                            let prefix_len =
+                                MAP_DISPLAY_NAME_COMMENT_PREFIX.len();
+                            let source = &line[prefix_len..suffix_pos];
+                            let translation =
+                                line.rsplit_once(SEPARATOR).unwrap().1;
+                            comments[pos as usize] =
+                                format!("{source}{SEPARATOR}{translation}");
+                        } else {
+                            comments[pos as usize] = line
+                                .split_once(SEPARATOR)
+                                .unwrap()
+                                .1
+                                .to_string();
+                        }
+                    } else {
+                        comments.push(line.to_string());
+                    }
+
                     continue;
                 }
 
@@ -1058,7 +1058,7 @@ impl<'a> Base {
                 let split: Vec<&str> = line.split(SEPARATOR).collect();
 
                 if split.len() < 2 {
-                    log::warn!(
+                    warn!(
                         "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
                         i = i + 1,
                         file = self.file_type.to_string().to_lowercase()
@@ -1088,7 +1088,7 @@ impl<'a> Base {
                 };
 
                 let (source, translation) = if self.mode.is_write() {
-                    // Discard line with empty translation, since it's now use on write
+                    // Discard lines with empty translation, those are unused on write
                     if translation.is_empty() {
                         continue;
                     }
@@ -1098,45 +1098,47 @@ impl<'a> Base {
                     (source, translation)
                 };
 
+                if first {
+                    self.metadata.insert(id, comments.drain(..).collect());
+                    first = false;
+                }
+
                 self.translation_map.insert(
                     source.into(),
                     TranslationEntry::new(
+                        u16::MAX,
+                        comments.drain(..).collect(),
                         translation.into(),
-                        take(&mut comments),
                     ),
                 );
             }
 
             if self.translation_map.is_empty() {
-                if self.mode.is_write() {
+                let metadata_entry = self
+                    .metadata
+                    .entry(id)
+                    .or_insert(comments.drain(..).collect());
+
+                let display_name =
+                    &metadata_entry[CommentPos::DisplayName as usize];
+
+                if self.mode.is_write()
+                    && (display_name.is_empty()
+                        || display_name.ends_with(SEPARATOR))
+                {
                     continue;
                 }
 
-                self.translation_map.insert(
-                    String::new(),
-                    TranslationEntry::new(String::new(), take(&mut comments)),
-                );
+                self.translation_maps
+                    .entry(id)
+                    .or_insert(TranslationMap::with_capacity(512));
             }
 
-            let comments = self.translation_map.comments();
-
-            if comments.is_empty() {
-                continue;
-            }
-
-            let translation_map_name = unsafe {
-                comments[0].rsplit_once(SEPARATOR).unwrap_unchecked()
-            }
-            .1;
-
-            self.translation_maps.insert(
-                translation_map_name.to_string(),
-                replace(
-                    &mut self.translation_map,
-                    TranslationMap::with_capacity(512),
-                ),
-            );
+            self.translation_maps
+                .insert(id, self.translation_map.drain(..).collect());
         }
+
+        Ok(())
     }
 
     /// Sets `self.translation_map` to the entry from `self.translation_maps`.
@@ -1147,50 +1149,38 @@ impl<'a> Base {
     ///
     /// # Returns
     ///
-    /// - [`ControlFlow::Break`] - If `self.mode` is write, and entry corresponding to the `entry_name` does not exist.
+    /// - [`ControlFlow::Break`] - If `self.mode` is [`Mode::Write`], and entry corresponding to the `entry_name` does not exist.
     /// - [`ControlFlow::Continue`] - In other situations.
     ///
-    /// # Note
-    ///
-    /// This function moves map from `self.translation_maps`, so it must be moved back with [`Base::reset_translation_map`] later.
-    fn get_translation_map(&mut self, entry_name: &str) -> ControlFlow<()> {
-        let entry = self.translation_maps.entry(entry_name.into());
+    fn get_translation_map(&mut self, id: u16) -> ControlFlow<()> {
+        let entry = self.translation_maps.entry(id);
 
         // Move a map from `translation_maps` to `translation_map`.
-        self.translation_map = take(match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                if self.mode.is_write() {
-                    return ControlFlow::Break(());
-                }
+        self.translation_map = mutable!(
+            match entry {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    if self.mode.is_write() {
+                        return ControlFlow::Break(());
+                    }
 
-                entry.insert(IndexMapGx::default())
-            }
-        });
+                    entry.insert(IndexMapGx::default())
+                }
+            },
+            TranslationMap
+        );
 
         ControlFlow::Continue(())
     }
 
-    /// Moves map owned by `self.translation_map` back to `self.translation_maps`.
+    /// Wraps string in a [`Value`].
+    ///
+    /// If `literal` argument is set, this wraps string in a [`Value`] of [`ValueType::String`] type.
+    /// Else, this wraps string in a [`Value`] of [`ValueType::Bytes`] type.
     ///
     /// # Parameters
     ///
-    /// - `entry_name` - Name of the entry to get.
-    fn reset_translation_map(&mut self, entry_name: &str) {
-        // Move the map back to `translation_maps`.
-        self.translation_maps
-            .entry(entry_name.into())
-            .and_modify(|entry| *entry = take(&mut self.translation_map));
-    }
-
-    /// Wraps string in [`Value`].
-    ///
-    /// If `literal` argument is set, this wraps string in [`Value`] of [`ValueType::String`] type.
-    /// Else, this wraps string in [`Value`] of [`ValueType::Bytes`] type.
-    ///
-    /// # Parameters
-    ///
-    /// - `string` - String to wrap in [`Value`].
+    /// - `string` - String to wrap in a [`Value`].
     /// - `literal` - Whether to wrap `string` as [`ValueType::String`] or as [`ValueType::Bytes`].
     ///
     /// # Returns
@@ -1212,7 +1202,7 @@ impl<'a> Base {
     ///
     /// # Returns
     ///
-    /// - [`Cow<str>`] - Either a borrowed reference if no changes were made, or an owned [`String`] if replacements occurred.
+    /// - [`Cow<str>`] - as owned if replacements occured, as borrowed otherwise.
     fn romanize_string(string: &str) -> Cow<'_, str> {
         let mut result: Option<String> = None;
 
@@ -1342,11 +1332,12 @@ impl<'a> Base {
             let mut index = r"\et[".len() + 1;
 
             loop {
-                let char = &string[index..=index];
+                let char = string.as_bytes()[index];
 
-                if char == "]" {
+                if char == b']' {
                     return Some(index + 1);
                 }
+
                 index += 1;
 
                 if index == 10 {
@@ -1364,21 +1355,21 @@ impl<'a> Base {
 
     /// Extracts string from [`Value`].
     ///
-    /// Will always return `None` if [`Value`] is not of [`ValueType::String`] or [`ValueType::Bytes`].
+    /// Will always return [`None`] if [`Value`] is not of [`ValueType::String`] or [`ValueType::Bytes`].
     ///
     /// # Parameters
     ///
     /// - `value` - Value from which string will be extracted.
-    /// - `ret` - Whether to return if extracted string happens to be empty.
+    /// - `fail_if_empty` - Whether to return if extracted string happens to be empty.
     ///
     /// # Returns
     ///
-    /// - `None` - If [`Value`] is not of [`ValueType::String`] or [`ValueType::Bytes`], or `ret` is set and `string` is empty.
-    /// - `Some(&str)` - Parsed string.
+    /// - [`None`] - If [`Value`] is not of [`ValueType::String`] or [`ValueType::Bytes`], or `fail_if_empty` is set and `string` is empty.
+    /// - [`Some(&str)`] - Parsed string.
     fn extract_string(
         &'a self,
         value: &'a Value,
-        ret: bool,
+        fail_if_empty: bool,
     ) -> Option<&'a str> {
         let string = value.as_str().or_else(|| {
             std::str::from_utf8(value.as_byte_vec().unwrap_or_default()).ok()
@@ -1386,7 +1377,7 @@ impl<'a> Base {
 
         let trimmed = string.trim();
 
-        if trimmed.is_empty() && ret {
+        if trimmed.is_empty() && fail_if_empty {
             return None;
         }
 
@@ -1407,7 +1398,7 @@ impl<'a> Base {
     ///
     /// # Returns
     ///
-    /// - `bool` - whether the key is present in translation.
+    /// - [`bool`] - whether the key is present in translation.
     fn contains_key(&self, key: &str) -> bool {
         let contains = self.translation_map.contains_key(key);
 
@@ -1460,38 +1451,17 @@ impl<'a> Base {
         None
     }
 
-    fn push_comments(&mut self, map: &TranslationMap) {
-        if map.first().is_some_and(|x| x.0.is_empty()) {
-            self.translation_duplicate_map.extend(
-                map.comments()
-                    .iter()
-                    .map(|k| (String::new(), k.clone().into())),
-            );
-        } else {
-            for (k, v) in map
-                .iter()
-                .take_while(|(k, _)| k.starts_with(COMMENT_PREFIX))
-            {
-                self.translation_duplicate_map.push((k.clone(), v.clone()));
-            }
-        }
-    }
-
     /// Purges entries with empty translation from `self.translation_map`, and drains the resulting entries to `self.translation_duplicate_map`.
     ///
     /// Will add purged entries to `self.ignore_entry` if `self.flags` contains [`BaseFlags::CreateIgnore`].
     fn purge_empty_translation(&mut self) {
         let len_limit = self.translation_map.len();
 
-        self.translation_duplicate_map
-            .reserve(self.translation_map.len());
+        self.translation_duplicate_map.reserve(len_limit);
         self.translation_duplicate_map.extend(
             self.translation_map.drain(..).enumerate().map(
                 |(i, (mut k, v))| {
-                    if i < len_limit
-                        && !k.starts_with(COMMENT_PREFIX)
-                        && v.is_empty()
-                    {
+                    if i < len_limit && v.is_empty() {
                         let moved = take(&mut k);
 
                         if self.flags.contains(BaseFlags::CreateIgnore)
@@ -1507,131 +1477,378 @@ impl<'a> Base {
         );
     }
 
+    /// Returns the RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
+    ///
+    /// # Parameters
+    ///
+    /// - `value` - [`Value`] to use on write.
+    ///
+    /// # Returns
+    ///
+    /// RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
+    ///
+    fn finish(&mut self, value: Value) -> ProcessedData {
+        self.flush_translation(None);
+
+        let output_content = if self.mode.is_write() {
+            ProcessedData::RPGMData(if self.file_type.is_plugins() {
+                ["var $plugins =\n".as_bytes(), unsafe {
+                    &to_vec(&SerdeValue::from(value)).unwrap_unchecked()
+                }]
+                .concat()
+            } else if self.engine_type.is_new() {
+                unsafe { to_vec(&SerdeValue::from(value)).unwrap_unchecked() }
+            } else {
+                dump(
+                    value,
+                    if self.file_type.is_scripts() {
+                        None
+                    } else {
+                        INSTANCE_VAR_PREFIX
+                    },
+                )
+            })
+        } else {
+            let total_len = self.translation_duplicate_map.iter().fold(
+                0,
+                |mut acc, (source, entry)| {
+                    let (id, comments, translation) = entry.parts();
+
+                    if id != u16::MAX {
+                        acc += ID_COMMENT.len() + SEPARATOR.len() + 5 + 1;
+                    }
+
+                    for comment in comments {
+                        acc += comment.len() + 1;
+                    }
+
+                    if !source.is_empty() {
+                        acc += source.len() + SEPARATOR.len();
+                    }
+
+                    acc += translation.len();
+
+                    if !source.is_empty() || !translation.is_empty() {
+                        acc += 1;
+                    }
+
+                    acc
+                },
+            );
+
+            let mut output = self.translation_duplicate_map.iter().fold(
+                Vec::with_capacity(total_len),
+                |mut acc, (source, entry)| {
+                    let (id, comments, translation) = entry.parts();
+
+                    if id != u16::MAX {
+                        acc.extend_from_slice(ID_COMMENT.as_bytes());
+                        acc.extend_from_slice(SEPARATOR.as_bytes());
+                        acc.extend_from_slice(id.to_string().as_bytes());
+                        acc.push(b'\n');
+                    }
+
+                    for comment in comments.iter().filter(|c| !c.is_empty()) {
+                        acc.extend_from_slice(comment.as_bytes());
+                        acc.push(b'\n');
+                    }
+
+                    if !source.is_empty() {
+                        acc.extend_from_slice(source.as_bytes());
+                        acc.extend_from_slice(SEPARATOR.as_bytes());
+                    }
+
+                    if !translation.is_empty() {
+                        acc.extend_from_slice(translation.as_bytes());
+                    }
+
+                    if !source.is_empty() || !translation.is_empty() {
+                        acc.push(b'\n');
+                    }
+
+                    acc
+                },
+            );
+
+            output.pop();
+            ProcessedData::TranslationData(output)
+        };
+
+        self.lines.clear();
+        self.translation_duplicate_map.clear();
+        output_content
+    }
+
+    fn push_metadata(&mut self, id: u16) {
+        let Some(mut comments) = self.metadata.remove(&id) else {
+            return;
+        };
+
+        comments.iter_mut().enumerate().filter(|(_, x)| !x.is_empty()).for_each(|(i, x)| {
+            let pos = unsafe { transmute::<i8, CommentPos>(i as i8) };
+
+            *x = match pos {
+                CommentPos::Name => {
+                    format!("{NAME_COMMENT}{SEPARATOR}{x}")
+                }
+
+                CommentPos::Order => {
+                    format!("{MAP_ORDER_COMMENT}{SEPARATOR}{x}")
+                }
+
+                CommentPos::DisplayName => {
+                    let (source, translation) = x.split_once(SEPARATOR).unwrap();
+                    format!("{MAP_DISPLAY_NAME_COMMENT_PREFIX}{source}{COMMENT_SUFFIX}{SEPARATOR}{translation}")
+                }
+
+                CommentPos::None => unreachable!()
+            }
+        });
+
+        self.translation_duplicate_map.push((
+            String::new(),
+            TranslationEntry::new(id, comments, String::new()),
+        ));
+    }
+
     /// Flushes translation from `self.translation_map` and `self.lines` to `self.translation_duplicate_map`.
     ///
     /// # Parameters
     ///
-    /// - `finish` - whether this function is called from `finish` function.
-    fn flush_translation(&mut self, finish: bool) {
-        if self.duplicate_mode.is_allow()
-            || !(self.file_type.is_map() || self.file_type.is_other())
-        {
-            if self.mode.is_append() {
-                self.translation_duplicate_map
-                    .reserve(self.lines.capacity() + 5);
-                mutable!(self, Self).push_comments(&self.translation_map);
+    /// - `id` - if called from `finish` function, id will always be [`None`], and that means we're finishing.
+    fn flush_translation(&mut self, id: Option<u16>) {
+        self.append_additional_data();
 
-                for key in take(&mut self.lines) {
-                    let val = self
+        if self.duplicate_mode.is_allow()
+            || matches!(
+                self.file_type,
+                RPGMFileType::System
+                    | RPGMFileType::Scripts
+                    | RPGMFileType::Plugins
+            )
+        {
+            let Some(id) = id else {
+                return;
+            };
+
+            if self.lines.is_empty()
+                && self.metadata[&id][CommentPos::DisplayName as usize]
+                    .is_empty()
+            {
+                return;
+            }
+
+            self.translation_duplicate_map.reserve(self.lines.len() + 1);
+            self.push_metadata(id);
+
+            let lines = self.lines.drain(..);
+
+            if self.mode.is_append() {
+                self.translation_duplicate_map.extend(lines.map(|k| {
+                    let v = self
                         .translation_map
-                        .swap_remove(&key)
+                        .swap_remove(&k)
                         .unwrap_or_default();
-                    self.translation_duplicate_map.push((key, val));
-                }
+                    (k, v)
+                }));
             } else {
                 self.translation_duplicate_map
-                    .reserve(self.translation_map.len() + self.lines.len());
-                self.translation_duplicate_map.extend(
-                    self.translation_map.drain(..).chain(
-                        take(&mut self.lines)
-                            .into_iter()
-                            .map(|k| (k, TranslationEntry::default())),
-                    ),
-                );
+                    .extend(lines.map(|k| (k, TranslationEntry::default())));
             }
-        } else if finish && self.mode.is_read() {
+        } else {
+            self.lines_lengths.push(
+                self.lines.len() as u32
+                    - self.lines_lengths.iter().copied().sum::<u32>(),
+            );
+
+            if id.is_some() || !self.mode.is_read() {
+                return;
+            }
+
+            // We're not returning if `self.lines` is empty because we need to push metadata that contains a display name
+
             if self.mode.is_append() {
-                const APPROXIMATE_COMMENT_COUNT: usize = 5;
-                self.translation_duplicate_map.reserve(
-                    self.lines.capacity()
-                        + (self.translation_maps.len()
-                            * APPROXIMATE_COMMENT_COUNT),
-                );
+                self.translation_duplicate_map
+                    .reserve(self.lines.len() + self.lines_lengths.len());
 
                 let mut map_index = 0;
+                let mut i = 0;
 
-                for key in take(&mut self.lines) {
-                    let mut val = TranslationEntry::default();
+                while self.lines_lengths.get(map_index).is_some_and(|&x| x == 0)
+                {
+                    let id = self.lines_ids[map_index];
 
-                    for (i, map) in
-                        self.translation_maps.values_mut().enumerate()
+                    if !self.metadata[&id][CommentPos::DisplayName as usize]
+                        .is_empty()
                     {
-                        if let Some(entry) = map.swap_remove(&key) {
-                            while i > map_index {
-                                mutable!(self, Self).push_comments(
-                                    &self.translation_maps[map_index],
-                                );
-                                map_index += 1;
+                        self.push_metadata(id);
+                    }
+
+                    map_index += 1;
+                }
+
+                if let Some(&id) = self.lines_ids.get(map_index) {
+                    if self
+                        .lines_lengths
+                        .get(map_index)
+                        .is_some_and(|&x| x != 0)
+                        || !self.metadata[&id][CommentPos::DisplayName as usize]
+                            .is_empty()
+                    {
+                        self.push_metadata(id);
+                    }
+                }
+
+                for key in mutable!(self, Self).lines.drain(..) {
+                    if i == self.lines_lengths[map_index] {
+                        i = 0;
+                        map_index += 1;
+
+                        while self.lines_lengths[map_index] == 0 {
+                            let id = self.lines_ids[map_index];
+
+                            if !self.metadata[&id]
+                                [CommentPos::DisplayName as usize]
+                                .is_empty()
+                            {
+                                self.push_metadata(id);
                             }
 
-                            val = entry;
-                            break;
+                            map_index += 1;
+                        }
+
+                        if let Some(&id) = self.lines_ids.get(map_index) {
+                            if self.lines_lengths[map_index] != 0
+                                || !self.metadata[&id]
+                                    [CommentPos::DisplayName as usize]
+                                    .is_empty()
+                            {
+                                self.push_metadata(id);
+                            }
                         }
                     }
 
-                    self.translation_duplicate_map.push((key, val));
+                    let find_result = self
+                        .translation_maps
+                        .values_mut()
+                        .find_map(|m| m.swap_remove(&key));
+
+                    let entry = find_result.unwrap_or_default();
+                    self.translation_duplicate_map.push((key, entry));
+
+                    i += 1;
                 }
 
-                if map_index < self.translation_maps.len() - 1 {
-                    if let Some(kv) = self.translation_maps.last() {
-                        mutable!(self, Self).push_comments(kv.1);
+                let mut ids = self.metadata.keys().copied().collect::<Vec<_>>();
+                ids.sort_unstable();
+
+                for id in ids {
+                    if self.metadata[&id][CommentPos::DisplayName as usize]
+                        .is_empty()
+                    {
+                        continue;
                     }
+
+                    self.push_metadata(id);
                 }
             } else {
                 self.translation_duplicate_map.reserve(
                     self.translation_maps
                         .values()
-                        .map(indexmap::IndexMap::len)
+                        .map(IndexMapGx::len)
                         .sum::<usize>()
-                        + self.lines_lengths.iter().sum::<usize>(),
+                        + self
+                            .lines_lengths
+                            .iter()
+                            .filter(|&&l| l != 0)
+                            .sum::<u32>() as usize,
                 );
-                let mut lines_iter = take(&mut self.lines).into_iter();
 
-                for (i, map) in
-                    take(&mut self.translation_maps).into_values().enumerate()
+                let mut_self = mutable!(self, Self);
+
+                let mut lines = mut_self.lines.drain(..);
+                let lengths = mut_self.lines_lengths.drain(..);
+
+                for ((id, map), length) in
+                    mut_self.translation_maps.drain(..).zip(lengths)
                 {
-                    self.translation_duplicate_map.extend(map);
-
-                    for _ in 0..self.lines_lengths[i] {
-                        self.translation_duplicate_map.push((
-                            unsafe { lines_iter.next().unwrap_unchecked() },
-                            TranslationEntry::default(),
-                        ));
+                    if length == 0
+                        && self.metadata[&id][CommentPos::DisplayName as usize]
+                            .is_empty()
+                    {
+                        continue;
                     }
+
+                    self.push_metadata(id);
+                    self.translation_duplicate_map.extend(
+                        map.into_iter().chain((0..length).map(|_| {
+                            (
+                                // SAFETY: If this thing fails at runtime, that means something in the code is wrong - it doesn't depend on the runtime variables.
+                                unsafe { lines.next().unwrap_unchecked() },
+                                TranslationEntry::default(),
+                            )
+                        })),
+                    );
                 }
             }
         }
     }
 
-    fn process_comments(&mut self, id: &str, name: &str) {
-        if !self.mode.is_read() {
-            return;
+    fn update_metadata(
+        &mut self,
+        id: u16,
+        metadata_vec: Vec<(CommentPos, &str)>,
+    ) {
+        let metadata = self
+            .metadata
+            .entry(id)
+            .or_insert(smallvec![String::new(); 4]);
+
+        if metadata.len() < 4 {
+            metadata.resize(4, String::new());
         }
 
-        let (id_comment, name_comment) = match self.file_type {
-            RPGMFileType::Plugins => (PLUGIN_ID_COMMENT, PLUGIN_NAME_COMMENT),
-            RPGMFileType::Scripts => (SCRIPT_ID_COMMENT, SCRIPT_NAME_COMMENT),
-            // Covers only other, map and system don't call this function.
-            _ => (EVENT_ID_COMMENT, EVENT_NAME_COMMENT),
-        };
+        for (entry_id, entry) in
+            metadata_vec.into_iter().filter(|(_, x)| !x.is_empty())
+        {
+            if entry_id == CommentPos::DisplayName {
+                if self.mode.is_append() {
+                    let Some((source, mut translation)) =
+                        metadata[entry_id as usize].split_once(SEPARATOR)
+                    else {
+                        metadata[entry_id as usize] =
+                            format!("{entry}{SEPARATOR}");
+                        continue;
+                    };
 
-        if self.mode.is_append() {
-            self.translation_map.comments_mut()[1] =
-                format!("{name_comment}{SEPARATOR}{name}");
-        } else {
-            self.translation_map.extend([
-                (id_comment.into(), id.into()),
-                (name_comment.into(), name.into()),
-            ]);
+                    if source != entry {
+                        translation = "";
+                    }
+
+                    metadata[entry_id as usize] =
+                        format!("{entry}{SEPARATOR}{translation}");
+                } else {
+                    metadata[entry_id as usize] = format!("{entry}{SEPARATOR}");
+                }
+
+                continue;
+            }
+
+            metadata[entry_id as usize] = entry.to_string();
         }
     }
 
     /// Appends additional data directly to `self.translation_duplicate_map` based on some criteria.
     fn append_additional_data(&mut self) {
+        if self.additional_data_written {
+            return;
+        }
+
         if !self.mode.is_write()
             && self.game_type.is_termina()
             && self.file_type.is_items()
         {
+            self.translation_map.reserve_exact(4);
             self.translation_duplicate_map.extend([
                 (
                     String::from("<Menu Category: Items>"),
@@ -1650,6 +1867,8 @@ impl<'a> Base {
                     TranslationEntry::default(),
                 ),
             ]);
+
+            self.additional_data_written = true;
         }
     }
 }
@@ -1669,7 +1888,7 @@ impl<'a> MapBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     /// let mut map_base = MapBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -1693,7 +1912,7 @@ impl<'a> MapBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
@@ -1721,7 +1940,7 @@ impl<'a> MapBase<'a> {
     /// - `filename` - Filename of the file that's being processed.
     /// - `content` - Content of the file that's being processed.
     /// - `mapinfos` - `MapInfos` file content that corresponds to the file being parsed.
-    /// - `translation` - Contents of the translation file corresponding to maps. Isn't used with [`ReadMode::Default`] and [`ReadMode::Force`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to maps. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -1733,7 +1952,7 @@ impl<'a> MapBase<'a> {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`] or [`ReadMode::Force`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -1746,7 +1965,7 @@ impl<'a> MapBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
@@ -1769,101 +1988,43 @@ impl<'a> MapBase<'a> {
             self.mapinfos = self.base.parse_rpgm_file(mapinfos)?;
         }
 
-        if !self.base.mode.is_any_default() {
-            self.base.initialize_translation(translation)?;
-        }
+        self.base.initialize_translation(translation)?;
 
         let map_id = Self::parse_map_id(filename);
         if self.is_map_unused(map_id) {
             return Ok(None);
         }
 
-        let map_id_string = map_id.to_string();
-        let flow = self.base.get_translation_map(&map_id_string);
+        let flow = self.base.get_translation_map(map_id);
         if flow.is_break() {
             return Ok(None);
         }
 
-        self.base.get_ignore_entry(&map_id_string);
+        self.base.get_ignore_entry(map_id);
+        self.base.lines_ids.push(map_id);
 
         let result = if self.base.mode.is_purge() {
             self.base.purge_empty_translation();
             Ok(None)
         } else {
             let mut map_object = self.base.parse_rpgm_file(content)?;
-
             let display_name = self.get_display_name(&map_object);
-            let display_name_comment = format!(
-                "{MAP_DISPLAY_NAME_COMMENT_PREFIX}{display_name}{COMMENT_SUFFIX}"
-            );
 
             if self.base.mode.is_read() {
-                let mut comments_inserted = true;
-
                 let map_order = self.get_map_order(map_id).to_string();
-                let mut map_name = mutable!(self, Self).get_map_name(map_id);
-
+                let map_name = mutable!(self, Self).get_map_name(map_id);
                 let replaced_map_name = map_name.normalize();
-                map_name = &replaced_map_name;
 
-                if self.base.mode.is_append() {
-                    if self.base.translation_map.first().is_some() {
-                        let start_comments =
-                            self.base.translation_map.comments_mut();
-                        let mut slots = vec![String::new(); 4];
-
-                        for comment in start_comments.iter() {
-                            if comment.starts_with(MAP_ID_COMMENT) {
-                                slots[0].clone_from(comment);
-                            } else if comment.starts_with(MAP_ORDER_COMMENT) {
-                                slots[1].clone_from(comment);
-                            } else if comment.starts_with(MAP_NAME_COMMENT) {
-                                slots[2].clone_from(comment);
-                            } else if comment
-                                .starts_with(MAP_DISPLAY_NAME_COMMENT_PREFIX)
-                            {
-                                slots[3].clone_from(comment);
-                            }
-                        }
-
-                        *start_comments = slots;
-
-                        let map_name_start_comment = &mut start_comments[2];
-                        *map_name_start_comment =
-                            format!("{MAP_NAME_COMMENT}{SEPARATOR}{map_name}");
-
-                        let display_name_start_comment = &mut start_comments[3];
-
-                        let translation = display_name_start_comment
-                            .get(
-                                display_name_start_comment
-                                    .rfind(SEPARATOR)
-                                    .unwrap_or_default()
-                                    + SEPARATOR.len()..,
-                            )
-                            .unwrap_or_default();
-
-                        *display_name_start_comment = format!(
-                            "{display_name_comment}{SEPARATOR}{translation}"
-                        );
-                    } else {
-                        comments_inserted = false;
-                    }
-                } else {
-                    comments_inserted = false;
-                }
-
-                if !comments_inserted {
-                    self.base.translation_map.extend([
-                        (MAP_ID_COMMENT.into(), map_id_string.as_str().into()),
-                        (MAP_ORDER_COMMENT.into(), map_order.into()),
-                        (MAP_NAME_COMMENT.into(), map_name.into()),
-                        (display_name_comment, TranslationEntry::default()),
-                    ]);
-                }
+                self.base.update_metadata(
+                    map_id,
+                    Vec::from([
+                        (CommentPos::Name, replaced_map_name.as_ref()),
+                        (CommentPos::Order, &map_order),
+                        (CommentPos::DisplayName, &display_name),
+                    ]),
+                );
             } else if !display_name.is_empty() {
-                let display_name_comment_line =
-                    &self.base.translation_map.comments()[3];
+                let display_name_comment_line = &self.base.metadata[&map_id][2];
 
                 let split: Vec<&str> =
                     display_name_comment_line.split(SEPARATOR).collect();
@@ -1888,81 +2049,77 @@ impl<'a> MapBase<'a> {
                 }
             }
 
-            let events = if self.base.engine_type.is_new() {
-                // SAFETY: Always an array in new maps.
-                EventIterator::New(unsafe {
-                    map_object[self.base.labels.events]
-                        .as_array_mut()
-                        .unwrap_unchecked()
-                        .iter_mut()
-                        .skip(1)
-                })
-            } else {
-                // SAFETY: Always a hashmap in old maps.
-                EventIterator::Old(unsafe {
-                    map_object[self.base.labels.events]
-                        .as_hashmap_mut()
-                        .unwrap_unchecked()
-                        .values_mut()
-                })
-            };
-
-            for event in events {
-                // TODO: Parse event name
-                if event.is_null() {
-                    continue;
-                }
-
-                let Some(pages) = event[self.base.labels.pages].as_array_mut()
-                else {
-                    continue;
-                };
-
-                for page in pages {
-                    // SAFETY: List is always in map files.
-                    let list = unsafe {
-                        page[self.base.labels.list]
+            if self.base.mode.is_read() || !self.base.translation_map.is_empty()
+            {
+                let events = if self.base.engine_type.is_new() {
+                    // SAFETY: Always an array in new maps.
+                    EventIterator::New(unsafe {
+                        map_object[self.base.labels.events]
                             .as_array_mut()
                             .unwrap_unchecked()
+                            .iter_mut()
+                            .skip(1)
+                    })
+                } else {
+                    // SAFETY: Always a hashmap in old maps.
+                    EventIterator::Old(unsafe {
+                        map_object[self.base.labels.events]
+                            .as_hashmap_mut()
+                            .unwrap_unchecked()
+                            .values_mut()
+                    })
+                };
+
+                for event in events {
+                    if event.is_null() {
+                        continue;
+                    }
+
+                    let Some(pages) =
+                        event[self.base.labels.pages].as_array_mut()
+                    else {
+                        continue;
                     };
 
-                    self.base.process_list(list);
+                    if self.base.map_events {
+                        todo!("Parse event name");
+                    }
+
+                    for page in pages {
+                        // SAFETY: List is always in map files.
+                        let list = unsafe {
+                            page[self.base.labels.list]
+                                .as_array_mut()
+                                .unwrap_unchecked()
+                        };
+
+                        self.base.process_list(list);
+                    }
                 }
             }
 
             if self.base.mode.is_write() {
                 Ok(Some(self.base.finish(map_object)))
             } else {
-                if self.base.duplicate_mode.is_remove()
-                    && !self.base.mode.is_append()
-                {
-                    self.base.lines_lengths.push(
-                        self.base.lines.len()
-                            - self.base.lines_lengths.iter().sum::<usize>(),
-                    );
-                }
-
-                self.base.flush_translation(false);
+                self.base.flush_translation(Some(map_id));
                 Ok(None)
             }
         };
 
-        self.base.reset_ignore_entry(&map_id_string);
-        self.base.reset_translation_map(&map_id_string);
         result
     }
 
-    /// Parses a map ID from a filename by extracting the substring at positions 3 to 5 and converting parsing it to [`i32`].
+    /// Parses a map ID from a filename by extracting the substring at positions 3 to 5 and converting parsing it to [`u16`].
     ///
     /// # Parameters
     ///
     /// - `filename` - Filename of the map.
     ///
     /// # Returns
-    /// - [`i32`] - The parsed map ID.
-    fn parse_map_id(filename: &str) -> i32 {
+    /// - [`u16`] - The parsed map ID.
+    fn parse_map_id(filename: &str) -> u16 {
         // SAFETY: We discarded all files, which don't contain a digit at index 3.
-        unsafe { filename[3..=5].parse::<i32>().unwrap_unchecked() }
+        unsafe { filename[3..=5].parse::<u16>().unwrap_unchecked() }
     }
 
     /// Determines whether a map is unused based on its existance in `self.mapinfos`.
@@ -1973,12 +2130,12 @@ impl<'a> MapBase<'a> {
     ///
     /// # Returns
     /// - [`bool`] - Whether map is unused.
-    fn is_map_unused(&self, id: i32) -> bool {
+    fn is_map_unused(&self, id: u16) -> bool {
         // If map ID can't be found in mapinfos, then it is unused in game.
         if self.base.engine_type.is_new() {
             self.mapinfos.get_index(id as usize).is_none()
         } else {
-            self.mapinfos.get(&Value::int(id)).is_none()
+            self.mapinfos.get(&Value::int(i32::from(id))).is_none()
         }
     }
 
@@ -1990,14 +2147,14 @@ impl<'a> MapBase<'a> {
     ///
     /// # Returns
     ///
-    /// - [`i32`] - The map's order.
-    fn get_map_order(&self, id: i32) -> i32 {
+    /// - [`u16`] - The map's order.
+    fn get_map_order(&self, id: u16) -> i32 {
         // SAFETY: "order" always exists in mapinfos and is always an integer.
         unsafe {
             if self.base.engine_type.is_new() {
                 &self.mapinfos[id as usize]["order"]
             } else {
-                &self.mapinfos[Value::int(id)]["order"]
+                &self.mapinfos[Value::int(i32::from(id))]["order"]
             }
             .as_int()
             .unwrap_unchecked()
@@ -2013,13 +2170,13 @@ impl<'a> MapBase<'a> {
     /// # Returns
     ///
     /// - [`&str`] - The name of the map.
-    fn get_map_name(&self, id: i32) -> &str {
+    fn get_map_name(&self, id: u16) -> &str {
         // SAFETY: "name" always exists in mapinfos and is always a string.
         unsafe {
             if self.base.engine_type.is_new() {
                 &self.mapinfos[id as usize]["name"]
             } else {
-                &self.mapinfos[Value::int(id)]["name"]
+                &self.mapinfos[Value::int(i32::from(id))]["name"]
             }
             .as_str()
             .unwrap_unchecked()
@@ -2071,7 +2228,7 @@ impl<'a> OtherBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, OtherBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     /// let mut other_base = OtherBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -2087,7 +2244,7 @@ impl<'a> OtherBase<'a> {
     ///
     /// - `filename` - Filename of the file that's being processed.
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`] and [`ReadMode::Force`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -2099,7 +2256,7 @@ impl<'a> OtherBase<'a> {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`] or [`ReadMode::Force`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -2112,7 +2269,7 @@ impl<'a> OtherBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     ///     let mut other_base = OtherBase::new(&mut base);
     ///
     ///     let other_file_content = read("C:/Game/Data/Actors.rvdata2")?;
@@ -2128,14 +2285,17 @@ impl<'a> OtherBase<'a> {
     ) -> Result<Option<ProcessedData>, Error> {
         self.base.file_type = RPGMFileType::from_filename(filename);
 
-        if !self.base.mode.is_any_default() {
-            self.base.translation_initialized = false;
-            self.base.initialize_translation(translation)?;
+        if self.base.mode.is_append() || self.base.mode.is_purge() {
+            self.base.reset_translation_map();
         }
 
-        self.base.append_additional_data();
+        self.base.translation_initialized = false;
+        self.base.initialize_translation(translation)?;
+
         let mut entry_value = self.base.parse_rpgm_file(content)?;
         self.base.lines_lengths.clear();
+        self.base.lines_ids.clear();
+        self.base.metadata.clear();
 
         // SAFETY: All "other" entries are always arrays.
         let object_array =
@@ -2146,24 +2306,28 @@ impl<'a> OtherBase<'a> {
         // Skipping one, because the first entry is always null.
         for object in object_array.iter_mut().skip(1) {
             // SAFETY: Name and ID exists on every object.
+            let event_id =
+                unsafe { object["id"].as_int().unwrap_unchecked() } as u16;
             let event_name = unsafe {
                 object[self.base.labels.name].as_str().unwrap_unchecked()
             };
-            let event_id =
-                unsafe { object["id"].as_int().unwrap_unchecked().to_string() };
 
-            let flow = self.base.get_translation_map(&event_id);
+            let flow = self.base.get_translation_map(event_id);
             if flow.is_break() {
                 continue;
             }
 
             written = true;
-            self.base.get_ignore_entry(&event_id);
+            self.base.get_ignore_entry(event_id);
+            self.base.lines_ids.push(event_id);
 
             if self.base.mode.is_purge() {
                 self.base.purge_empty_translation();
             } else {
-                self.base.process_comments(&event_id, event_name);
+                self.base.update_metadata(
+                    event_id,
+                    Vec::from([(CommentPos::Name, event_name)]),
+                );
 
                 if self.base.file_type.is_events()
                     || self.base.file_type.is_troops()
@@ -2173,20 +2337,8 @@ impl<'a> OtherBase<'a> {
                     self.process_array(object);
                 }
 
-                if self.base.duplicate_mode.is_remove()
-                    && !self.base.mode.is_append()
-                {
-                    self.base.lines_lengths.push(
-                        self.base.lines.len()
-                            - self.base.lines_lengths.iter().sum::<usize>(),
-                    );
-                }
-
-                self.base.flush_translation(false);
+                self.base.flush_translation(Some(event_id));
             }
-
-            self.base.reset_ignore_entry(&event_id);
-            self.base.reset_translation_map(&event_id);
         }
 
         if !written {
@@ -2294,8 +2446,7 @@ impl<'a> OtherBase<'a> {
                         if variable_text.rfind(string).is_some() {
                             return Some(variable_text.replace(
                                 string,
-                                &self.base.translation_maps
-                                    [ADDITIONAL_HASHMAP_LABEL][string],
+                                &self.base.translation_maps[&u16::MAX][string],
                             ));
                         }
                     }
@@ -2651,7 +2802,7 @@ impl<'a> SystemBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, SystemBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     /// let mut system_base = SystemBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -2670,7 +2821,7 @@ impl<'a> SystemBase<'a> {
     /// # Parameters
     ///
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`] and [`ReadMode::Force`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -2682,7 +2833,7 @@ impl<'a> SystemBase<'a> {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`] or [`ReadMode::Force`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -2695,7 +2846,7 @@ impl<'a> SystemBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     ///     let mut system_base = SystemBase::new(&mut base);
     ///
     ///     let system_file_content = read("C:/Game/Data/System.rvdata2")?;
@@ -2708,14 +2859,12 @@ impl<'a> SystemBase<'a> {
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        if !self.base.mode.is_any_default() {
-            self.base.initialize_translation(translation)?;
-        }
+        self.base.initialize_translation(translation)?;
 
         self.system_value = self.base.parse_rpgm_file(content)?;
         let mut written = false;
 
-        for (entry_id, entry) in [
+        for (entry_id, entry_name) in [
             "Armor Types",
             "Elements",
             "Skill Types",
@@ -2728,16 +2877,35 @@ impl<'a> SystemBase<'a> {
         .into_iter()
         .enumerate()
         {
-            let flow = self.base.get_translation_map(entry);
+            let entry_id = entry_id as u16;
+
+            let flow = self.base.get_translation_map(entry_id);
             if flow.is_break() {
                 continue;
             }
 
             written = true;
-            self.base.get_ignore_entry(entry);
+            self.base.get_ignore_entry(entry_id);
+            self.base.lines_ids.push(entry_id);
 
             if self.base.mode.is_purge() {
+                // Always leave game title in the file
                 if entry_id == 7 {
+                    let metadata =
+                        self.base.metadata.get_mut(&entry_id).unwrap();
+
+                    metadata[0] =
+                        format!("{NAME_COMMENT}{SEPARATOR}{}", metadata[0]);
+
+                    self.base.translation_duplicate_map.push((
+                        String::new(),
+                        TranslationEntry::new(
+                            entry_id,
+                            take(metadata),
+                            String::new(),
+                        ),
+                    ));
+
                     self.base
                         .translation_duplicate_map
                         .extend(self.base.translation_map.drain(..));
@@ -2745,11 +2913,10 @@ impl<'a> SystemBase<'a> {
                     self.base.purge_empty_translation();
                 }
             } else {
-                if self.base.mode.is_read() {
-                    self.base
-                        .translation_map
-                        .insert(SYSTEM_ENTRY_COMMENT.into(), entry.into());
-                }
+                self.base.update_metadata(
+                    entry_id,
+                    Vec::from([(CommentPos::Name, entry_name)]),
+                );
 
                 if entry_id <= 4 {
                     let label = [
@@ -2758,7 +2925,7 @@ impl<'a> SystemBase<'a> {
                         self.base.labels.skill_types,
                         self.base.labels.weapon_types,
                         self.base.labels.equip_types,
-                    ][entry_id];
+                    ][entry_id as usize];
 
                     let Some(array) = mutable!(&self, Self).system_value[label]
                         .as_array_mut()
@@ -2777,11 +2944,8 @@ impl<'a> SystemBase<'a> {
                     self.process_game_title();
                 }
 
-                self.base.flush_translation(false);
+                self.base.flush_translation(Some(entry_id));
             }
-
-            self.base.reset_ignore_entry(entry);
-            self.base.reset_translation_map(entry);
         }
 
         if !written {
@@ -2890,7 +3054,7 @@ impl<'a> ScriptBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, ScriptBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     /// let mut script_base = ScriptBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -2905,7 +3069,7 @@ impl<'a> ScriptBase<'a> {
     /// # Parameters
     ///
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`] and [`ReadMode::Force`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -2917,7 +3081,7 @@ impl<'a> ScriptBase<'a> {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`] or [`ReadMode::Force`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -2930,7 +3094,7 @@ impl<'a> ScriptBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
     ///     let mut script_base = ScriptBase::new(&mut base);
     ///
     ///     let script_file_content = read("C:/Game/Data/Scripts.rvdata2")?;
@@ -2943,9 +3107,7 @@ impl<'a> ScriptBase<'a> {
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        if !self.base.mode.is_any_default() {
-            self.base.initialize_translation(translation)?;
-        }
+        self.base.initialize_translation(translation)?;
 
         // SAFETY: Scripts are always array.
         let mut scripts_array = unsafe {
@@ -2976,19 +3138,24 @@ impl<'a> ScriptBase<'a> {
             .zip(take(&mut scripts.names))
             .zip(take(&mut scripts.contents))
         {
-            let script_id = script_id.to_string();
-            let flow = self.base.get_translation_map(&script_id);
+            let script_id = script_id as u16 + 1;
+
+            let flow = self.base.get_translation_map(script_id);
             if flow.is_break() {
                 continue;
             }
 
             written = true;
-            self.base.get_ignore_entry(&script_id);
+            self.base.get_ignore_entry(script_id);
+            self.base.lines_ids.push(script_id);
 
             if self.base.mode.is_purge() {
                 self.base.purge_empty_translation();
             } else {
-                self.base.process_comments(&script_id, &script_name);
+                self.base.update_metadata(
+                    script_id,
+                    Vec::from([(CommentPos::Name, script_name.as_str())]),
+                );
                 let (extracted_strings, ranges) = self.extract_strings(&code);
 
                 if self.base.mode.is_write() {
@@ -3017,7 +3184,7 @@ impl<'a> ScriptBase<'a> {
                     }
 
                     if code_changed {
-                        let mut buf = Vec::with_capacity(1024);
+                        let mut buf = Vec::with_capacity(code.len());
 
                         ZlibEncoder::new(&mut buf, Compression::default())
                             .write_all(code.as_bytes())
@@ -3053,12 +3220,9 @@ impl<'a> ScriptBase<'a> {
                         self.base.insert_string(extracted);
                     }
 
-                    self.base.flush_translation(false);
+                    self.base.flush_translation(Some(script_id));
                 }
             }
-
-            self.base.reset_ignore_entry(&script_id);
-            self.base.reset_translation_map(&script_id);
         }
 
         if !written {
@@ -3256,7 +3420,7 @@ impl<'a> PluginBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, PluginBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::New);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::New);
     /// let mut plugin_base = PluginBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -3271,7 +3435,7 @@ impl<'a> PluginBase<'a> {
     /// # Parameters
     ///
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`] and [`ReadMode::Force`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -3282,7 +3446,7 @@ impl<'a> PluginBase<'a> {
     /// # Errors
     ///
     /// - [`Error::JsonParse`] - if parsing plugin JSON content fails.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`] or [`ReadMode::Force`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -3295,7 +3459,7 @@ impl<'a> PluginBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default), EngineType::New);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::New);
     ///     let mut plugin_base = PluginBase::new(&mut base);
     ///
     ///     let plugins_file_content = read("plugins.js")?;
@@ -3308,9 +3472,7 @@ impl<'a> PluginBase<'a> {
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        if !self.base.mode.is_any_default() {
-            self.base.initialize_translation(translation)?;
-        }
+        self.base.initialize_translation(translation)?;
 
         // SAFETY: Plugins content should always be like `plugins = [...]`.
         let plugins_array_str = unsafe {
@@ -3323,7 +3485,7 @@ impl<'a> PluginBase<'a> {
 
         // SAFETY: Plugins are always array.
         let mut plugins_array = unsafe {
-            Value::from(from_str::<serde_json::Value>(plugins_array_str)?)
+            Value::from(from_str::<SerdeValue>(plugins_array_str)?)
                 .into_array()
                 .unwrap_unchecked()
         };
@@ -3331,10 +3493,11 @@ impl<'a> PluginBase<'a> {
         let mut written = false;
 
         for (plugin_id, plugin_object) in plugins_array.iter_mut().enumerate() {
+            let plugin_id = plugin_id as u16 + 1;
+
             // SAFETY: Each plugin always contains name.
             let plugin_name =
                 unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
-            let plugin_id = &plugin_id.to_string();
 
             let flow = self.base.get_translation_map(plugin_id);
             if flow.is_break() {
@@ -3343,17 +3506,18 @@ impl<'a> PluginBase<'a> {
 
             written = true;
             self.base.get_ignore_entry(plugin_id);
+            self.base.lines_ids.push(plugin_id);
 
             if self.base.mode.is_purge() {
                 self.base.purge_empty_translation();
             } else {
-                self.base.process_comments(plugin_id, plugin_name);
+                self.base.update_metadata(
+                    plugin_id,
+                    Vec::from([(CommentPos::Name, plugin_name)]),
+                );
                 self.parse_plugin(None, plugin_object);
-                self.base.flush_translation(false);
+                self.base.flush_translation(Some(plugin_id));
             }
-
-            self.base.reset_ignore_entry(plugin_id);
-            self.base.reset_translation_map(plugin_id);
         }
 
         if !written {

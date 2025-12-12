@@ -2,7 +2,7 @@ use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, WriterBuilder};
 
 fn main() -> Result<(), Error> {
     let mut writer = WriterBuilder::new()
-        .with_files(FileFlags::Map | FileFlags::Other)
+        .with_files(FileFlags::Map | FileFlags::other())
         .build();
 
     writer.write(

@@ -9,10 +9,15 @@ use crate::{
         ReadMode,
     },
 };
+use gxhash::{GxHasher, HashSet, HashSetExt};
+use log::info;
 use std::{
     fs::{DirEntry, create_dir_all, read, read_dir, read_to_string, write},
+    hash::Hash,
     mem::take,
+    ops::ControlFlow,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 #[derive(Default)]
@@ -22,6 +27,7 @@ pub(crate) struct Processor {
     pub game_type: GameType,
     pub flags: BaseFlags,
     pub duplicate_mode: DuplicateMode,
+    pub hashes: HashSet<u128>,
 }
 
 impl Processor {
@@ -102,13 +108,33 @@ impl Processor {
 
         let base_ref = unsafe { &mut *(&raw mut base) };
         let load_translation = |p: &Path| -> Result<Option<String>, Error> {
-            if base_ref.mode.is_any_default() {
+            if base_ref.mode.is_default() {
                 return Ok(None);
             }
 
             read_to_string(p)
                 .map_err(|e| Error::Io(p.to_path_buf(), e))
                 .map(Some)
+        };
+
+        let mut new_hashes = HashSet::with_capacity(self.hashes.len());
+        let mut hasher = GxHasher::with_seed(self.duplicate_mode as i64);
+        let mut hash = |content: &[u8], filename: &str| {
+            content.hash(&mut hasher);
+            let result = hasher.finish_u128();
+
+            let unchanged = self.hashes.contains(&result);
+            new_hashes.insert(result);
+
+            if unchanged && self.mode.is_append_default() {
+                info!(
+                    "{filename} hasn't changed since the last read. Skipping it. Use `ReadMode::ForceAppend`, if you want to forcefully append data."
+                );
+
+                return ControlFlow::Break(());
+            }
+
+            ControlFlow::Continue(())
         };
 
         let entries: Vec<DirEntry> = read_dir(source_path)
@@ -129,13 +155,15 @@ impl Processor {
 
             let translation_file_path = translation_path.join("maps.txt");
 
-            if base.mode.is_default() && translation_file_path.exists() {
-                log::info!(
+            if base.mode.is_default_default() && translation_file_path.exists()
+            {
+                info!(
                     "{}: File already exists. Use append mode to append text or force mode to overwrite.",
                     translation_file_path.display()
                 );
             } else {
                 let translation = load_translation(&translation_file_path)?;
+                let mut contents = Vec::new();
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
@@ -144,6 +172,12 @@ impl Processor {
 
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+
+                    // FIXME: If we just continue, it won't include the map in the output in append mode, but should
+                    // if hash(&content, filename).is_break() {
+                    //    continue;
+                    // }
+
                     let result = map_base.process(
                         filename,
                         &content,
@@ -159,17 +193,22 @@ impl Processor {
                         }
                     }
 
-                    log::info!("{filename}: {msg}");
+                    info!("{filename}: {msg}");
                 }
 
                 if !base.mode.is_write() {
-                    write(&translation_file_path, map_base.translation())
+                    contents.extend(match map_base.translation() {
+                        crate::ProcessedData::TranslationData(t) => t,
+                        crate::ProcessedData::RPGMData(_) => unreachable!(),
+                    });
+
+                    write(&translation_file_path, contents)
                         .map_err(|e| Error::Io(translation_file_path, e))?;
                 }
             }
         }
 
-        if self.file_flags.contains(FileFlags::Other) {
+        if self.file_flags.intersects(FileFlags::other()) {
             let mut other_base = OtherBase::new(base_ref);
 
             for entry in
@@ -179,13 +218,21 @@ impl Processor {
                 let filename =
                     path.file_name().and_then(|p| p.to_str()).unwrap();
 
+                let file_flag = FileFlags::from_str(filename).unwrap();
+
+                if !self.file_flags.contains(file_flag) {
+                    continue;
+                }
+
                 let translation_file_path = translation_path.join(
                     Path::new(&filename.to_ascii_lowercase())
                         .with_extension("txt"),
                 );
 
-                if base.mode.is_default() && translation_file_path.exists() {
-                    log::info!(
+                if base.mode.is_default_default()
+                    && translation_file_path.exists()
+                {
+                    info!(
                         "{}: File already exists. Use append mode to append text or force mode to overwrite.",
                         translation_file_path.display()
                     );
@@ -194,6 +241,11 @@ impl Processor {
 
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+
+                    if hash(&content, filename).is_break() {
+                        continue;
+                    }
+
                     let data = other_base.process(
                         filename,
                         &content,
@@ -211,7 +263,7 @@ impl Processor {
                             .map_err(|e| Error::Io(output_file_path, e))?;
                     }
 
-                    log::info!("{filename}: {msg}");
+                    info!("{filename}: {msg}");
                 }
             }
         }
@@ -221,8 +273,9 @@ impl Processor {
 
             let translation_file_path = translation_path.join("system.txt");
 
-            if base.mode.is_default() && translation_file_path.exists() {
-                log::info!(
+            if base.mode.is_default_default() && translation_file_path.exists()
+            {
+                info!(
                     "{}: File already exists. Use append mode to append text or force mode to overwrite.",
                     translation_file_path.display()
                 );
@@ -231,86 +284,11 @@ impl Processor {
 
                 let filename = format!("System.{engine_extension}");
                 let system_file_path = source_path.join(&filename);
-                let system_data = read(&system_file_path)
+                let content = read(&system_file_path)
                     .map_err(|e| Error::Io(system_file_path, e))?;
 
-                let data = system_base
-                    .process(&system_data, translation.as_deref())?;
-
-                let output_path = if base.mode.is_write() {
-                    data_output_path.join(&filename)
-                } else {
-                    translation_file_path
-                };
-
-                if let Some(data) = data {
-                    write(&output_path, data)
-                        .map_err(|e| Error::Io(output_path, e))?;
-                }
-
-                log::info!("{filename}: {msg}");
-            }
-        }
-
-        if self.file_flags.contains(FileFlags::Scripts) {
-            if engine_type.is_new() {
-                let plugin_base = PluginBase::new(base_ref);
-
-                let translation_file_path =
-                    translation_path.join("plugins.txt");
-
-                if base.mode.is_default() && translation_file_path.exists() {
-                    log::info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
-                    let translation = load_translation(&translation_file_path)?;
-
-                    let plugins_file_path =
-                        source_path.parent().unwrap().join("js/plugins.js");
-                    let content = read(&plugins_file_path)
-                        .map_err(|e| Error::Io(plugins_file_path, e))?;
-
-                    let data = plugin_base
-                        .process(&content, translation.as_deref())?;
-
-                    let output_path = if base.mode.is_write() {
-                        let js_output_path = output_path.join("js");
-                        create_dir_all(&js_output_path)
-                            .map_err(|e| Error::Io(js_output_path, e))?;
-                        output_path.join("js/plugins.js")
-                    } else {
-                        translation_file_path
-                    };
-
-                    if let Some(data) = data {
-                        write(&output_path, data)
-                            .map_err(|e| Error::Io(output_path, e))?;
-                    }
-
-                    log::info!("plugins.js: {msg}");
-                }
-            } else {
-                let script_base = ScriptBase::new(base_ref);
-
-                let translation_file_path =
-                    translation_path.join("scripts.txt");
-
-                if base.mode.is_default() && translation_file_path.exists() {
-                    log::info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
-                    let translation = load_translation(&translation_file_path)?;
-
-                    let filename = format!("Scripts.{engine_extension}");
-                    let scripts_file_path = source_path.join(&filename);
-                    let content = read(&scripts_file_path)
-                        .map_err(|e| Error::Io(scripts_file_path, e))?;
-
-                    let data = script_base
+                if !hash(&content, &filename).is_break() {
+                    let data = system_base
                         .process(&content, translation.as_deref())?;
 
                     let output_path = if base.mode.is_write() {
@@ -324,10 +302,97 @@ impl Processor {
                             .map_err(|e| Error::Io(output_path, e))?;
                     }
 
-                    log::info!("{filename}: {msg}");
+                    info!("{filename}: {msg}");
                 }
             }
         }
+
+        if self.file_flags.contains(FileFlags::Scripts) {
+            if engine_type.is_new() {
+                let plugin_base = PluginBase::new(base_ref);
+
+                let translation_file_path =
+                    translation_path.join("plugins.txt");
+
+                if base.mode.is_default_default()
+                    && translation_file_path.exists()
+                {
+                    info!(
+                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                        translation_file_path.display()
+                    );
+                } else {
+                    let translation = load_translation(&translation_file_path)?;
+
+                    let plugins_file_path =
+                        source_path.parent().unwrap().join("js/plugins.js");
+                    let content = read(&plugins_file_path)
+                        .map_err(|e| Error::Io(plugins_file_path, e))?;
+
+                    if !hash(&content, "plugins.js").is_break() {
+                        let data = plugin_base
+                            .process(&content, translation.as_deref())?;
+
+                        let output_path = if base.mode.is_write() {
+                            let js_output_path = output_path.join("js");
+                            create_dir_all(&js_output_path)
+                                .map_err(|e| Error::Io(js_output_path, e))?;
+                            output_path.join("js/plugins.js")
+                        } else {
+                            translation_file_path
+                        };
+
+                        if let Some(data) = data {
+                            write(&output_path, data)
+                                .map_err(|e| Error::Io(output_path, e))?;
+                        }
+
+                        info!("plugins.js: {msg}");
+                    }
+                }
+            } else {
+                let script_base = ScriptBase::new(base_ref);
+
+                let translation_file_path =
+                    translation_path.join("scripts.txt");
+
+                if base.mode.is_default_default()
+                    && translation_file_path.exists()
+                {
+                    info!(
+                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                        translation_file_path.display()
+                    );
+                } else {
+                    let translation = load_translation(&translation_file_path)?;
+
+                    let filename = format!("Scripts.{engine_extension}");
+                    let scripts_file_path = source_path.join(&filename);
+                    let content = read(&scripts_file_path)
+                        .map_err(|e| Error::Io(scripts_file_path, e))?;
+
+                    if !hash(&content, &filename).is_break() {
+                        let data = script_base
+                            .process(&content, translation.as_deref())?;
+
+                        let output_path = if base.mode.is_write() {
+                            data_output_path.join(&filename)
+                        } else {
+                            translation_file_path
+                        };
+
+                        if let Some(data) = data {
+                            write(&output_path, data)
+                                .map_err(|e| Error::Io(output_path, e))?;
+                        }
+
+                        info!("{filename}: {msg}");
+                    }
+                }
+            }
+        }
+
+        self.hashes = take(&mut new_hashes);
 
         if base.flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
@@ -378,7 +443,7 @@ impl Processor {
 /// use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
 ///
 /// let mut reader = Reader::new();
-/// reader.set_files(FileFlags::Map | FileFlags::Other);
+/// reader.set_files(FileFlags::Map | FileFlags::other());
 /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
 pub struct Reader {
@@ -389,7 +454,7 @@ impl Default for Reader {
     fn default() -> Self {
         Self {
             processor: Processor {
-                mode: Mode::Read(ReadMode::Default),
+                mode: Mode::Read(ReadMode::Default(false)),
                 ..Default::default()
             },
         }
@@ -399,7 +464,7 @@ impl Default for Reader {
 impl Reader {
     /// Creates a new [`Reader`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
+    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default(false)`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
     /// ```
@@ -424,7 +489,7 @@ impl Reader {
     /// use rvpacker_txt_rs_lib::{Reader, FileFlags};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_files(FileFlags::Map | FileFlags::Other);
+    /// reader.set_files(FileFlags::Map | FileFlags::other());
     /// ```
     pub fn set_files(&mut self, flags: FileFlags) {
         self.processor.file_flags = flags;
@@ -442,7 +507,7 @@ impl Reader {
     /// use rvpacker_txt_rs_lib::{Reader, ReadMode};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_read_mode(ReadMode::Default);
+    /// reader.set_read_mode(ReadMode::Default(false));
     /// ```
     pub fn set_read_mode(&mut self, mode: ReadMode) {
         self.processor.mode = Mode::Read(mode);
@@ -508,6 +573,34 @@ impl Reader {
         self.processor.duplicate_mode = mode;
     }
 
+    /// Sets hashes from the previous read.
+    ///
+    /// Hashes are only used during [`ReadMode::Append`] read, and if a processed file matches the hashes, it's skipped.
+    ///
+    /// Note that you need to fetch the hashes again after reading in [`ReadMode::Append`] entries with [`Reader::hashes`], since files that don't match the hashes will cause hash recalculation.
+    ///
+    /// # Parameters
+    ///
+    /// - `hashes` - [`Vec<u128>`] of calculated hashes from the previous read
+    ///
+    pub fn set_hashes(&mut self, hashes: Vec<u128>) {
+        self.processor.hashes = HashSet::from_iter(hashes);
+    }
+
+    /// Returns hashes, corresponding to the processed files.
+    ///
+    /// The purpose of this function is simple: on the subsequent append reads, you pass the hashes back to the reader by calling [`Reader::set_hashes`] or [`ReaderBuilder::hashes`], and if a processed file matches the hashes, it's skipped.
+    ///
+    /// It's done to avoid reading unchanged files, and therefore speed up the process.
+    ///
+    /// # Returns
+    ///
+    /// - [`Vec<u128>`] - vector of calculated hashes
+    ///
+    pub fn hashes(&mut self) -> Vec<u128> {
+        Vec::from_iter(take(&mut self.processor.hashes))
+    }
+
     /// Reads the RPG Maker files from `source_path` to `.txt` files in `translation_path`.
     ///
     /// Make sure you've configured the reader as you desire before calling it.
@@ -566,7 +659,7 @@ impl Reader {
 /// ```
 /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags, GameType};
 ///
-/// let mut reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+/// let mut reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
 /// ```
 #[derive(Default)]
 pub struct ReaderBuilder {
@@ -576,7 +669,7 @@ pub struct ReaderBuilder {
 impl ReaderBuilder {
     /// Creates a new [`ReaderBuilder`] instance with default values.
     ///
-    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
+    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default(false)`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
     ///
     /// # Example
     ///
@@ -601,7 +694,7 @@ impl ReaderBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags};
     ///
-    /// let reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+    /// let reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
     /// ```
     #[must_use]
     pub fn with_files(mut self, flags: FileFlags) -> Self {
@@ -641,7 +734,7 @@ impl ReaderBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, ReadMode};
     ///
-    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default).build();
+    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default(false)).build();
     /// ```
     #[must_use]
     pub fn read_mode(mut self, mode: ReadMode) -> Self {
@@ -687,6 +780,22 @@ impl ReaderBuilder {
         self
     }
 
+    /// Sets hashes from the previous read.
+    ///
+    /// Hashes are only used during [`ReadMode::Append`] read, and if a processed file matches the hashes, it's skipped.
+    ///
+    /// Note that you need to fetch the hashes again after reading in [`ReadMode::Append`] entries with [`Reader::hashes`], since files that don't match the hashes will cause hash recalculation.
+    ///
+    /// # Parameters
+    ///
+    /// - hashes - [`Vec<u128>`] of calculated hashes from the previous read
+    ///
+    #[must_use]
+    pub fn hashes(mut self, hashes: Vec<u128>) -> Self {
+        self.reader.processor.hashes = HashSet::from_iter(hashes);
+        self
+    }
+
     /// Builds and returns the [`Reader`].
     #[must_use]
     pub fn build(self) -> Reader {
@@ -711,7 +820,7 @@ impl ReaderBuilder {
 /// use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
 ///
 /// let mut writer = Writer::new();
-/// writer.set_files(FileFlags::Map | FileFlags::Other);
+/// writer.set_files(FileFlags::Map | FileFlags::other());
 /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
 /// ```
 pub struct Writer {
@@ -758,7 +867,7 @@ impl Writer {
     /// use rvpacker_txt_rs_lib::{Writer, FileFlags};
     ///
     /// let mut writer = Writer::new();
-    /// writer.set_files(FileFlags::Map | FileFlags::Other);
+    /// writer.set_files(FileFlags::Map | FileFlags::other());
     /// ```
     pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
@@ -890,7 +999,7 @@ impl Writer {
 /// ```
 /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags, GameType};
 ///
-/// let mut writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+/// let mut writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
 /// ```
 #[derive(Default)]
 pub struct WriterBuilder {
@@ -925,7 +1034,7 @@ impl WriterBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags};
     ///
-    /// let writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+    /// let writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
     /// ```
     #[must_use]
     pub fn with_files(mut self, flags: FileFlags) -> Self {
@@ -1019,7 +1128,7 @@ impl WriterBuilder {
 /// use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
 ///
 /// let mut purger = Purger::new();
-/// purger.set_files(FileFlags::Map | FileFlags::Other);
+/// purger.set_files(FileFlags::Map | FileFlags::other());
 /// let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
 /// ```
 pub struct Purger {
@@ -1066,7 +1175,7 @@ impl Purger {
     /// use rvpacker_txt_rs_lib::{Purger, FileFlags};
     ///
     /// let mut purger = Purger::new();
-    /// purger.set_files(FileFlags::Map | FileFlags::Other);
+    /// purger.set_files(FileFlags::Map | FileFlags::other());
     /// ```
     pub fn set_files(&mut self, file_flags: FileFlags) {
         self.processor.file_flags = file_flags;
@@ -1187,7 +1296,7 @@ impl Purger {
 /// ```
 /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags, GameType};
 ///
-/// let mut purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+/// let mut purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
 /// ```
 #[derive(Default)]
 pub struct PurgerBuilder {
@@ -1222,7 +1331,7 @@ impl PurgerBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags};
     ///
-    /// let purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::Other).build();
+    /// let purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
     /// ```
     #[must_use]
     pub fn with_files(mut self, file_flags: FileFlags) -> Self {

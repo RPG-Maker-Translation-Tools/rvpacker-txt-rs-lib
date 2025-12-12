@@ -7,7 +7,9 @@ fn mz() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let mut reader = ReaderBuilder::new().read_mode(ReadMode::Force).build();
+    let mut reader = ReaderBuilder::new()
+        .read_mode(ReadMode::Default(true))
+        .build();
     reader.read(&source_path, &translation_path, EngineType::New)?;
 
     Ok(())
@@ -19,7 +21,9 @@ fn mv() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("data");
     let translation_path = game_path.join("translation");
 
-    let mut reader = ReaderBuilder::new().read_mode(ReadMode::Force).build();
+    let mut reader = ReaderBuilder::new()
+        .read_mode(ReadMode::Default(true))
+        .build();
     reader.read(&source_path, &translation_path, EngineType::New)?;
 
     Ok(())
@@ -31,7 +35,9 @@ fn ace() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut reader = ReaderBuilder::new().read_mode(ReadMode::Force).build();
+    let mut reader = ReaderBuilder::new()
+        .read_mode(ReadMode::Default(true))
+        .build();
     reader.read(&source_path, &translation_path, EngineType::VXAce)?;
 
     Ok(())
@@ -43,7 +49,9 @@ fn vx() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut reader = ReaderBuilder::new().read_mode(ReadMode::Force).build();
+    let mut reader = ReaderBuilder::new()
+        .read_mode(ReadMode::Default(true))
+        .build();
     reader.read(&source_path, &translation_path, EngineType::VX)?;
 
     Ok(())
@@ -55,7 +63,9 @@ fn xp() -> Result<(), Box<dyn std::error::Error>> {
     let source_path = game_path.join("Data");
     let translation_path = game_path.join("translation");
 
-    let mut reader = ReaderBuilder::new().read_mode(ReadMode::Force).build();
+    let mut reader = ReaderBuilder::new()
+        .read_mode(ReadMode::Default(true))
+        .build();
     reader.read(&source_path, &translation_path, EngineType::XP)?;
 
     Ok(())

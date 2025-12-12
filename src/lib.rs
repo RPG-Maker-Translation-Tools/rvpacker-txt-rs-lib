@@ -6,6 +6,16 @@
 #![allow(clippy::deref_addrof)]
 #![doc = include_str!("../README.md")]
 
+// TODO: Implement parallel feature
+// That requires rewriting the current core logic into two variants: single-threaded and parallel.
+// For `write` mode this is trivial (and for purge, as well) - because we lookup the map and insert the translation to the correct place.
+// But for `read` this breaks the current logic completely.
+
+// TODO: Implement skipping of specific maps
+// TODO: Implement skipping of specific events
+// TODO: Implement parsing event metadata from maps
+// TODO: Implement parsing event x/y positions?
+
 mod processors;
 
 pub mod constants;

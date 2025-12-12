@@ -1,12 +1,17 @@
+use crate::constants::{
+    MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
+};
 use bitflags::bitflags;
 use getset::{Getters, MutGetters, Setters};
 use gxhash::{GxBuildHasher, HashSet};
 use indexmap::{IndexMap, IndexSet};
-use num_enum::FromPrimitive;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
-use std::{hash::BuildHasher, io, mem::take, ops::Deref, path::PathBuf};
-use strum_macros::{Display, EnumIs};
+use smallvec::SmallVec;
+use std::{
+    hash::BuildHasher, io, mem::take, ops::Deref, path::PathBuf, str::FromStr,
+};
+use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
 
 pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
@@ -16,21 +21,6 @@ pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
 pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
 pub(crate) type Lines = IndexSetGx<String>;
 pub(crate) type TranslationDuplicateMap = Vec<(String, TranslationEntry)>;
-
-pub(crate) trait Comments {
-    fn comments(&self) -> &Vec<String>;
-    fn comments_mut(&mut self) -> &mut Vec<String>;
-}
-
-impl Comments for IndexMapGx<String, TranslationEntry> {
-    fn comments(&self) -> &Vec<String> {
-        unsafe { &self.first().unwrap_unchecked().1.comments }
-    }
-
-    fn comments_mut(&mut self) -> &mut Vec<String> {
-        unsafe { &mut self.first_mut().unwrap_unchecked().1.comments }
-    }
-}
 
 /// 401 - Dialogue line.
 ///
@@ -230,8 +220,32 @@ pub(crate) enum RPGMFileType {
 
 impl RPGMFileType {
     pub fn from_filename(filename: &str) -> Self {
-        if filename.len() > 3 {
-            let letters: &str = &filename[0..3].to_lowercase();
+        unsafe { Self::from_str(filename).unwrap_unchecked() }
+    }
+
+    pub const fn is_other(self) -> bool {
+        matches!(
+            self,
+            Self::Actors
+                | Self::Armors
+                | Self::Classes
+                | Self::Events
+                | Self::Enemies
+                | Self::Items
+                | Self::Skills
+                | Self::States
+                | Self::Troops
+                | Self::Weapons
+        )
+    }
+}
+
+impl FromStr for RPGMFileType {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(if value.len() >= 3 {
+            let letters: &str = &value[0..3].to_lowercase();
 
             match letters {
                 "act" => Self::Actors,
@@ -252,23 +266,17 @@ impl RPGMFileType {
             }
         } else {
             Self::Invalid
-        }
+        })
     }
+}
 
-    pub const fn is_other(self) -> bool {
-        matches!(
-            self,
-            Self::Actors
-                | Self::Armors
-                | Self::Classes
-                | Self::Events
-                | Self::Enemies
-                | Self::Items
-                | Self::Skills
-                | Self::States
-                | Self::Troops
-                | Self::Weapons
-        )
+pub(crate) trait IndexSetExt {
+    fn with_capacity(capacity: usize) -> Self;
+}
+
+impl<K, S: BuildHasher + Default> IndexSetExt for IndexSet<K, S> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_hasher(capacity, S::default())
     }
 }
 
@@ -282,24 +290,42 @@ impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
     }
 }
 
-#[derive(Debug, Default, Clone, Getters, Setters, MutGetters)]
+#[derive(Debug, Clone, Getters, Setters, MutGetters)]
 pub(crate) struct TranslationEntry {
+    #[getset(get = "pub", set = "pub", get_mut = "pub")]
+    id: u16,
+
+    #[getset(get = "pub", set = "pub", get_mut = "pub")]
+    comments: SmallVec<[String; 4]>,
+
     #[getset(get = "pub", set = "pub")]
     translation: String,
-    #[getset(get = "pub", set = "pub", get_mut = "pub")]
-    comments: Vec<String>,
 }
 
-impl TranslationEntry {
-    pub fn new(translation: String, comments: Vec<String>) -> Self {
+impl Default for TranslationEntry {
+    fn default() -> Self {
         Self {
-            translation,
+            id: u16::MAX,
+            comments: SmallVec::with_capacity(4),
+            translation: String::new(),
+        }
+    }
+}
+impl TranslationEntry {
+    pub fn new(
+        id: u16,
+        comments: SmallVec<[String; 4]>,
+        translation: String,
+    ) -> Self {
+        Self {
+            id,
             comments,
+            translation,
         }
     }
 
-    pub fn parts(&self) -> (&String, &[String]) {
-        (&self.translation, &self.comments)
+    pub fn parts(&self) -> (u16, &[String], &str) {
+        (self.id, &self.comments, &self.translation)
     }
 }
 
@@ -339,9 +365,7 @@ pub enum Error {
         "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
     )]
     NoTitle,
-    #[error(
-        "Base mode is not `ReadMode::Default` or `ReadMode::Force`, but no translation was supplied."
-    )]
+    #[error("Read mode is append, but no translation was supplied.")]
     NoTranslation,
 }
 
@@ -354,8 +378,9 @@ impl Serialize for Error {
     }
 }
 
-#[derive(Debug, Clone, Copy, EnumIs, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, EnumIs, Deserialize, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
+#[strum(serialize_all = "lowercase")]
 #[repr(u8)]
 pub enum Mode {
     Read(ReadMode),
@@ -364,30 +389,46 @@ pub enum Mode {
 }
 
 impl Mode {
-    #[must_use]
-    pub const fn is_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append))
-    }
-
+    /// Checks if [`Mode`] is [`ReadMode::Default`] with any force boolean.
     #[must_use]
     pub const fn is_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default))
+        matches!(self, Self::Read(ReadMode::Default(_)))
     }
 
+    /// Checks if [`Mode`] is [`ReadMode::Append`] with any force boolean.
     #[must_use]
-    pub const fn is_any_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default | ReadMode::Force))
+    pub const fn is_append(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Append(_)))
     }
 
+    /// Checks if [`Mode`] is [`ReadMode::Default`] without a force boolean.
+    #[must_use]
+    pub const fn is_default_default(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Default(false)))
+    }
+
+    /// Checks if [`Mode`] is [`ReadMode::Append`] without a force boolean.
+    #[must_use]
+    pub const fn is_append_default(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Append(false)))
+    }
+
+    /// Checks if [`Mode`] is [`ReadMode::Default`] with a force boolean.
     #[must_use]
     pub const fn is_force(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Force))
+        matches!(self, Self::Read(ReadMode::Default(true)))
+    }
+
+    /// Checks if [`Mode`] is [`ReadMode::Append`] with a force boolean.
+    #[must_use]
+    pub const fn is_force_append(self) -> bool {
+        matches!(self, Self::Read(ReadMode::Append(true)))
     }
 }
 
 impl Default for Mode {
     fn default() -> Self {
-        Self::Read(ReadMode::Default)
+        Self::Read(ReadMode::Default(false))
     }
 }
 
@@ -427,8 +468,10 @@ impl TryFrom<u8> for Mode {
     IntoPrimitive,
     Deserialize,
     Serialize,
+    VariantNames,
 )]
 #[serde(into = "u8", try_from = "u8")]
+#[strum(serialize_all = "lowercase")]
 #[repr(u8)]
 /// Sets, what to do with duplicates. Works only for map and other files.
 ///
@@ -438,6 +481,18 @@ pub enum DuplicateMode {
     #[default]
     Allow,
     Remove,
+}
+
+impl FromStr for DuplicateMode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "allow" => Self::Allow,
+            "remove" => Self::Remove,
+            _ => return Err("Expected `allow` or `remove` string"),
+        })
+    }
 }
 
 #[derive(
@@ -467,29 +522,106 @@ pub enum GameType {
     LisaRPG,
 }
 
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    EnumIs,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
-)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
+#[strum(serialize_all = "lowercase")]
 #[repr(u8)]
 /// There's three read modes:
 ///
-/// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist.
-/// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update.
-/// - [`ReadMode::Force`] - parses the text from the RPG Maker files, overwrites the existing translation. **DANGEROUS!**
+/// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist. `bool` indicates whether mode is force.
+/// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update. `bool` indicates whether mode is force.
 pub enum ReadMode {
-    #[default]
-    Default,
-    Append,
-    Force,
+    Default(bool),
+    Append(bool),
+}
+
+impl Default for ReadMode {
+    fn default() -> Self {
+        Self::Default(false)
+    }
+}
+
+impl From<ReadMode> for u8 {
+    fn from(val: ReadMode) -> Self {
+        match val {
+            ReadMode::Default(force) => u8::from(force),
+            ReadMode::Append(force) => {
+                if force {
+                    3
+                } else {
+                    2
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<u8> for ReadMode {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            0..=1 => Self::Default(value != 0),
+            2..=3 => Self::Append(value != 2),
+            _ => return Err("Expected a number from 0 to 3"),
+        })
+    }
+}
+
+impl FromStr for ReadMode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "default" => Self::Default(false),
+            "append" => Self::Append(false),
+            "force" => Self::Default(true),
+            "force-append" => Self::Append(true),
+            _ => {
+                return Err(
+                    "Expected `default`, `append`, `force` or `force-append` string",
+                );
+            }
+        })
+    }
+}
+
+impl ReadMode {
+    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with any force boolean.
+    #[must_use]
+    pub const fn is_default(self) -> bool {
+        matches!(self, ReadMode::Default(_))
+    }
+
+    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with any force boolean.
+    #[must_use]
+    pub const fn is_append(self) -> bool {
+        matches!(self, ReadMode::Append(_))
+    }
+
+    /// Checks if [`ReadMode`] is [`ReadMode::Default`] without a force boolean.
+    #[must_use]
+    pub const fn is_default_default(self) -> bool {
+        matches!(self, ReadMode::Default(false))
+    }
+
+    /// Checks if [`ReadMode`] is [`ReadMode::Append`] without a force boolean.
+    #[must_use]
+    pub const fn is_append_default(self) -> bool {
+        matches!(self, ReadMode::Append(false))
+    }
+
+    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with a force boolean.
+    #[must_use]
+    pub const fn is_force(self) -> bool {
+        matches!(self, ReadMode::Default(true))
+    }
+
+    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with a force boolean.
+    #[must_use]
+    pub const fn is_force_append(self) -> bool {
+        matches!(self, ReadMode::Append(true))
+    }
 }
 
 #[derive(
@@ -514,38 +646,129 @@ pub enum EngineType {
     XP,
 }
 
+// TODO: docs
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-    #[serde(into = "u8", try_from = "u8")]
+    #[serde(into = "u16", try_from = "u16")]
     /// There's four [`FileFlags`] variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
-    /// - [`FileFlags::Other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
+    /// - [`FileFlags::other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
-    pub struct FileFlags: u8 {
+    pub struct FileFlags: u16 {
         /// `Mapxxx.ext` files.
         const Map = 1 << 0;
 
-        /// All files, other than map, system, and scripts/plugins.
-        const Other = 1 << 1;
+        const Actors = 1 << 1;
+
+        const Armors = 1 << 2;
+
+        const Classes = 1 << 3;
+
+        const CommonEvents = 1 << 4;
+
+        const Enemies = 1 << 5;
+
+        const Items = 1 << 6;
+
+        const Skills = 1 << 7;
+
+        const States = 1 << 8;
+
+        const Troops = 1 << 9;
+
+        const Weapons = 1 << 10;
 
         /// `System.ext` file.
-        const System = 1 << 2;
+        const System = 1 << 11;
 
         /// `Scripts.ext`/`plugins.js` file.
-        const Scripts = 1 << 3;
+        const Scripts = 1 << 12;
     }
 }
 
-impl TryFrom<u8> for FileFlags {
+pub trait FieldNames {
+    const FIELDS: &[&str];
+}
+
+impl FieldNames for FileFlags {
+    const FIELDS: &[&str] = &[
+        "map",
+        "actors",
+        "armors",
+        "classes",
+        "commonevents",
+        "enemies",
+        "items",
+        "skills",
+        "states",
+        "troops",
+        "weapons",
+        "system",
+        "scripts",
+    ];
+}
+
+impl FileFlags {
+    #[must_use]
+    pub fn other() -> Self {
+        Self::Actors
+            | Self::Armors
+            | Self::Classes
+            | Self::CommonEvents
+            | Self::Enemies
+            | Self::Items
+            | Self::Skills
+            | Self::States
+            | Self::Troops
+            | Self::Weapons
+    }
+}
+
+impl FromStr for FileFlags {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() >= 3 {
+            let letters: &str = &s[0..3].to_lowercase();
+
+            Ok(match letters {
+                "act" => Self::Actors,
+                "arm" => Self::Armors,
+                "cla" => Self::Classes,
+                "com" => Self::CommonEvents,
+                "ene" => Self::Enemies,
+                "ite" => Self::Items,
+                "map" => Self::Map,
+                "ski" => Self::Skills,
+                "sta" => Self::States,
+                "sys" => Self::System,
+                "tro" => Self::Troops,
+                "wea" => Self::Weapons,
+                "scr" | "plu" => Self::Scripts,
+                _ => {
+                    return Err(
+                        "FileFlags require valid RPG Maker data file name to parse from.",
+                    );
+                }
+            })
+        } else {
+            Err(
+                "FileFlags require valid RPG Maker data file name to parse from.",
+            )
+        }
+    }
+}
+
+impl TryFrom<u16> for FileFlags {
     type Error = String;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
         Ok(Self::from_bits_truncate(value))
     }
 }
 
-impl From<FileFlags> for u8 {
+impl From<FileFlags> for u16 {
     fn from(value: FileFlags) -> Self {
         value.bits()
     }
@@ -618,7 +841,7 @@ pub enum ProcessedData {
     TranslationData(Vec<u8>),
 }
 
-impl std::convert::AsRef<[u8]> for ProcessedData {
+impl AsRef<[u8]> for ProcessedData {
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::RPGMData(vec) | Self::TranslationData(vec) => vec,
@@ -643,6 +866,28 @@ impl Scripts {
             numbers,
             contents,
             names,
+        }
+    }
+}
+
+#[derive(PartialEq, Clone, Copy)]
+pub(crate) enum CommentPos {
+    None = -1,
+    Name,
+    Order,
+    DisplayName,
+}
+
+impl CommentPos {
+    pub fn from_str(str: &str) -> Self {
+        if str.starts_with(NAME_COMMENT) {
+            Self::Name
+        } else if str.starts_with(MAP_ORDER_COMMENT) {
+            Self::Order
+        } else if str.starts_with(MAP_DISPLAY_NAME_COMMENT_PREFIX) {
+            Self::DisplayName
+        } else {
+            Self::None
         }
     }
 }
