@@ -50,7 +50,7 @@ use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, EngineType, ReadMode};
 use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut base = Base::new(Mode::Read(ReadMode::Force), EngineType::VXAce);
+    let mut base = Base::new(Mode::Read(ReadMode::Default(true)), EngineType::VXAce);
     let mut map_base = MapBase::new(&mut base);
 
     let mapinfos = read("C:/Game/Data/Mapinfos.rvdata2")?;
