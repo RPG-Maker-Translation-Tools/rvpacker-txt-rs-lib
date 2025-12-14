@@ -1,4 +1,5 @@
 use crate::{
+    RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
     core::{
         Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
@@ -28,6 +29,9 @@ pub(crate) struct Processor {
     pub flags: BaseFlags,
     pub duplicate_mode: DuplicateMode,
     pub hashes: HashSet<u128>,
+    pub skip_maps: Vec<u16>,
+    pub skip_events: Vec<(RPGMFileType, Vec<u16>)>,
+    pub map_events: bool,
 }
 
 impl Processor {
@@ -51,6 +55,10 @@ impl Processor {
         base.flags = self.flags;
         base.duplicate_mode = self.duplicate_mode;
         base.game_type = self.game_type;
+        base.skip_events = take(&mut self.skip_events)
+            .into_iter()
+            .map(|(id, vec)| (id, HashSet::from_iter(vec)))
+            .collect();
 
         let mut ignore_file_path = PathBuf::new();
 
@@ -126,7 +134,7 @@ impl Processor {
             let unchanged = self.hashes.contains(&result);
             new_hashes.insert(result);
 
-            if unchanged && self.mode.is_append_default() {
+            if unchanged && !self.mode.is_default() {
                 info!(
                     "{filename} hasn't changed since the last read. Skipping it. Use `ReadMode::ForceAppend`, if you want to forcefully append data."
                 );
@@ -165,6 +173,10 @@ impl Processor {
                 let translation = load_translation(&translation_file_path)?;
                 let mut contents = Vec::new();
 
+                base.map_events = self.map_events;
+                base.skip_maps =
+                    take(&mut self.skip_maps).into_iter().collect();
+
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
                     let filename =
@@ -173,10 +185,11 @@ impl Processor {
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
-                    // FIXME: If we just continue, it won't include the map in the output in append mode, but should
-                    // if hash(&content, filename).is_break() {
-                    //    continue;
-                    // }
+                    let id = filename[3..=5].parse::<u16>().unwrap();
+
+                    if hash(&content, filename).is_break() {
+                        base.skip_maps.insert(id);
+                    }
 
                     let result = map_base.process(
                         filename,
@@ -430,12 +443,18 @@ impl Processor {
 /// The [`Reader`] provides a configurable interface to control how files are parsed,
 /// which files are selected, and how text content is filtered.
 ///
+/// It also has a builder version: [`ReaderBuilder`].
+///
 /// # Fields
 ///
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set.
 /// - `mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set.
+/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set.
 /// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`]. For more info, see [`BaseFlags`].
+/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Writer::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set.
+/// - `hashes`: Hashes of the processed files. Use [`Reader::hashes`] to fetch the hashes after a read, and [`Reader::set_hashes`] when reading in [`ReadMode::Append`] mode.
+/// - `skip_maps`: Map indices to skip when processing. Use [`Reader::set_skip_maps`] to set. When reading in [`ReadMode::Append`] mode, specified maps will be written back unchanged.
+/// - `map_events`: Whether to parse event metadata. If event has any text and this option is set, event's metadata will be appended before the text, and it includes event id, name, x and y coordinates. Use [`Reader::set_map_events`] to set.
 ///
 /// # Example
 ///
@@ -573,6 +592,47 @@ impl Reader {
         self.processor.duplicate_mode = mode;
     }
 
+    /// Sets map indices to skip when processing.
+    ///
+    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
+        self.processor.skip_maps = map_indices;
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// When reading in [`ReadMode::Append`] mode, corresponding events will be written back unchanged.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    pub fn set_skip_events(
+        &mut self,
+        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
+    ) {
+        self.processor.skip_events = event_indices;
+    }
+
+    /// Whether to parse event metadata from maps.
+    ///
+    /// If an event has some text inside it, this event's metadata will be written as comments. Has no actual effect other than adding additional context.
+    ///
+    /// # Parameters
+    ///
+    /// - `enabled` - whether to use this mode.
+    ///
+    pub fn set_map_events(&mut self, enabled: bool) {
+        self.processor.map_events = enabled;
+    }
+
     /// Sets hashes from the previous read.
     ///
     /// Hashes are only used during [`ReadMode::Append`] read, and if a processed file matches the hashes, it's skipped.
@@ -646,13 +706,7 @@ impl Reader {
 /// The [`Reader`] provides a configurable interface to control how files are parsed,
 /// which files are selected, and how text content is filtered.
 ///
-/// # Fields
-///
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set. See [`FileFlags`] for more info.
-/// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`] to set. See [`BaseFlags`] for more info.
-/// - `read_mode`: Indicates the mode to read in. Use [`Reader::set_read_mode`] to set. See [`ReadMode`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set. See [`GameType`] for more info.
-/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Reader::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
+/// For available options, check [`Reader`] struct itself.
 ///
 /// # Example
 ///
@@ -796,6 +850,53 @@ impl ReaderBuilder {
         self
     }
 
+    /// Sets map indices to skip when processing.
+    ///
+    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    #[must_use]
+    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
+        self.reader.processor.skip_maps = map_indices;
+        self
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// When reading in [`ReadMode::Append`] mode, corresponding events will be written back unchanged.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    #[must_use]
+    pub fn skip_events(
+        mut self,
+        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
+    ) -> Self {
+        self.reader.processor.skip_events = skip_events;
+        self
+    }
+
+    /// Whether to parse event metadata from maps.
+    ///
+    /// If an event has some text inside it, this event's metadata will be written as comments. Has no actual effect other than adding additional context.
+    ///
+    /// # Parameters
+    ///
+    /// - `enabled` - whether to use this mode.
+    ///
+    #[must_use]
+    pub fn map_events(mut self, enabled: bool) -> Self {
+        self.reader.processor.map_events = enabled;
+        self
+    }
+
     /// Builds and returns the [`Reader`].
     #[must_use]
     pub fn build(self) -> Reader {
@@ -811,8 +912,11 @@ impl ReaderBuilder {
 ///
 /// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_files`] to set. See [`FileFlags`] for more info.
 /// - `flags`: Indicates different modes of processing the text. Use [`Writer::set_flags`] to set. See [`BaseFlags`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set. See [`GameType`] for more info.
 /// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Writer::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set. See [`GameType`] for more info.
+/// - `hashes`: Hashes of the processed files. Use [`Writer::set_hashes`] to set them.
+/// - `skip_maps`: Map indices to skip when processing. Use [`Writer::set_skip_maps`] to set.
+/// - `skip_events`: Event indices to skip when processing. Use [`Writer::set_skip_events`] to set.
 ///
 /// # Example
 ///
@@ -933,6 +1037,41 @@ impl Writer {
         self.processor.game_type = game_type;
     }
 
+    /// Sets hashes from the previous read.
+    ///
+    /// # Parameters
+    ///
+    /// - `hashes` - [`Vec<u128>`] of calculated hashes from the previous read
+    ///
+    pub fn set_hashes(&mut self, hashes: Vec<u128>) {
+        self.processor.hashes = HashSet::from_iter(hashes);
+    }
+
+    /// Sets map indices to skip when processing.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
+        self.processor.skip_maps = map_indices;
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    pub fn set_skip_events(
+        &mut self,
+        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
+    ) {
+        self.processor.skip_events = event_indices;
+    }
+
     /// Writes the translation from `.txt` files in `translation_path`, and outputs modified
     /// files from `source_path` to `output_path`.
     ///
@@ -989,10 +1128,7 @@ impl Writer {
 ///
 /// The [`Writer`] struct, essentially, should receive the same options as [`Reader`], to ensure proper writing.
 ///
-/// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`WriterBuilder::with_files`] to set.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`WriterBuilder::game_type`] to set.
-/// - `flags`: Indicates different modes of processing the text. Use [`WriterBuilder::with_flags`]. For more info, see [`BaseFlags`].
+/// For available options, check [`Writer`] struct itself.
 ///
 /// # Example
 ///
@@ -1105,6 +1241,35 @@ impl WriterBuilder {
         self
     }
 
+    /// Sets map indices to skip when processing.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    #[must_use]
+    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
+        self.writer.processor.skip_maps = map_indices;
+        self
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    #[must_use]
+    pub fn skip_events(
+        mut self,
+        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
+    ) -> Self {
+        self.writer.processor.skip_events = skip_events;
+        self
+    }
+
     /// Builds and returns the [`Writer`].
     #[must_use]
     pub fn build(self) -> Writer {
@@ -1119,8 +1284,11 @@ impl WriterBuilder {
 /// # Fields
 /// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_files`] to set. See [`FileFlags`] for more info.
 /// - `flags`: Indicates different modes of processing the text. Use [`Purger::set_flags`] to set. See [`BaseFlags`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set. See [`GameType`] for more info.
 /// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Purger::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
+/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set. See [`GameType`] for more info.
+/// - `hashes`: Hashes of the processed files. Use [`Purger::set_hashes`] to set them.
+/// - `skip_maps`: Map indices to skip when processing. Use [`Purger::set_skip_maps`] to set. Specified maps won't be purged.
+/// - `skip_events`: Event indices to skip when processing. Use [`Purger::set_skip_events`] to set. Specified events won't be purged.
 ///
 /// # Example
 ///
@@ -1241,6 +1409,41 @@ impl Purger {
         self.processor.game_type = game_type;
     }
 
+    /// Sets hashes from the previous read.
+    ///
+    /// # Parameters
+    ///
+    /// - `hashes` - [`Vec<u128>`] of calculated hashes from the previous read
+    ///
+    pub fn set_hashes(&mut self, hashes: Vec<u128>) {
+        self.processor.hashes = HashSet::from_iter(hashes);
+    }
+
+    /// Sets map indices to skip when processing.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
+        self.processor.skip_maps = map_indices;
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    pub fn set_skip_events(
+        &mut self,
+        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
+    ) {
+        self.processor.skip_events = event_indices;
+    }
+
     /// Purges the lines with no translation from `.txt` files in `translation_path`, using source RPG Maker files from `source_path`.
     ///
     /// Make sure you've configured the purger with the same options as reader before calling it.
@@ -1283,13 +1486,9 @@ impl Purger {
 
 /// A builder struct for [`Purger`].
 ///
-/// The `Purger` struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
+/// The [`Purger`] struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
 ///
-/// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`PurgerBuilder::with_files`] to set.
-/// - `flags`: Indicates different modes of processing the text. Use [`PurgerBuilder::with_flags`]. For more info, see [`BaseFlags`].
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`PurgerBuilder::game_type`] to set.
-/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`PurgerBuilder::duplicate_mode`] to set.
+/// For available options, check [`Purger`] struct itself.
 ///
 /// # Example
 ///
@@ -1399,6 +1598,37 @@ impl PurgerBuilder {
     #[must_use]
     pub fn game_type(mut self, game_type: GameType) -> Self {
         self.purger.processor.game_type = game_type;
+        self
+    }
+
+    /// Sets map indices to skip when processing.
+    ///
+    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
+    ///
+    #[must_use]
+    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
+        self.purger.processor.skip_maps = map_indices;
+        self
+    }
+
+    /// Sets event indices to skip when processing.
+    ///
+    /// Has no effect on [`RPGMFileType::Map`] files.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
+    ///
+    #[must_use]
+    pub fn skip_events(
+        mut self,
+        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
+    ) -> Self {
+        self.purger.processor.skip_events = skip_events;
         self
     }
 

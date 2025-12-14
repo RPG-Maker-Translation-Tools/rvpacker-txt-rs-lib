@@ -2,25 +2,27 @@ use crate::constants::{
     MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
 };
 use bitflags::bitflags;
-use getset::{Getters, MutGetters, Setters};
 use gxhash::{GxBuildHasher, HashSet};
 use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::{
-    hash::BuildHasher, io, mem::take, ops::Deref, path::PathBuf, str::FromStr,
+    convert::Infallible, hash::BuildHasher, io, mem::take, ops::Deref,
+    path::PathBuf, str::FromStr,
 };
 use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
 
 pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
 pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
+
 pub(crate) type IgnoreEntry = HashSet<String>;
 pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
-pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
+
+pub(crate) type Comments = SmallVec<[String; 3]>;
 pub(crate) type Lines = IndexSetGx<String>;
-pub(crate) type TranslationDuplicateMap = Vec<(String, TranslationEntry)>;
+pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
 
 /// 401 - Dialogue line.
 ///
@@ -112,7 +114,7 @@ impl EachLine for str {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) struct Labels {
     pub display_name: &'static str,
     pub events: &'static str,
@@ -138,50 +140,53 @@ pub(crate) struct Labels {
     pub currency_unit: &'static str,
 }
 
+impl Default for Labels {
+    fn default() -> Self {
+        Self {
+            events: "events",
+            pages: "pages",
+            list: "list",
+            code: "code",
+            parameters: "parameters",
+            name: "name",
+            nickname: "nickname",
+            description: "description",
+            message1: "message1",
+            message2: "message2",
+            message3: "message3",
+            message4: "message4",
+            note: "note",
+
+            elements: "elements",
+            currency_unit: "currency_unit",
+
+            game_title: "",
+            display_name: "",
+            armor_types: "",
+            skill_types: "",
+            terms: "",
+            weapon_types: "",
+
+            equip_types: "equipTypes",
+        }
+    }
+}
+
 impl Labels {
-    pub const fn new(engine_type: EngineType) -> Self {
+    pub fn new(engine_type: EngineType) -> Self {
         match engine_type {
             EngineType::New => Self {
                 display_name: "displayName",
-                events: "events",
-                pages: "pages",
-                list: "list",
-                code: "code",
-                parameters: "parameters",
-                name: "name",
-                nickname: "nickname",
-                description: "description",
-                message1: "message1",
-                message2: "message2",
-                message3: "message3",
-                message4: "message4",
-                note: "note",
                 armor_types: "armorTypes",
-                elements: "elements",
                 skill_types: "skillTypes",
                 terms: "terms",
                 weapon_types: "weaponTypes",
                 game_title: "gameTitle",
-                equip_types: "equipTypes",
-                currency_unit: "currency_unit",
+                ..Default::default()
             },
             _ => Self {
                 display_name: "display_name",
-                events: "events",
-                pages: "pages",
-                list: "list",
-                code: "code",
-                parameters: "parameters",
-                name: "name",
-                nickname: "nickname",
-                description: "description",
-                message1: "message1",
-                message2: "message2",
-                message3: "message3",
-                message4: "message4",
-                note: "note",
                 armor_types: "armor_types",
-                elements: "elements",
                 skill_types: "skill_types",
                 terms: if engine_type.is_xp() {
                     "words"
@@ -190,16 +195,15 @@ impl Labels {
                 },
                 weapon_types: "weapon_types",
                 game_title: "game_title",
-                equip_types: "equipTypes",
-                currency_unit: "currency_unit",
+                ..Default::default()
             },
         }
     }
 }
 
-#[derive(Default, Clone, Copy, EnumIs, Display)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, EnumIs, Display)]
 #[repr(u8)]
-pub(crate) enum RPGMFileType {
+pub enum RPGMFileType {
     #[default]
     Invalid,
     Actors,
@@ -219,10 +223,12 @@ pub(crate) enum RPGMFileType {
 }
 
 impl RPGMFileType {
+    #[must_use]
     pub fn from_filename(filename: &str) -> Self {
         unsafe { Self::from_str(filename).unwrap_unchecked() }
     }
 
+    #[must_use]
     pub const fn is_other(self) -> bool {
         matches!(
             self,
@@ -238,10 +244,20 @@ impl RPGMFileType {
                 | Self::Weapons
         )
     }
+
+    #[must_use]
+    pub const fn is_main(self) -> bool {
+        self.is_map() || self.is_other()
+    }
+
+    #[must_use]
+    pub const fn is_misc(self) -> bool {
+        matches!(self, Self::System | Self::Plugins | Self::Scripts)
+    }
 }
 
 impl FromStr for RPGMFileType {
-    type Err = ();
+    type Err = Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Ok(if value.len() >= 3 {
@@ -290,58 +306,27 @@ impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
     }
 }
 
-#[derive(Debug, Clone, Getters, Setters, MutGetters)]
+#[derive(Default, Debug, Clone)]
 pub(crate) struct TranslationEntry {
-    #[getset(get = "pub", set = "pub", get_mut = "pub")]
-    id: u16,
-
-    #[getset(get = "pub", set = "pub", get_mut = "pub")]
-    comments: SmallVec<[String; 4]>,
-
-    #[getset(get = "pub", set = "pub")]
-    translation: String,
-}
-
-impl Default for TranslationEntry {
-    fn default() -> Self {
-        Self {
-            id: u16::MAX,
-            comments: SmallVec::with_capacity(4),
-            translation: String::new(),
-        }
-    }
-}
-impl TranslationEntry {
-    pub fn new(
-        id: u16,
-        comments: SmallVec<[String; 4]>,
-        translation: String,
-    ) -> Self {
-        Self {
-            id,
-            comments,
-            translation,
-        }
-    }
-
-    pub fn parts(&self) -> (u16, &[String], &str) {
-        (self.id, &self.comments, &self.translation)
-    }
+    pub comments: Vec<String>,
+    pub translation: String,
 }
 
 impl From<&str> for TranslationEntry {
-    fn from(value: &str) -> Self {
-        let mut entry = Self::default();
-        entry.set_translation(value.to_string());
-        entry
+    fn from(translation: &str) -> Self {
+        TranslationEntry {
+            translation: translation.to_string(),
+            ..Default::default()
+        }
     }
 }
 
 impl From<String> for TranslationEntry {
-    fn from(value: String) -> Self {
-        let mut entry = Self::default();
-        entry.set_translation(value);
-        entry
+    fn from(translation: String) -> Self {
+        TranslationEntry {
+            translation,
+            ..Default::default()
+        }
     }
 }
 
@@ -365,7 +350,9 @@ pub enum Error {
         "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
     )]
     NoTitle,
-    #[error("Read mode is append, but no translation was supplied.")]
+    #[error(
+        "Processing mode is not default read, but no translation was supplied."
+    )]
     NoTranslation,
 }
 
@@ -382,6 +369,11 @@ impl Serialize for Error {
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
 #[repr(u8)]
+/// Defines how to read file.
+///
+/// - [`Mode::Read`] holds a [`ReadMode`] that defines the read mode.
+/// - [`Mode::Write`] is used to write files back.
+/// - [`Mode::Purge`] is used to purge lines with empty translation.
 pub enum Mode {
     Read(ReadMode),
     Write = 3,
@@ -526,10 +518,12 @@ pub enum GameType {
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
 #[repr(u8)]
-/// There's three read modes:
+/// There's two read modes:
 ///
 /// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist. `bool` indicates whether mode is force.
 /// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update. `bool` indicates whether mode is force.
+///
+/// Each of the modes holds a [`bool`]. It defines whether to read in force mode (overwrite existing files/bypass hashes).
 pub enum ReadMode {
     Default(bool),
     Append(bool),
@@ -637,6 +631,10 @@ impl ReadMode {
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
+/// Defines engine type of the processed game.
+///
+/// - [`EngineType::New`] - used for MV/MZ.
+/// - [`EngineType::VXAce`], [`EngineType::VX`] and [`EngineType::XP`] are self-explanatory.
 pub enum EngineType {
     #[default]
     /// MV/MZ
@@ -646,7 +644,6 @@ pub enum EngineType {
     XP,
 }
 
-// TODO: docs
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
@@ -659,24 +656,34 @@ bitflags! {
         /// `Mapxxx.ext` files.
         const Map = 1 << 0;
 
+        /// `Actors.ext` file.
         const Actors = 1 << 1;
 
+        /// `Armors.ext` file.
         const Armors = 1 << 2;
 
+        /// `Classes.ext` file.
         const Classes = 1 << 3;
 
+        /// `CommonEvents.ext` file.
         const CommonEvents = 1 << 4;
 
+        /// `Enemies.ext` file.
         const Enemies = 1 << 5;
 
+        /// `Items.ext` file.
         const Items = 1 << 6;
 
+        /// `Skills.ext` file.
         const Skills = 1 << 7;
 
+        /// `States.ext` file.
         const States = 1 << 8;
 
+        /// `Troops.ext` file.
         const Troops = 1 << 9;
 
+        /// `Weapons.ext` file.
         const Weapons = 1 << 10;
 
         /// `System.ext` file.
@@ -711,6 +718,7 @@ impl FieldNames for FileFlags {
 
 impl FileFlags {
     #[must_use]
+    /// Other entries. Those include [`FileFlags::Armors`], [`FileFlags::Classes`], [`FileFlags::CommonEvents`], [`FileFlags::Enemies`], [`FileFlags::Items`], [`FileFlags::Skills`], [`FileFlags::States`], [`FileFlags::Troops`], [`FileFlags::Weapons`].
     pub fn other() -> Self {
         Self::Actors
             | Self::Armors
@@ -836,6 +844,9 @@ impl From<BaseFlags> for u8 {
     }
 }
 
+/// Holds either RPG Maker file data ([`ProcessedData::RPGMData`]) or translation data ([`ProcessedData::TranslationData`]).
+///
+/// [`AsRef<[u8]>`] is implemented for this type, so that you can get the data without `match`ing this enum.
 pub enum ProcessedData {
     RPGMData(Vec<u8>),
     TranslationData(Vec<u8>),
@@ -849,6 +860,7 @@ impl AsRef<[u8]> for ProcessedData {
     }
 }
 
+/// Holds magic numbers, contents, and script names from the `Scripts.ext` file.
 pub struct Scripts {
     pub numbers: Vec<i32>,
     pub contents: Vec<String>,

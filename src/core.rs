@@ -1,22 +1,22 @@
 #[allow(unused_imports)]
 use crate::types::ReadMode;
 use crate::{
-    BaseFlags, CommentPos, IndexSetExt, ProcessedData,
+    BaseFlags, CommentPos, Comments, IndexSetExt, ProcessedData,
     constants::{
         AT_POSITION_MSG, COMMENT_PREFIX, COMMENT_SUFFIX,
-        COULD_NOT_SPLIT_LINE_MSG, ID_COMMENT, IGNORE_ENTRY_COMMENT,
+        COULD_NOT_SPLIT_LINE_MSG, EVENT_ID_COMMENT, EVENT_NAME_COMMENT,
+        EVENT_X_COMMENT, EVENT_Y_COMMENT, ID_COMMENT, IGNORE_ENTRY_COMMENT,
         IN_FILE_MSG, INSTANCE_VAR_PREFIX, MAP_DISPLAY_NAME_COMMENT_PREFIX,
         MAP_ORDER_COMMENT, NAME_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS,
     },
     types::{
         Code, DuplicateMode, EachLine, EngineType, Error, GameType,
         IgnoreEntry, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode,
-        RPGMFileType, Scripts, TranslationDuplicateMap, TranslationEntry,
-        TranslationMap, Variable,
+        RPGMFileType, Scripts, TranslationEntry, TranslationMap, Variable,
     },
 };
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use gxhash::{HashMap, HashMapExt, HashSetExt};
+use gxhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use indexmap::map::Entry;
 use log::warn;
 use marshal_rs::{Get, Value, ValueType, dump, load_binary, load_utf8};
@@ -33,6 +33,8 @@ use std::{
     ops::{ControlFlow, Range},
     path::Path,
 };
+
+const DISPLAY_NAME_POS: usize = CommentPos::DisplayName as usize;
 
 macro_rules! mutable {
     ($var:expr, $t:ty) => {{
@@ -241,11 +243,7 @@ pub fn parse_ignore(
     let mut ignore_entry =
         unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
 
-    for mut line in ignore_file_lines {
-        if line.is_empty() {
-            continue;
-        }
-
+    for mut line in ignore_file_lines.filter(|line| !line.is_empty()) {
         if line.starts_with(IGNORE_ENTRY_COMMENT) {
             // If duplicates are allowed, we should group all ignore entries
             // that correspond to a single file into one ignore entry.
@@ -401,6 +399,9 @@ pub fn get_system_title(
         .ok_or(Error::NoTitle)
 }
 
+// TODO: Finally decide when to use take and when to drain + collect.
+// TODO: Finally decide when to pre-allocate capacity.
+//* On some modes, we'll never use the original translation_map, and hence we'll not reuse the allocated space and can just take it when we need the inner data.
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
@@ -408,23 +409,26 @@ pub struct Base {
     pub engine_type: EngineType,
     pub duplicate_mode: DuplicateMode,
 
+    pub skip_maps: HashSet<u16>,
+    pub skip_events: HashMap<RPGMFileType, HashSet<u16>>,
+    pub map_events: bool,
+
     pub ignore_map: IgnoreMap,
     ignore_entry: &'static mut IgnoreEntry,
 
     translation_initialized: bool,
-    additional_data_written: bool,
-    map_events: bool,
 
     lines: Lines,
-    lines_lengths: Vec<u32>,
-    lines_ids: Vec<u16>,
+    total_length: usize,
 
-    metadata: HashMap<u16, SmallVec<[String; 4]>>,
+    metadata: HashMap<u16, Comments>,
 
     translation_map: &'static mut TranslationMap,
     leaked_translation_map_reference: &'static mut TranslationMap,
     translation_maps: IndexMapGx<u16, TranslationMap>,
-    translation_duplicate_map: TranslationDuplicateMap,
+
+    // TODO: Use Vec<Cow> instead of Vec<String>
+    accumulated_translation: Vec<(u16, Comments, Vec<String>, TranslationMap)>,
 
     file_type: RPGMFileType,
     labels: Labels,
@@ -446,22 +450,24 @@ impl Default for Base {
             ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
 
             translation_initialized: false,
-            additional_data_written: false,
-            map_events: false,
 
             lines: Lines::default(),
-            lines_lengths: Vec::default(),
-            lines_ids: Vec::default(),
+            total_length: 0,
 
             metadata: HashMap::default(),
 
             translation_map: mutable!(leaked_translation_map, TranslationMap),
             leaked_translation_map_reference: leaked_translation_map,
             translation_maps: IndexMapGx::default(),
-            translation_duplicate_map: TranslationDuplicateMap::default(),
 
+            accumulated_translation: Vec::new(),
+
+            map_events: false,
             file_type: RPGMFileType::Invalid,
             labels: Labels::default(),
+
+            skip_maps: HashSet::default(),
+            skip_events: HashMap::default(),
         }
     }
 }
@@ -480,8 +486,6 @@ impl<'a> Base {
             engine_type,
             labels: Labels::new(engine_type),
             lines: Lines::with_capacity(512),
-            lines_lengths: Vec::with_capacity(1024),
-            lines_ids: Vec::with_capacity(1024),
 
             metadata: HashMap::with_capacity(1024),
             translation_map: Box::leak(Box::new(
@@ -492,10 +496,6 @@ impl<'a> Base {
             // SAFETY: If `flags` contain neither `BaseFlags::Ignore` or `BaseFlags::CreateIgnore`, this entry is simply unused.
             // Also we're dereferncing from 16 because Rust fucking prevents null dereferencing in debug mode (who asked for this?)
             ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
-
-            translation_duplicate_map: TranslationDuplicateMap::with_capacity(
-                4192,
-            ),
 
             ..Default::default()
         }
@@ -508,14 +508,13 @@ impl<'a> Base {
         self.translation_initialized = false;
 
         self.lines.clear();
-        self.lines_lengths.clear();
-        self.lines_ids.clear();
+        self.total_length = 0;
 
         self.metadata.clear();
 
         self.reset_translation_map();
         self.translation_maps.clear();
-        self.translation_duplicate_map.clear();
+        self.accumulated_translation.clear();
     }
 
     pub fn reset_translation_map(&mut self) {
@@ -609,15 +608,14 @@ impl<'a> Base {
         }
 
         if self.mode.is_write() {
-            self.get_key(parameter).map(|te| {
+            self.get_key(parameter).map(|t| {
                 let mut translation = String::new();
 
                 for (string, append) in extra_strings {
                     if append {
-                        translation = te.to_string() + string;
+                        translation = t.to_string() + string;
                     } else {
-                        translation =
-                            format!("{string}{te}", te = te.translation());
+                        translation = format!("{string}{t}", t = t.translation);
                     }
                 }
 
@@ -671,12 +669,9 @@ impl<'a> Base {
     /// - `string` - String to insert in `self.lines`.
     ///
     fn insert_string(&mut self, string: Cow<'_, str>) {
-        if self.mode.is_write() {
-            return;
-        }
-
-        if self.flags.contains(BaseFlags::Ignore)
-            && self.ignore_entry.contains(string.as_ref())
+        if self.mode.is_write()
+            || (self.flags.contains(BaseFlags::Ignore)
+                && self.ignore_entry.contains(string.as_ref()))
         {
             return;
         }
@@ -826,6 +821,7 @@ impl<'a> Base {
             let value = &mut parameters[value_index];
 
             if code.is_choice_array() {
+                // SAFETY: We have just checked - it's an array.
                 for value in unsafe { value.as_array_mut().unwrap_unchecked() }
                 {
                     let Some(string) = mutable!(self, Self)
@@ -925,6 +921,7 @@ impl<'a> Base {
                 content = &content[3..];
             }
 
+            // SAFETY: JSON is always valid UTF-8.
             let parsed = from_str::<SerdeValue>(unsafe {
                 std::str::from_utf8_unchecked(content)
             })?;
@@ -961,7 +958,7 @@ impl<'a> Base {
 
         self.translation_initialized = true;
 
-        let trim = if self.file_type.is_map() || self.file_type.is_other() {
+        let trim = if self.file_type.is_main() {
             self.flags.contains(BaseFlags::Trim)
         } else {
             false
@@ -1002,8 +999,7 @@ impl<'a> Base {
                 break;
             };
 
-            let mut comments: SmallVec<[String; 4]> =
-                smallvec![String::new(); 4];
+            let mut comments: Comments = smallvec![String::new(); 3];
 
             let id = next
                 .strip_prefix(ID_COMMENT)
@@ -1022,6 +1018,18 @@ impl<'a> Base {
                     unsafe { translation_lines.next().unwrap_unchecked() };
 
                 if line.starts_with(COMMENT_PREFIX) {
+                    if [
+                        EVENT_ID_COMMENT,
+                        EVENT_NAME_COMMENT,
+                        EVENT_X_COMMENT,
+                        EVENT_Y_COMMENT,
+                    ]
+                    .into_iter()
+                    .any(|c| line.starts_with(c))
+                    {
+                        continue;
+                    }
+
                     if first {
                         let pos = CommentPos::from_str(line);
 
@@ -1105,11 +1113,10 @@ impl<'a> Base {
 
                 self.translation_map.insert(
                     source.into(),
-                    TranslationEntry::new(
-                        u16::MAX,
-                        comments.drain(..).collect(),
-                        translation.into(),
-                    ),
+                    TranslationEntry {
+                        comments: comments.drain(..).collect(),
+                        translation: translation.into(),
+                    },
                 );
             }
 
@@ -1119,8 +1126,7 @@ impl<'a> Base {
                     .entry(id)
                     .or_insert(comments.drain(..).collect());
 
-                let display_name =
-                    &metadata_entry[CommentPos::DisplayName as usize];
+                let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
                 if self.mode.is_write()
                     && (display_name.is_empty()
@@ -1143,13 +1149,20 @@ impl<'a> Base {
 
     /// Sets `self.translation_map` to the entry from `self.translation_maps`.
     ///
+    /// If `self.mode` is [`Mode::Purge`], it will push entries from `self.translation_map` to `self.accumulated_translation` and break.
+    ///
+    /// If `self.flags` contains any of ignore flags, it will also set `self.ignore_entry`.
+    ///
     /// # Parameters
     ///
-    /// - `entry_name` - Name of the entry to get.
+    /// - `id` - ID of the entry to get.
     ///
     /// # Returns
     ///
-    /// - [`ControlFlow::Break`] - If `self.mode` is [`Mode::Write`], and entry corresponding to the `entry_name` does not exist.
+    /// - [`ControlFlow::Break`]
+    ///     - If mode is [`Mode::Write`] and `id` is not in `self.translation_maps`.
+    ///     - If `id` is skipped.
+    ///     - If mode is [`Mode::Purge`].
     /// - [`ControlFlow::Continue`] - In other situations.
     ///
     fn get_translation_map(&mut self, id: u16) -> ControlFlow<()> {
@@ -1169,6 +1182,34 @@ impl<'a> Base {
             },
             TranslationMap
         );
+
+        if self
+            .skip_events
+            .get(&self.file_type)
+            .is_some_and(|x| x.contains(&id))
+            || (self.file_type.is_map() && self.skip_maps.contains(&id))
+        {
+            if self.mode.is_append() || self.mode.is_purge() {
+                let metadata = self.get_metadata(id);
+
+                self.accumulated_translation.push((
+                    id,
+                    metadata,
+                    Vec::new(),
+                    take(self.translation_map),
+                ));
+            }
+
+            self.total_length += self.lines.len();
+            return ControlFlow::Break(());
+        }
+
+        self.get_ignore_entry(id);
+
+        if self.mode.is_purge() {
+            self.flush_translation(Some(id));
+            return ControlFlow::Break(());
+        }
 
         ControlFlow::Continue(())
     }
@@ -1286,6 +1327,8 @@ impl<'a> Base {
         !string.chars().any(|c| !SYMBOLS.contains(&c))
     }
 
+    // TODO: Check when starts with if
+    //* This is breaking
     fn ends_with_if_index(string: &str) -> Option<usize> {
         if !string.ends_with(')') {
             return None;
@@ -1310,13 +1353,6 @@ impl<'a> Base {
                 }
                 2 => {
                     if char == 'i' {
-                        stage = 3;
-                    } else {
-                        return None;
-                    }
-                }
-                3 => {
-                    if char == ' ' {
                         return Some(i);
                     }
                 }
@@ -1451,32 +1487,6 @@ impl<'a> Base {
         None
     }
 
-    /// Purges entries with empty translation from `self.translation_map`, and drains the resulting entries to `self.translation_duplicate_map`.
-    ///
-    /// Will add purged entries to `self.ignore_entry` if `self.flags` contains [`BaseFlags::CreateIgnore`].
-    fn purge_empty_translation(&mut self) {
-        let len_limit = self.translation_map.len();
-
-        self.translation_duplicate_map.reserve(len_limit);
-        self.translation_duplicate_map.extend(
-            self.translation_map.drain(..).enumerate().map(
-                |(i, (mut k, v))| {
-                    if i < len_limit && v.is_empty() {
-                        let moved = take(&mut k);
-
-                        if self.flags.contains(BaseFlags::CreateIgnore)
-                            && !moved.is_empty()
-                        {
-                            self.ignore_entry.insert(moved);
-                        }
-                    }
-
-                    (k, v)
-                },
-            ),
-        );
-    }
-
     /// Returns the RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
     ///
     /// # Parameters
@@ -1488,8 +1498,6 @@ impl<'a> Base {
     /// RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
     ///
     fn finish(&mut self, value: Value) -> ProcessedData {
-        self.flush_translation(None);
-
         let output_content = if self.mode.is_write() {
             ProcessedData::RPGMData(if self.file_type.is_plugins() {
                 ["var $plugins =\n".as_bytes(), unsafe {
@@ -1509,80 +1517,19 @@ impl<'a> Base {
                 )
             })
         } else {
-            let total_len = self.translation_duplicate_map.iter().fold(
-                0,
-                |mut acc, (source, entry)| {
-                    let (id, comments, translation) = entry.parts();
-
-                    if id != u16::MAX {
-                        acc += ID_COMMENT.len() + SEPARATOR.len() + 5 + 1;
-                    }
-
-                    for comment in comments {
-                        acc += comment.len() + 1;
-                    }
-
-                    if !source.is_empty() {
-                        acc += source.len() + SEPARATOR.len();
-                    }
-
-                    acc += translation.len();
-
-                    if !source.is_empty() || !translation.is_empty() {
-                        acc += 1;
-                    }
-
-                    acc
-                },
-            );
-
-            let mut output = self.translation_duplicate_map.iter().fold(
-                Vec::with_capacity(total_len),
-                |mut acc, (source, entry)| {
-                    let (id, comments, translation) = entry.parts();
-
-                    if id != u16::MAX {
-                        acc.extend_from_slice(ID_COMMENT.as_bytes());
-                        acc.extend_from_slice(SEPARATOR.as_bytes());
-                        acc.extend_from_slice(id.to_string().as_bytes());
-                        acc.push(b'\n');
-                    }
-
-                    for comment in comments.iter().filter(|c| !c.is_empty()) {
-                        acc.extend_from_slice(comment.as_bytes());
-                        acc.push(b'\n');
-                    }
-
-                    if !source.is_empty() {
-                        acc.extend_from_slice(source.as_bytes());
-                        acc.extend_from_slice(SEPARATOR.as_bytes());
-                    }
-
-                    if !translation.is_empty() {
-                        acc.extend_from_slice(translation.as_bytes());
-                    }
-
-                    if !source.is_empty() || !translation.is_empty() {
-                        acc.push(b'\n');
-                    }
-
-                    acc
-                },
-            );
-
-            output.pop();
-            ProcessedData::TranslationData(output)
+            unsafe { self.flush_translation(None).unwrap_unchecked() }
         };
 
-        self.lines.clear();
-        self.translation_duplicate_map.clear();
         output_content
     }
 
-    fn push_metadata(&mut self, id: u16) {
-        let Some(mut comments) = self.metadata.remove(&id) else {
-            return;
+    fn get_metadata(&mut self, id: u16) -> Comments {
+        let comments = match self.metadata.get_mut(&id) {
+            Some(metadata) => metadata,
+            None => &mut SmallVec::default(),
         };
+
+        let mut comments = take(comments);
 
         comments.iter_mut().enumerate().filter(|(_, x)| !x.is_empty()).for_each(|(i, x)| {
             let pos = unsafe { transmute::<i8, CommentPos>(i as i8) };
@@ -1605,192 +1552,232 @@ impl<'a> Base {
             }
         });
 
-        self.translation_duplicate_map.push((
-            String::new(),
-            TranslationEntry::new(id, comments, String::new()),
-        ));
+        comments
     }
 
-    /// Flushes translation from `self.translation_map` and `self.lines` to `self.translation_duplicate_map`.
-    ///
-    /// # Parameters
-    ///
-    /// - `id` - if called from `finish` function, id will always be [`None`], and that means we're finishing.
-    fn flush_translation(&mut self, id: Option<u16>) {
-        self.append_additional_data();
+    fn push_metadata(output: &mut Vec<u8>, id: u16, metadata: &[String]) {
+        output.extend_from_slice(ID_COMMENT.as_bytes());
+        output.extend_from_slice(SEPARATOR.as_bytes());
+        output.extend_from_slice(id.to_string().as_bytes());
+        output.push(b'\n');
 
-        if self.duplicate_mode.is_allow()
-            || matches!(
-                self.file_type,
-                RPGMFileType::System
-                    | RPGMFileType::Scripts
-                    | RPGMFileType::Plugins
-            )
-        {
-            let Some(id) = id else {
-                return;
-            };
+        for comment in metadata.iter().filter(|c| !c.is_empty()) {
+            output.extend_from_slice(comment.as_bytes());
+            output.push(b'\n');
+        }
+    }
 
-            if self.lines.is_empty()
-                && self.metadata[&id][CommentPos::DisplayName as usize]
-                    .is_empty()
+    fn push_entries(
+        output: &mut Vec<u8>,
+        source: &str,
+        translation: &TranslationEntry,
+    ) {
+        for comment in translation.comments.iter().filter(|c| !c.is_empty()) {
+            output.extend_from_slice(comment.as_bytes());
+            output.push(b'\n');
+        }
+
+        if !source.is_empty() {
+            output.extend_from_slice(source.as_bytes());
+            output.extend_from_slice(SEPARATOR.as_bytes());
+        }
+
+        if !translation.is_empty() {
+            output.extend_from_slice(translation.as_bytes());
+        }
+
+        if !source.is_empty() || !translation.is_empty() {
+            output.push(b'\n');
+        }
+    }
+
+    fn flush_translation(&mut self, id: Option<u16>) -> Option<ProcessedData> {
+        if let Some(id) = id {
+            let metadata = self.get_metadata(id);
+
+            if self.mode.is_purge() {
+                if !self.translation_map.is_empty()
+                    || metadata
+                        .get(DISPLAY_NAME_POS)
+                        .is_some_and(|x| !x.is_empty())
+                {
+                    self.accumulated_translation.push((
+                        id,
+                        metadata,
+                        Vec::new(),
+                        take(self.translation_map),
+                    ));
+                }
+            } else if self.duplicate_mode.is_allow() || self.file_type.is_misc()
             {
-                return;
-            }
-
-            self.translation_duplicate_map.reserve(self.lines.len() + 1);
-            self.push_metadata(id);
-
-            let lines = self.lines.drain(..);
-
-            if self.mode.is_append() {
-                self.translation_duplicate_map.extend(lines.map(|k| {
-                    let v = self
+                if self
+                    .skip_events
+                    .get(&self.file_type)
+                    .is_some_and(|e| e.contains(&id))
+                    || (self.file_type.is_map() && self.skip_maps.contains(&id))
+                {
+                    self.lines.clear();
+                    self.translation_map.clear();
+                } else {
+                    let lines = self.lines.drain(..).collect::<Vec<_>>();
+                    let translation_map = self
                         .translation_map
-                        .swap_remove(&k)
-                        .unwrap_or_default();
-                    (k, v)
-                }));
+                        .drain(..)
+                        .collect::<TranslationMap>();
+
+                    self.accumulated_translation.push((
+                        id,
+                        metadata,
+                        lines,
+                        translation_map,
+                    ));
+                }
             } else {
-                self.translation_duplicate_map
-                    .extend(lines.map(|k| (k, TranslationEntry::default())));
+                let total_length = self.total_length;
+                let current_length = self.lines.len() - total_length;
+
+                let lines = self.lines[total_length..]
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                self.accumulated_translation.push((
+                    id,
+                    metadata,
+                    lines,
+                    TranslationMap::default(),
+                ));
+
+                self.total_length += current_length;
             }
+
+            None
         } else {
-            self.lines_lengths.push(
-                self.lines.len() as u32
-                    - self.lines_lengths.iter().copied().sum::<u32>(),
-            );
+            let allow_dup =
+                self.duplicate_mode.is_allow() || self.file_type.is_misc();
+            let skip_events_entry = self.skip_events.get(&self.file_type);
 
-            if id.is_some() || !self.mode.is_read() {
-                return;
+            let additional_data = self.get_additional_data();
+
+            // Allocate 4 MB. It makes no sense to circlejerk `accumulated_translation` to get the precise count, so we'll just take the biggest reasonable amount.
+            let output_size = 4096 * 1024;
+            let mut output = Vec::with_capacity(output_size);
+
+            for &data in additional_data {
+                output.extend_from_slice(data.as_bytes());
+                output.extend_from_slice(SEPARATOR.as_bytes());
+
+                if let Some(additional) = self.translation_maps.get(&u16::MAX) {
+                    if let Some(translation) = additional.get(data) {
+                        output.extend_from_slice(translation.as_bytes());
+                    }
+                }
+
+                output.push(b'\n');
             }
 
-            // We're not returning if `self.lines` is empty because we need to push metadata that contains a display name
+            let iter = mutable!(self, Self)
+                .accumulated_translation
+                .iter_mut()
+                .enumerate();
+            let mut prev_id = u16::MAX;
 
-            if self.mode.is_append() {
-                self.translation_duplicate_map
-                    .reserve(self.lines.len() + self.lines_lengths.len());
+            for (i, (id, meta, lines, map)) in iter {
+                let skip = skip_events_entry.is_some_and(|e| e.contains(id))
+                    || (self.file_type.is_map() && self.skip_maps.contains(id))
+                    || (self.mode.is_purge()
+                        && self.file_type.is_system()
+                        && *id == 8);
 
-                let mut map_index = 0;
-                let mut i = 0;
+                if skip {
+                    if self.mode.is_append() || self.mode.is_purge() {
+                        Self::push_metadata(&mut output, *id, meta);
 
-                while self.lines_lengths.get(map_index).is_some_and(|&x| x == 0)
-                {
-                    let id = self.lines_ids[map_index];
-
-                    if !self.metadata[&id][CommentPos::DisplayName as usize]
-                        .is_empty()
-                    {
-                        self.push_metadata(id);
-                    }
-
-                    map_index += 1;
-                }
-
-                if let Some(&id) = self.lines_ids.get(map_index) {
-                    if self
-                        .lines_lengths
-                        .get(map_index)
-                        .is_some_and(|&x| x != 0)
-                        || !self.metadata[&id][CommentPos::DisplayName as usize]
-                            .is_empty()
-                    {
-                        self.push_metadata(id);
-                    }
-                }
-
-                for key in mutable!(self, Self).lines.drain(..) {
-                    if i == self.lines_lengths[map_index] {
-                        i = 0;
-                        map_index += 1;
-
-                        while self.lines_lengths[map_index] == 0 {
-                            let id = self.lines_ids[map_index];
-
-                            if !self.metadata[&id]
-                                [CommentPos::DisplayName as usize]
-                                .is_empty()
-                            {
-                                self.push_metadata(id);
-                            }
-
-                            map_index += 1;
-                        }
-
-                        if let Some(&id) = self.lines_ids.get(map_index) {
-                            if self.lines_lengths[map_index] != 0
-                                || !self.metadata[&id]
-                                    [CommentPos::DisplayName as usize]
-                                    .is_empty()
-                            {
-                                self.push_metadata(id);
-                            }
+                        for (source, translation) in map {
+                            Self::push_entries(
+                                &mut output,
+                                source,
+                                translation,
+                            );
                         }
                     }
 
-                    let find_result = self
-                        .translation_maps
-                        .values_mut()
-                        .find_map(|m| m.swap_remove(&key));
-
-                    let entry = find_result.unwrap_or_default();
-                    self.translation_duplicate_map.push((key, entry));
-
-                    i += 1;
+                    continue;
                 }
 
-                let mut ids = self.metadata.keys().copied().collect::<Vec<_>>();
-                ids.sort_unstable();
+                if self.mode.is_purge() {
+                    Self::push_metadata(&mut output, *id, meta);
 
-                for id in ids {
-                    if self.metadata[&id][CommentPos::DisplayName as usize]
-                        .is_empty()
-                    {
-                        continue;
+                    for (mut source, translation) in take(map) {
+                        if translation.is_empty() {
+                            let moved = take(&mut source);
+
+                            if self.flags.contains(BaseFlags::CreateIgnore)
+                                && !moved.is_empty()
+                            {
+                                self.ignore_entry.insert(moved);
+                            }
+                        }
+
+                        Self::push_entries(&mut output, &source, &translation);
                     }
 
-                    self.push_metadata(id);
+                    continue;
                 }
-            } else {
-                self.translation_duplicate_map.reserve(
-                    self.translation_maps
-                        .values()
-                        .map(IndexMapGx::len)
-                        .sum::<usize>()
-                        + self
-                            .lines_lengths
-                            .iter()
-                            .filter(|&&l| l != 0)
-                            .sum::<u32>() as usize,
-                );
 
-                let mut_self = mutable!(self, Self);
+                if *id != prev_id {
+                    let has_display_name = meta
+                        .get(DISPLAY_NAME_POS)
+                        .is_some_and(|c| !c.is_empty());
 
-                let mut lines = mut_self.lines.drain(..);
-                let lengths = mut_self.lines_lengths.drain(..);
+                    let should_push_map = self.file_type.is_map()
+                        && self.map_events
+                        && (self.accumulated_translation[i..].iter().any(
+                            |(next_id, _, lines, _)| {
+                                *next_id == *id && !lines.is_empty()
+                            },
+                        ) || has_display_name);
 
-                for ((id, map), length) in
-                    mut_self.translation_maps.drain(..).zip(lengths)
-                {
-                    if length == 0
-                        && self.metadata[&id][CommentPos::DisplayName as usize]
-                            .is_empty()
-                    {
-                        continue;
+                    let should_push_other =
+                        !lines.is_empty() || has_display_name;
+
+                    if should_push_map || should_push_other {
+                        Self::push_metadata(&mut output, *id, meta);
                     }
 
-                    self.push_metadata(id);
-                    self.translation_duplicate_map.extend(
-                        map.into_iter().chain((0..length).map(|_| {
-                            (
-                                // SAFETY: If this thing fails at runtime, that means something in the code is wrong - it doesn't depend on the runtime variables.
-                                unsafe { lines.next().unwrap_unchecked() },
-                                TranslationEntry::default(),
-                            )
-                        })),
-                    );
+                    prev_id = *id;
+                }
+
+                let next_lines_empty = self
+                    .accumulated_translation
+                    .get(i + 1)
+                    .is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
+
+                if !next_lines_empty {
+                    if let Some((_, entry)) = map.first() {
+                        Self::push_entries(&mut output, "", entry);
+                    }
+                }
+
+                for source in lines {
+                    let translation = match (allow_dup, self.mode.is_append()) {
+                        (true, true) => {
+                            map.swap_remove(source).unwrap_or_default()
+                        }
+                        (false, true) => self
+                            .translation_maps
+                            .values_mut()
+                            .find_map(|m| m.swap_remove(source))
+                            .unwrap_or_default(),
+                        (_, false) => TranslationEntry::default(),
+                    };
+
+                    Self::push_entries(&mut output, source, &translation);
                 }
             }
+
+            output.pop();
+            Some(ProcessedData::TranslationData(output))
         }
     }
 
@@ -1802,10 +1789,10 @@ impl<'a> Base {
         let metadata = self
             .metadata
             .entry(id)
-            .or_insert(smallvec![String::new(); 4]);
+            .or_insert(smallvec![String::new(); 3]);
 
-        if metadata.len() < 4 {
-            metadata.resize(4, String::new());
+        if metadata.len() < 3 {
+            metadata.resize(3, String::new());
         }
 
         for (entry_id, entry) in
@@ -1838,38 +1825,28 @@ impl<'a> Base {
         }
     }
 
-    /// Appends additional data directly to `self.translation_duplicate_map` based on some criteria.
-    fn append_additional_data(&mut self) {
-        if self.additional_data_written {
-            return;
-        }
-
+    /// Returns some additional data, that needs to be inserted at the start of the output translation data.
+    ///
+    /// Right now, this function returns the slice of source entries that need to be inserted on read. This may change at any moment.
+    ///
+    /// # Returns
+    ///
+    /// - [`&[&str]`] - slice of source entries.
+    #[must_use]
+    fn get_additional_data(&self) -> &[&str] {
         if !self.mode.is_write()
             && self.game_type.is_termina()
             && self.file_type.is_items()
         {
-            self.translation_map.reserve_exact(4);
-            self.translation_duplicate_map.extend([
-                (
-                    String::from("<Menu Category: Items>"),
-                    TranslationEntry::default(),
-                ),
-                (
-                    String::from("<Menu Category: Food>"),
-                    TranslationEntry::default(),
-                ),
-                (
-                    String::from("<Menu Category: Healing>"),
-                    TranslationEntry::default(),
-                ),
-                (
-                    String::from("<Menu Category: Body bag>"),
-                    TranslationEntry::default(),
-                ),
-            ]);
-
-            self.additional_data_written = true;
+            return &[
+                "<Menu Category: Items>",
+                "<Menu Category: Food>",
+                "<Menu Category: Healing>",
+                "<Menu Category: Body bag>",
+            ];
         }
+
+        &[]
     }
 }
 
@@ -1990,123 +1967,130 @@ impl<'a> MapBase<'a> {
 
         self.base.initialize_translation(translation)?;
 
-        let map_id = Self::parse_map_id(filename);
-        if self.is_map_unused(map_id) {
+        let id = Self::parse_map_id(filename);
+        if self.is_map_unused(id) {
             return Ok(None);
         }
 
-        let flow = self.base.get_translation_map(map_id);
-        if flow.is_break() {
+        if self.base.get_translation_map(id).is_break() {
             return Ok(None);
         }
 
-        self.base.get_ignore_entry(map_id);
-        self.base.lines_ids.push(map_id);
+        let mut map_object = self.base.parse_rpgm_file(content)?;
+        let display_name = self.get_display_name(&map_object);
 
-        let result = if self.base.mode.is_purge() {
-            self.base.purge_empty_translation();
-            Ok(None)
-        } else {
-            let mut map_object = self.base.parse_rpgm_file(content)?;
-            let display_name = self.get_display_name(&map_object);
+        if self.base.mode.is_read() {
+            let map_order = self.get_map_order(id).to_string();
+            let map_name = mutable!(self, Self).get_map_name(id);
+            let replaced_map_name = map_name.normalize();
 
-            if self.base.mode.is_read() {
-                let map_order = self.get_map_order(map_id).to_string();
-                let map_name = mutable!(self, Self).get_map_name(map_id);
-                let replaced_map_name = map_name.normalize();
+            self.base.update_metadata(
+                id,
+                Vec::from([
+                    (CommentPos::Name, replaced_map_name.as_ref()),
+                    (CommentPos::Order, &map_order),
+                    (CommentPos::DisplayName, &display_name),
+                ]),
+            );
 
-                self.base.update_metadata(
-                    map_id,
-                    Vec::from([
-                        (CommentPos::Name, replaced_map_name.as_ref()),
-                        (CommentPos::Order, &map_order),
-                        (CommentPos::DisplayName, &display_name),
-                    ]),
-                );
-            } else if !display_name.is_empty() {
-                let display_name_comment_line = &self.base.metadata[&map_id][2];
-
-                let split: Vec<&str> =
-                    display_name_comment_line.split(SEPARATOR).collect();
-
-                if split.len() >= 2 {
-                    let mut translation = split
-                        .into_iter()
+            let events = if self.base.engine_type.is_new() {
+                // SAFETY: Always an array in new maps.
+                EventIterator::New(unsafe {
+                    map_object[self.base.labels.events]
+                        .as_array_mut()
+                        .unwrap_unchecked()
+                        .iter_mut()
                         .skip(1)
-                        .rfind(|x| !x.is_empty())
-                        .unwrap_or_default();
+                })
+            } else {
+                // SAFETY: Always a hashmap in old maps.
+                EventIterator::Old(unsafe {
+                    map_object[self.base.labels.events]
+                        .as_hashmap_mut()
+                        .unwrap_unchecked()
+                        .values_mut()
+                })
+            };
 
-                    let translation_replaced = translation.denormalize();
-                    translation = &translation_replaced;
-
-                    map_object[self.base.labels.display_name] =
-                        Value::string(translation);
-                } else {
-                    log::warn!(
-                        "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
-                        file = self.base.file_type.to_string().to_lowercase()
-                    );
+            for event in events {
+                if event.is_null() {
+                    continue;
                 }
-            }
 
-            if self.base.mode.is_read() || !self.base.translation_map.is_empty()
-            {
-                let events = if self.base.engine_type.is_new() {
-                    // SAFETY: Always an array in new maps.
-                    EventIterator::New(unsafe {
-                        map_object[self.base.labels.events]
-                            .as_array_mut()
-                            .unwrap_unchecked()
-                            .iter_mut()
-                            .skip(1)
-                    })
-                } else {
-                    // SAFETY: Always a hashmap in old maps.
-                    EventIterator::Old(unsafe {
-                        map_object[self.base.labels.events]
-                            .as_hashmap_mut()
-                            .unwrap_unchecked()
-                            .values_mut()
-                    })
+                let Some(pages) = mutable!(event, Value)
+                    [self.base.labels.pages]
+                    .as_array_mut()
+                else {
+                    continue;
                 };
 
-                for event in events {
-                    if event.is_null() {
-                        continue;
-                    }
+                if self.base.map_events {
+                    self.base.flush_translation(Some(id));
 
-                    let Some(pages) =
-                        event[self.base.labels.pages].as_array_mut()
-                    else {
-                        continue;
+                    let event_id = event["id"].as_int().unwrap();
+                    let event_name = event["name"].as_str().unwrap();
+                    let event_x = event["x"].as_int().unwrap();
+                    let event_y = event["y"].as_int().unwrap();
+
+                    self.base.accumulated_translation.push((
+                            id,
+                            SmallVec::default(),
+                            Vec::new(),
+                            TranslationMap::from_iter([(String::new(), TranslationEntry {
+                                comments: Vec::from([format!(
+                                    "{EVENT_ID_COMMENT}{SEPARATOR}{event_id}"
+                                ),
+                                format!("{EVENT_NAME_COMMENT}{SEPARATOR}{event_name}"),
+                                format!("{EVENT_X_COMMENT}{SEPARATOR}{event_x}"),
+                                format!("{EVENT_Y_COMMENT}{SEPARATOR}{event_y}")]),
+                                translation: String::new(),
+                            })])
+                        ));
+                }
+
+                for page in pages {
+                    // SAFETY: List is always in map files.
+                    let list = unsafe {
+                        page[self.base.labels.list]
+                            .as_array_mut()
+                            .unwrap_unchecked()
                     };
 
-                    if self.base.map_events {
-                        todo!("Parse event name");
-                    }
-
-                    for page in pages {
-                        // SAFETY: List is always in map files.
-                        let list = unsafe {
-                            page[self.base.labels.list]
-                                .as_array_mut()
-                                .unwrap_unchecked()
-                        };
-
-                        self.base.process_list(list);
-                    }
+                    self.base.process_list(list);
                 }
             }
+        } else if !display_name.is_empty() {
+            let display_name_comment_line = &self.base.metadata[&id][2];
 
-            if self.base.mode.is_write() {
-                Ok(Some(self.base.finish(map_object)))
+            let split: Vec<&str> =
+                display_name_comment_line.split(SEPARATOR).collect();
+
+            if split.len() >= 2 {
+                let mut translation = split
+                    .into_iter()
+                    .skip(1)
+                    .rfind(|x| !x.is_empty())
+                    .unwrap_or_default();
+
+                let translation_replaced = translation.denormalize();
+                translation = &translation_replaced;
+
+                map_object[self.base.labels.display_name] =
+                    Value::string(translation);
             } else {
-                self.base.flush_translation(Some(map_id));
-                Ok(None)
+                log::warn!(
+                    "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
+                    file = self.base.file_type.to_string().to_lowercase()
+                );
             }
-        };
+        }
 
-        result
+        if self.base.mode.is_write() {
+            Ok(Some(self.base.finish(map_object)))
+        } else {
+            self.base.flush_translation(Some(id));
+            Ok(None)
+        }
     }
 
     /// Parses a map ID from a filename by extracting the substring at positions 3 to 5 and converting parsing it to [`u16`].
@@ -2122,7 +2106,7 @@ impl<'a> MapBase<'a> {
         unsafe { filename[3..=5].parse::<u16>().unwrap_unchecked() }
     }
 
-    /// Determines whether a map is unused based on its existance in `self.mapinfos`.
+    /// Determines whether a map is unused based on its existence in `self.mapinfos`.
     ///
     /// # Parameters
     ///
@@ -2285,63 +2269,53 @@ impl<'a> OtherBase<'a> {
     ) -> Result<Option<ProcessedData>, Error> {
         self.base.file_type = RPGMFileType::from_filename(filename);
 
-        if self.base.mode.is_append() || self.base.mode.is_purge() {
-            self.base.reset_translation_map();
-        }
-
-        self.base.translation_initialized = false;
+        self.base.reset();
         self.base.initialize_translation(translation)?;
 
         let mut entry_value = self.base.parse_rpgm_file(content)?;
-        self.base.lines_lengths.clear();
-        self.base.lines_ids.clear();
-        self.base.metadata.clear();
 
         // SAFETY: All "other" entries are always arrays.
         let object_array =
             unsafe { entry_value.as_array_mut().unwrap_unchecked() };
 
-        let mut written = false;
+        let mut processed = false;
 
         // Skipping one, because the first entry is always null.
         for object in object_array.iter_mut().skip(1) {
             // SAFETY: Name and ID exists on every object.
-            let event_id =
-                unsafe { object["id"].as_int().unwrap_unchecked() } as u16;
+            let id = unsafe { object["id"].as_int().unwrap_unchecked() } as u16;
+
+            if self.base.get_translation_map(id).is_break() {
+                if self.base.mode.is_purge() {
+                    processed = true;
+                }
+
+                continue;
+            }
+
+            processed = true;
+
             let event_name = unsafe {
                 object[self.base.labels.name].as_str().unwrap_unchecked()
             };
 
-            let flow = self.base.get_translation_map(event_id);
-            if flow.is_break() {
-                continue;
-            }
+            self.base.update_metadata(
+                id,
+                Vec::from([(CommentPos::Name, event_name)]),
+            );
 
-            written = true;
-            self.base.get_ignore_entry(event_id);
-            self.base.lines_ids.push(event_id);
-
-            if self.base.mode.is_purge() {
-                self.base.purge_empty_translation();
+            if self.base.file_type.is_events()
+                || self.base.file_type.is_troops()
+            {
+                self.process_object(object);
             } else {
-                self.base.update_metadata(
-                    event_id,
-                    Vec::from([(CommentPos::Name, event_name)]),
-                );
-
-                if self.base.file_type.is_events()
-                    || self.base.file_type.is_troops()
-                {
-                    self.process_object(object);
-                } else {
-                    self.process_array(object);
-                }
-
-                self.base.flush_translation(Some(event_id));
+                self.process_array(object);
             }
+
+            self.base.flush_translation(Some(id));
         }
 
-        if !written {
+        if !processed {
             return Ok(None);
         }
 
@@ -2612,7 +2586,8 @@ impl<'a> OtherBase<'a> {
                     return None;
                 }
             }
-            _ => {} // custom processing for other games
+            // custom processing for other games
+            _ => {}
         }
 
         let old_variable_text = take(&mut variable_text);
@@ -2764,19 +2739,22 @@ impl<'a> OtherBase<'a> {
             unsafe {
                 let replaced: String = parsed
                     .lines()
-                    .fold(String::new(), |mut output, line| {
-                        let trimmed = if variable_type.is_any_message()
-                            || self.base.flags.contains(BaseFlags::Trim)
-                        {
-                            line.trim()
-                        } else {
-                            line
-                        };
+                    .fold(
+                        String::with_capacity(parsed.len() * 2),
+                        |mut output, line| {
+                            let trimmed = if variable_type.is_any_message()
+                                || self.base.flags.contains(BaseFlags::Trim)
+                            {
+                                line.trim()
+                            } else {
+                                line
+                            };
 
-                        let _ = write!(output, "{trimmed}{NEW_LINE}");
+                            let _ = write!(output, "{trimmed}{NEW_LINE}");
 
-                        output
-                    })
+                            output
+                        },
+                    )
                     .strip_suffix(NEW_LINE)
                     .unwrap_unchecked()
                     .into();
@@ -2862,7 +2840,7 @@ impl<'a> SystemBase<'a> {
         self.base.initialize_translation(translation)?;
 
         self.system_value = self.base.parse_rpgm_file(content)?;
-        let mut written = false;
+        let mut processed = false;
 
         for (entry_id, entry_name) in [
             "Armor Types",
@@ -2877,78 +2855,53 @@ impl<'a> SystemBase<'a> {
         .into_iter()
         .enumerate()
         {
-            let entry_id = entry_id as u16;
+            let id = entry_id as u16 + 1;
 
-            let flow = self.base.get_translation_map(entry_id);
-            if flow.is_break() {
+            if self.base.get_translation_map(id).is_break() {
+                if self.base.mode.is_purge() {
+                    processed = true;
+                }
+
                 continue;
             }
 
-            written = true;
-            self.base.get_ignore_entry(entry_id);
-            self.base.lines_ids.push(entry_id);
+            processed = true;
 
-            if self.base.mode.is_purge() {
-                // Always leave game title in the file
-                if entry_id == 7 {
-                    let metadata =
-                        self.base.metadata.get_mut(&entry_id).unwrap();
+            self.base.update_metadata(
+                id,
+                Vec::from([(CommentPos::Name, entry_name)]),
+            );
 
-                    metadata[0] =
-                        format!("{NAME_COMMENT}{SEPARATOR}{}", metadata[0]);
+            if id <= 5 {
+                let label = [
+                    self.base.labels.armor_types,
+                    self.base.labels.elements,
+                    self.base.labels.skill_types,
+                    self.base.labels.weapon_types,
+                    self.base.labels.equip_types,
+                ][id as usize - 1];
 
-                    self.base.translation_duplicate_map.push((
-                        String::new(),
-                        TranslationEntry::new(
-                            entry_id,
-                            take(metadata),
-                            String::new(),
-                        ),
-                    ));
+                let Some(array) =
+                    mutable!(&self, Self).system_value[label].as_array_mut()
+                else {
+                    continue;
+                };
 
-                    self.base
-                        .translation_duplicate_map
-                        .extend(self.base.translation_map.drain(..));
-                } else {
-                    self.base.purge_empty_translation();
+                for value in array {
+                    self.process_value(value);
                 }
+            } else if id == 6 {
+                self.process_terms();
+            } else if id == 7 {
+                self.process_currency_unit();
             } else {
-                self.base.update_metadata(
-                    entry_id,
-                    Vec::from([(CommentPos::Name, entry_name)]),
-                );
-
-                if entry_id <= 4 {
-                    let label = [
-                        self.base.labels.armor_types,
-                        self.base.labels.elements,
-                        self.base.labels.skill_types,
-                        self.base.labels.weapon_types,
-                        self.base.labels.equip_types,
-                    ][entry_id as usize];
-
-                    let Some(array) = mutable!(&self, Self).system_value[label]
-                        .as_array_mut()
-                    else {
-                        continue;
-                    };
-
-                    for value in array {
-                        self.process_value(value);
-                    }
-                } else if entry_id == 5 {
-                    self.process_terms();
-                } else if entry_id == 6 {
-                    self.process_currency_unit();
-                } else {
-                    self.process_game_title();
-                }
-
-                self.base.flush_translation(Some(entry_id));
+                self.process_game_title();
             }
+
+            self.base.flush_translation(Some(id));
         }
 
-        if !written {
+        if !processed {
             return Ok(None);
         }
 
@@ -2981,7 +2934,9 @@ impl<'a> SystemBase<'a> {
     }
 
     fn process_value(&mut self, value: &mut Value) {
-        let Some(extracted) = self.base.extract_string(value, true) else {
+        let Some(extracted) =
+            mutable!(self, Self).base.extract_string(value, true)
+        else {
             return;
         };
 
@@ -2992,7 +2947,7 @@ impl<'a> SystemBase<'a> {
         };
 
         if self.base.mode.is_read() {
-            mutable!(self, Self).base.insert_string(extracted);
+            self.base.insert_string(extracted);
         } else if self.base.mode.is_write() {
             if let Some(translated) = self.base.get_key(&extracted) {
                 *value = Base::make_string_value(
@@ -3130,7 +3085,7 @@ impl<'a> ScriptBase<'a> {
             ]
         };
 
-        let mut written = false;
+        let mut processed = false;
 
         for (((script_id, script), script_name), mut code) in scripts_array
             .iter_mut()
@@ -3138,94 +3093,90 @@ impl<'a> ScriptBase<'a> {
             .zip(take(&mut scripts.names))
             .zip(take(&mut scripts.contents))
         {
-            let script_id = script_id as u16 + 1;
+            let id = script_id as u16 + 1;
 
-            let flow = self.base.get_translation_map(script_id);
-            if flow.is_break() {
+            if self.base.get_translation_map(id).is_break() {
+                if self.base.mode.is_purge() {
+                    processed = true;
+                }
+
                 continue;
             }
 
-            written = true;
-            self.base.get_ignore_entry(script_id);
-            self.base.lines_ids.push(script_id);
+            processed = true;
 
-            if self.base.mode.is_purge() {
-                self.base.purge_empty_translation();
-            } else {
-                self.base.update_metadata(
-                    script_id,
-                    Vec::from([(CommentPos::Name, script_name.as_str())]),
-                );
-                let (extracted_strings, ranges) = self.extract_strings(&code);
+            self.base.update_metadata(
+                id,
+                Vec::from([(CommentPos::Name, script_name.as_str())]),
+            );
+            let (extracted_strings, ranges) = self.extract_strings(&code);
 
-                if self.base.mode.is_write() {
-                    let mut code_changed = false;
+            if self.base.mode.is_write() {
+                let mut code_changed = false;
 
-                    for (mut extracted, range) in extracted_strings
-                        .into_iter()
-                        .zip(ranges)
-                        .filter(|(s, _)| !s.trim().is_empty())
-                        .rev()
-                        .map(|(s, r)| (Cow::Owned(s), r))
-                    {
-                        let old_extracted = take(&mut extracted);
+                for (mut extracted, range) in extracted_strings
+                    .into_iter()
+                    .zip(ranges)
+                    .filter(|(s, _)| !s.trim().is_empty())
+                    .rev()
+                    .map(|(s, r)| (Cow::Owned(s), r))
+                {
+                    let old_extracted = take(&mut extracted);
 
-                        if self.base.flags.contains(BaseFlags::Romanize) {
-                            extracted = Base::romanize_string(&old_extracted);
-                        } else {
-                            extracted = old_extracted;
-                        }
-
-                        if let Some(translated) = self.base.get_key(&extracted)
-                        {
-                            code.replace_range(range, translated);
-                            code_changed = true;
-                        }
+                    if self.base.flags.contains(BaseFlags::Romanize) {
+                        extracted = Base::romanize_string(&old_extracted);
+                    } else {
+                        extracted = old_extracted;
                     }
 
-                    if code_changed {
-                        let mut buf = Vec::with_capacity(code.len());
-
-                        ZlibEncoder::new(&mut buf, Compression::default())
-                            .write_all(code.as_bytes())
-                            .unwrap();
-
-                        script[2] = Value::bytes(&buf);
+                    if let Some(translated) = self.base.get_key(&extracted) {
+                        code.replace_range(range, translated);
+                        code_changed = true;
                     }
-                } else {
-                    for mut extracted in extracted_strings
-                        .into_iter()
-                        .filter(|s| !s.trim().is_empty())
-                        .map(Cow::Owned)
-                    {
-                        if Base::string_is_only_symbols(&extracted)
-                            || extracted.contains("@window")
-                            || extracted.contains(r"\$game")
-                            || extracted.starts_with(r"\\e")
-                            || extracted.contains("ALPHAC")
-                            || extracted.contains('_')
-                            || regexes.iter().any(|re| re.is_match(&extracted))
-                        {
-                            continue;
-                        }
-
-                        let old_extracted = take(&mut extracted);
-
-                        if self.base.flags.contains(BaseFlags::Romanize) {
-                            extracted = Base::romanize_string(&old_extracted);
-                        } else {
-                            extracted = old_extracted;
-                        }
-
-                        self.base.insert_string(extracted);
-                    }
-
-                    self.base.flush_translation(Some(script_id));
                 }
+
+                if code_changed {
+                    let mut buf = Vec::with_capacity(code.len());
+
+                    ZlibEncoder::new(&mut buf, Compression::default())
+                        .write_all(code.as_bytes())
+                        .unwrap();
+
+                    script[2] = Value::bytes(&buf);
+                }
+            } else {
+                for mut extracted in extracted_strings
+                    .into_iter()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(Cow::Owned)
+                {
+                    if Base::string_is_only_symbols(&extracted)
+                        || extracted.contains("@window")
+                        || extracted.contains(r"\$game")
+                        || extracted.starts_with(r"\\e")
+                        || extracted.contains("ALPHAC")
+                        || extracted.contains('_')
+                        || regexes.iter().any(|re| re.is_match(&extracted))
+                    {
+                        continue;
+                    }
+
+                    let old_extracted = take(&mut extracted);
+
+                    if self.base.flags.contains(BaseFlags::Romanize) {
+                        extracted = Base::romanize_string(&old_extracted);
+                    } else {
+                        extracted = old_extracted;
+                    }
+
+                    self.base.insert_string(extracted);
+                }
+
+                self.base.flush_translation(Some(id));
             }
         }
 
-        if !written {
+        if !processed {
             return Ok(None);
         }
 
@@ -3325,6 +3276,10 @@ impl<'a> ScriptBase<'a> {
     /// # Returns
     ///
     /// A [`Scripts`] struct that holds `numbers`, `scripts` and `names` fields.
+    ///
+    /// # Panics
+    ///
+    /// May panic if decoder gets interrupted.
     #[must_use]
     pub fn decode_scripts(scripts_array: &[Value]) -> Scripts {
         let mut numbers = Vec::with_capacity(scripts_array.len());
@@ -3340,7 +3295,7 @@ impl<'a> ScriptBase<'a> {
             let script_data =
                 unsafe { script[2].as_byte_vec().unwrap_unchecked() };
 
-            let mut decoded_script = Vec::new();
+            let mut decoded_script = Vec::with_capacity(script_data.len());
             ZlibDecoder::new(script_data)
                 .read_to_end(&mut decoded_script)
                 .unwrap();
@@ -3368,7 +3323,7 @@ impl<'a> ScriptBase<'a> {
         Scripts::new(numbers, contents, names)
     }
 
-    /// Encodes decoded [`Scripts`] struct back to [`Vec`] of [`Value`]s
+    /// Encodes decoded [`Scripts`] struct back to [`Vec<Value>`].
     ///
     /// # Parameters
     ///
@@ -3376,11 +3331,11 @@ impl<'a> ScriptBase<'a> {
     ///
     /// # Returns
     ///
-    /// A vector of encoded script entries.
+    /// - [`Vec<Value>`] of encoded script entries.
     ///
     /// # Panics
     ///
-    /// Will panic if encoder interrupts writing data to itself.
+    /// May panic if encoder gets interrupted.
     #[must_use]
     pub fn encode_scripts(scripts: &Scripts) -> Vec<Value> {
         let mut scripts_array = Vec::with_capacity(scripts.contents.len());
@@ -3474,7 +3429,7 @@ impl<'a> PluginBase<'a> {
     ) -> Result<Option<ProcessedData>, Error> {
         self.base.initialize_translation(translation)?;
 
-        // SAFETY: Plugins content should always be like `plugins = [...]`.
+        // SAFETY: Plugins content should always be like `plugins = [...]`, and JSON is always valid UTF-8.
         let plugins_array_str = unsafe {
             std::str::from_utf8_unchecked(content)
                 .split_once('=')
@@ -3490,37 +3445,34 @@ impl<'a> PluginBase<'a> {
                 .unwrap_unchecked()
         };
 
-        let mut written = false;
+        let mut processed = false;
 
         for (plugin_id, plugin_object) in plugins_array.iter_mut().enumerate() {
-            let plugin_id = plugin_id as u16 + 1;
+            let id = plugin_id as u16 + 1;
+
+            if self.base.get_translation_map(id).is_break() {
+                if self.base.mode.is_purge() {
+                    processed = true;
+                }
+
+                continue;
+            }
+
+            processed = true;
 
             // SAFETY: Each plugin always contains name.
             let plugin_name =
                 unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
 
-            let flow = self.base.get_translation_map(plugin_id);
-            if flow.is_break() {
-                continue;
-            }
-
-            written = true;
-            self.base.get_ignore_entry(plugin_id);
-            self.base.lines_ids.push(plugin_id);
-
-            if self.base.mode.is_purge() {
-                self.base.purge_empty_translation();
-            } else {
-                self.base.update_metadata(
-                    plugin_id,
-                    Vec::from([(CommentPos::Name, plugin_name)]),
-                );
-                self.parse_plugin(None, plugin_object);
-                self.base.flush_translation(Some(plugin_id));
-            }
+            self.base.update_metadata(
+                id,
+                Vec::from([(CommentPos::Name, plugin_name)]),
+            );
+            self.parse_plugin(None, plugin_object);
+            self.base.flush_translation(Some(id));
         }
 
-        if !written {
+        if !processed {
             return Ok(None);
         }
 
