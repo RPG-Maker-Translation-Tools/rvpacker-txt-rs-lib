@@ -27,10 +27,8 @@ pub(crate) const EVENT_ID_COMMENT: &str =
     formatcp!("{COMMENT_PREFIX}EVENT ID{COMMENT_SUFFIX}");
 pub(crate) const EVENT_NAME_COMMENT: &str =
     formatcp!("{COMMENT_PREFIX}EVENT NAME{COMMENT_SUFFIX}");
-pub(crate) const EVENT_X_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT X{COMMENT_SUFFIX}");
-pub(crate) const EVENT_Y_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT Y{COMMENT_SUFFIX}");
+pub(crate) const EVENT_POS_COMMENT: &str =
+    formatcp!("{COMMENT_PREFIX}EVENT POS{COMMENT_SUFFIX}");
 
 pub(crate) const MAP_ORDER_COMMENT: &str =
     formatcp!("{COMMENT_PREFIX}ORDER{COMMENT_SUFFIX}");

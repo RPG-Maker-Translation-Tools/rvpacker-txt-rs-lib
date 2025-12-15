@@ -13,6 +13,10 @@ use std::{
 
 /// Generates JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`), and returns the result, that can be converted back later with [`write_file`].
 ///
+/// # Parameters
+///
+/// - `file_content` - content of the RPG Maker data file.
+///
 /// # Returns
 ///
 /// - [`String`] JSON representation of `file_content` RPG Maker file if successful.
@@ -28,6 +32,10 @@ pub fn generate_file(file_content: &[u8]) -> Result<String, Error> {
 }
 
 /// Converts JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`) created with [`generate_file`] back to initial form.
+///
+/// # Parameters
+///
+/// - `file_content` - content of the JSON file created with [`generate_file`].
 ///
 /// # Returns
 ///
@@ -50,6 +58,7 @@ pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
 /// If `force` argument is not set, skips processing already existing files.
 ///
 /// # Parameters
+///
 /// - `source_path` - Path to the directory containing RPG Maker files.
 /// - `output_path` - Path to the directory where `json` folder with `.json` files will be created.
 /// - `force` - Whether to overwrite existing JSON representations.

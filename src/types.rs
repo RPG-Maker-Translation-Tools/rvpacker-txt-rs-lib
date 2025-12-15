@@ -93,7 +93,7 @@ pub(crate) trait EachLine {
 
 impl EachLine for str {
     #[inline]
-    /// Return a [`Vec`] of strings splitted by lines (inclusive), akin to `each_line` in Ruby
+    /// Returns a [`Vec`] of strings splitted by lines (inclusive), akin to `each_line` in Ruby
     fn each_line(&self) -> Vec<String> {
         let mut result = Vec::with_capacity(1024);
         let mut current_line = String::new();
