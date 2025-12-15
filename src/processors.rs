@@ -134,7 +134,7 @@ impl Processor {
             let unchanged = self.hashes.contains(&result);
             new_hashes.insert(result);
 
-            if unchanged && !self.mode.is_default() {
+            if unchanged && self.mode.is_append_default() {
                 info!(
                     "{filename} hasn't changed since the last read. Skipping it. Use `ReadMode::ForceAppend`, if you want to forcefully append data."
                 );
