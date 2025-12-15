@@ -125,6 +125,8 @@ impl Processor {
                 .map(Some)
         };
 
+        let base_ref = unsafe { &mut *(&raw mut base) };
+
         let mut new_hashes = HashSet::with_capacity(self.hashes.len());
         let mut hasher = GxHasher::with_seed(self.duplicate_mode as i64);
         let mut hash = |content: &[u8], filename: &str| {
@@ -150,7 +152,6 @@ impl Processor {
             .flatten()
             .collect();
 
-        let base_ref = unsafe { &mut *(&raw mut base) };
         let engine_extension = get_engine_extension(engine_type);
 
         if self.file_flags.contains(FileFlags::Map) {
@@ -187,8 +188,11 @@ impl Processor {
 
                     let id = filename[3..=5].parse::<u16>().unwrap();
 
+                    let mut skipped = false;
+
                     if hash(&content, filename).is_break() {
                         base.skip_maps.insert(id);
+                        skipped = true;
                     }
 
                     let result = map_base.process(
@@ -206,7 +210,9 @@ impl Processor {
                         }
                     }
 
-                    info!("{filename}: {msg}");
+                    if !skipped {
+                        info!("{filename}: {msg}");
+                    }
                 }
 
                 if !base.mode.is_write() {
