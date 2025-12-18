@@ -201,7 +201,22 @@ impl Labels {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, EnumIs, Display)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    EnumIs,
+    Display,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Serialize,
+    Deserialize,
+)]
+#[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
 pub enum RPGMFileType {
     #[default]
