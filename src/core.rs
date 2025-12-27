@@ -2112,7 +2112,7 @@ impl<'a> MapBase<'a> {
         }
     }
 
-    /// Parses a map ID from a filename by extracting the substring at positions 3 to 5 and converting parsing it to [`u16`].
+    /// Parses a map ID from a filename by extracting digits starting from position 3 and parsing them to [`u16`].
     ///
     /// # Parameters
     ///
@@ -2123,8 +2123,24 @@ impl<'a> MapBase<'a> {
     /// - [`u16`] - The parsed map ID.
     ///
     fn parse_map_id(filename: &str) -> u16 {
+let filename_bytes = filename.as_bytes();
+        let mut id: [u8; 4] = [0; 4];
+
+        // We do this because there might be more than 999 maps.
+        for (i, &byte) in filename_bytes[3..].iter().enumerate() {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+
+            id[i] = byte;
+        }
+
         // SAFETY: We discarded all files, which don't contain a digit at index 3.
-        unsafe { filename[3..=5].parse::<u16>().unwrap_unchecked() }
+        unsafe {
+            str::from_utf8_unchecked(&id)
+.parse::<u16>()
+.unwrap_unchecked()
+}
     }
 
     /// Determines whether a map is unused based on its existence in `self.mapinfos`.
