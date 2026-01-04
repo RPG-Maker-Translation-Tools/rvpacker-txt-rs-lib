@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut base = Base::new(Mode::Read(ReadMode::Default(true)), EngineType::VXAce);
     let mut map_base = MapBase::new(&mut base);
 
-    let mapinfos = read("C:/Game/Data/Mapinfos.rvdata2")?;
+    let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
     map_base.process("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
 
@@ -92,9 +92,9 @@ Flat enums that contain only number variants are serialized with `#[serde(into =
 
 If you could, please consider supporting us through:
 
--   [Ko-fi](https://ko-fi.com/savannstm)
--   [Patreon](https://www.patreon.com/cw/savannstm)
--   [Boosty](https://boosty.to/mcdeimos)
+- [Ko-fi](https://ko-fi.com/savannstm)
+- [Patreon](https://www.patreon.com/cw/savannstm)
+- [Boosty](https://boosty.to/mcdeimos)
 
 Even if you don't, it's fine. We'll continue to do as we right now.
 

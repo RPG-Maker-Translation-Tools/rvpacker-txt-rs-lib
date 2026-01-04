@@ -836,6 +836,9 @@ bitflags! {
 
         /// No effect, for convenience.
         const DisableCustomProcessing = 1 << 4;
+
+        /// Skip obsolete entries that not in game files anymore on reads with [`ReadMode::Append`].
+        const SkipObsolete = 1 << 5;
     }
 }
 

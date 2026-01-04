@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use gxhash::{GxHasher, HashSet, HashSetExt};
-use log::info;
+use log::{debug, info};
 use std::{
     fs::{DirEntry, create_dir_all, read, read_dir, read_to_string, write},
     hash::Hash,
@@ -108,7 +108,13 @@ impl Processor {
                 .map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
 
-        let msg = match base.mode {
+        let pre_msg = match base.mode {
+            Mode::Read(_) => "Started reading.",
+            Mode::Write => "Started writing.",
+            Mode::Purge => "Started purging.",
+        };
+
+        let post_msg = match base.mode {
             Mode::Read(_) => "Successfully read.",
             Mode::Write => "Successfully written.",
             Mode::Purge => "Successfully purged.",
@@ -158,7 +164,7 @@ impl Processor {
             let mut map_base = MapBase::new(base_ref);
 
             let mapinfos_path =
-                source_path.join(format!("Mapinfos.{engine_extension}"));
+                source_path.join(format!("MapInfos.{engine_extension}"));
             let mapinfos = read(&mapinfos_path)
                 .map_err(|e| Error::Io(mapinfos_path, e))?;
 
@@ -182,6 +188,8 @@ impl Processor {
                     let path = entry.path();
                     let filename =
                         path.file_name().and_then(|p| p.to_str()).unwrap();
+
+                    debug!("{filename}: {pre_msg}");
 
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
@@ -211,7 +219,9 @@ impl Processor {
                     }
 
                     if !skipped {
-                        info!("{filename}: {msg}");
+                        info!("{filename}: {post_msg}");
+                    } else {
+                        info!("{filename}: Skipped.");
                     }
                 }
 
@@ -236,6 +246,8 @@ impl Processor {
                 let path = entry.path();
                 let filename =
                     path.file_name().and_then(|p| p.to_str()).unwrap();
+
+                debug!("{filename}: {pre_msg}");
 
                 let file_flag = FileFlags::from_str(filename).unwrap();
 
@@ -282,14 +294,13 @@ impl Processor {
                             .map_err(|e| Error::Io(output_file_path, e))?;
                     }
 
-                    info!("{filename}: {msg}");
+                    info!("{filename}: {post_msg}");
                 }
             }
         }
 
         if self.file_flags.contains(FileFlags::System) {
             let system_base = SystemBase::new(base_ref);
-
             let translation_file_path = translation_path.join("system.txt");
 
             if base.mode.is_default_default() && translation_file_path.exists()
@@ -300,8 +311,10 @@ impl Processor {
                 );
             } else {
                 let translation = load_translation(&translation_file_path)?;
-
                 let filename = format!("System.{engine_extension}");
+
+                debug!("{filename}: {pre_msg}");
+
                 let system_file_path = source_path.join(&filename);
                 let content = read(&system_file_path)
                     .map_err(|e| Error::Io(system_file_path, e))?;
@@ -321,7 +334,7 @@ impl Processor {
                             .map_err(|e| Error::Io(output_path, e))?;
                     }
 
-                    info!("{filename}: {msg}");
+                    info!("{filename}: {post_msg}");
                 }
             }
         }
@@ -341,6 +354,8 @@ impl Processor {
                         translation_file_path.display()
                     );
                 } else {
+                    debug!("plugins.txt: {pre_msg}");
+
                     let translation = load_translation(&translation_file_path)?;
 
                     let plugins_file_path =
@@ -366,7 +381,7 @@ impl Processor {
                                 .map_err(|e| Error::Io(output_path, e))?;
                         }
 
-                        info!("plugins.js: {msg}");
+                        info!("plugins.js: {post_msg}");
                     }
                 }
             } else {
@@ -383,6 +398,7 @@ impl Processor {
                         translation_file_path.display()
                     );
                 } else {
+                    debug!("scripts.txt: {pre_msg}");
                     let translation = load_translation(&translation_file_path)?;
 
                     let filename = format!("Scripts.{engine_extension}");
@@ -405,7 +421,7 @@ impl Processor {
                                 .map_err(|e| Error::Io(output_path, e))?;
                         }
 
-                        info!("{filename}: {msg}");
+                        info!("{filename}: {post_msg}");
                     }
                 }
             }

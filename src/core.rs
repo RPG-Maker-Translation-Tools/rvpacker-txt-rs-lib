@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use gxhash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use gxhash::{GxBuildHasher, HashMap, HashMapExt, HashSet, HashSetExt};
 use indexmap::map::Entry;
 use log::warn;
 use marshal_rs::{Get, Value, ValueType, dump, load_binary, load_utf8};
@@ -29,7 +29,7 @@ use std::{
     fmt::Write as FmtWrite,
     fs::DirEntry,
     io::{Read, Write},
-    mem::{take, transmute},
+    mem::{replace, take, transmute},
     ops::{ControlFlow, Range},
     path::Path,
 };
@@ -99,7 +99,7 @@ thread_local! {
     });
 }
 
-trait CustomReplace {
+pub(crate) trait CustomReplace {
     /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the format that the library uses (`\#`).
     fn normalize(&self) -> Cow<'_, str>;
 
@@ -408,6 +408,135 @@ pub fn get_system_title(
         .ok_or(Error::NoTitle)
 }
 
+/// Replaces Eastern symbols in string to their Western (or sort of Western) equivalents.
+///
+/// # Parameters
+///
+/// - `string` - String to romanize.
+///
+/// # Returns
+///
+/// - [`Cow<str>`] - as owned if replacements occurred, as borrowed otherwise.
+///
+pub(crate) fn romanize_string(string: &str) -> Cow<'_, str> {
+    let mut result: Option<String> = None;
+
+    for (i, char) in string.chars().enumerate() {
+        let replacement = match char {
+            '。' => ".",
+            '、' | '，' => ",",
+            '・' | '※' => "·",
+            '゠' => "–",
+            '＝' | 'ー' => "—",
+            '「' | '」' | '〈' | '〉' => "'",
+            '『' | '』' | '《' | '》' => "\"",
+            '（' | '〔' | '｟' | '〘' => "(",
+            '）' | '〕' | '｠' | '〙' => ")",
+            '｛' => "{",
+            '｝' => "}",
+            '［' | '【' | '〖' | '〚' => "[",
+            '］' | '】' | '〗' | '〛' => "]",
+            '〜' => "~",
+            '？' => "?",
+            '！' => "!",
+            '：' => ":",
+            '…' | '‥' => "...",
+            '　' => " ",
+            'Ⅰ' => "I",
+            'ⅰ' => "i",
+            'Ⅱ' => "II",
+            'ⅱ' => "ii",
+            'Ⅲ' => "III",
+            'ⅲ' => "iii",
+            'Ⅳ' => "IV",
+            'ⅳ' => "iv",
+            'Ⅴ' => "V",
+            'ⅴ' => "v",
+            'Ⅵ' => "VI",
+            'ⅵ' => "vi",
+            'Ⅶ' => "VII",
+            'ⅶ' => "vii",
+            'Ⅷ' => "VIII",
+            'ⅷ' => "viii",
+            'Ⅸ' => "IX",
+            'ⅸ' => "ix",
+            'Ⅹ' => "X",
+            'ⅹ' => "x",
+            'Ⅺ' => "XI",
+            'ⅺ' => "xi",
+            'Ⅻ' => "XII",
+            'ⅻ' => "xii",
+            'Ⅼ' => "L",
+            'ⅼ' => "l",
+            'Ⅽ' => "C",
+            'ⅽ' => "c",
+            'Ⅾ' => "D",
+            'ⅾ' => "d",
+            'Ⅿ' => "M",
+            'ⅿ' => "m",
+            _ => {
+                if let Some(s) = &mut result {
+                    s.push(char);
+                }
+                continue;
+            }
+        };
+
+        if result.is_none() {
+            let mut s = String::with_capacity(string.len());
+            s.push_str(&string[..string.char_indices().nth(i).unwrap().0]);
+            result = Some(s);
+        }
+
+        result.as_mut().unwrap().push_str(replacement);
+    }
+
+    match result {
+        Some(s) => Cow::Owned(s),
+        None => Cow::Borrowed(string),
+    }
+}
+
+pub(crate) fn push_metadata(
+    output: &mut Vec<u8>,
+    id: u16,
+    metadata: &[String],
+) {
+    output.extend_from_slice(ID_COMMENT.as_bytes());
+    output.extend_from_slice(SEPARATOR.as_bytes());
+    output.extend_from_slice(id.to_string().as_bytes());
+    output.push(b'\n');
+
+    for comment in metadata.iter().filter(|c| !c.is_empty()) {
+        output.extend_from_slice(comment.as_bytes());
+        output.push(b'\n');
+    }
+}
+
+pub(crate) fn push_entries(
+    output: &mut Vec<u8>,
+    source: &str,
+    translation: &TranslationEntry,
+) {
+    for comment in translation.comments.iter().filter(|c| !c.is_empty()) {
+        output.extend_from_slice(comment.as_bytes());
+        output.push(b'\n');
+    }
+
+    if !source.is_empty() {
+        output.extend_from_slice(source.as_bytes());
+        output.extend_from_slice(SEPARATOR.as_bytes());
+    }
+
+    if !translation.is_empty() {
+        output.extend_from_slice(translation.as_bytes());
+    }
+
+    if !source.is_empty() || !translation.is_empty() {
+        output.push(b'\n');
+    }
+}
+
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
@@ -430,11 +559,11 @@ pub struct Base {
     metadata: HashMap<u16, Comments>,
 
     translation_maps: IndexMapGx<u16, TranslationMap>,
-    leaked_translation_map_reference: &'static mut TranslationMap,
     translation_map: &'static mut TranslationMap,
 
     accumulated_translation:
         Vec<(u16, Comments, Vec<Cow<'static, str>>, TranslationMap)>,
+    top_level_comments: HashMap<u16, Vec<String>>,
 
     file_type: RPGMFileType,
     labels: Labels,
@@ -442,9 +571,6 @@ pub struct Base {
 
 impl Default for Base {
     fn default() -> Self {
-        let leaked_translation_map =
-            Box::leak(Box::new(TranslationMap::default()));
-
         Self {
             mode: Mode::Read(ReadMode::Default(false)),
             flags: BaseFlags::empty(),
@@ -462,11 +588,11 @@ impl Default for Base {
 
             metadata: HashMap::default(),
 
-            translation_map: mutable!(leaked_translation_map, TranslationMap),
-            leaked_translation_map_reference: leaked_translation_map,
+            translation_map: unsafe { &mut *(16 as *mut TranslationMap) },
             translation_maps: IndexMapGx::default(),
 
             accumulated_translation: Vec::new(),
+            top_level_comments: HashMap::default(),
 
             map_events: false,
             file_type: RPGMFileType::Invalid,
@@ -519,18 +645,12 @@ impl<'a> Base {
 
         self.metadata.clear();
 
-        self.reset_translation_map();
         self.translation_maps.clear();
         self.accumulated_translation.clear();
     }
 
-    pub fn reset_translation_map(&mut self) {
-        self.translation_map =
-            mutable!(self.leaked_translation_map_reference, TranslationMap);
-    }
-
     fn process_parameter(
-        &mut self,
+        &self,
         code: Code,
         mut parameter: &str,
     ) -> Option<String> {
@@ -616,7 +736,11 @@ impl<'a> Base {
 
         if self.mode.is_write() {
             self.get_key(parameter).map(|t| {
-                let mut translation = String::new();
+                let mut translation = if extra_strings.is_empty() {
+                    t.translation.to_string()
+                } else {
+                    String::new()
+                };
 
                 for (string, append) in extra_strings {
                     if append {
@@ -630,7 +754,7 @@ impl<'a> Base {
             })
         } else {
             Some(if self.flags.contains(BaseFlags::Romanize) {
-                Self::romanize_string(parameter).into_owned()
+                romanize_string(parameter).into_owned()
             } else {
                 parameter.to_string()
             })
@@ -644,7 +768,7 @@ impl<'a> Base {
         parameter: &str,
     ) {
         let parameter = if self.flags.contains(BaseFlags::Romanize) {
-            Self::romanize_string(parameter)
+            romanize_string(parameter)
         } else {
             Cow::Borrowed(parameter)
         };
@@ -704,7 +828,7 @@ impl<'a> Base {
             let old_joined = take(&mut joined);
 
             if self.flags.contains(BaseFlags::Romanize) {
-                joined = Self::romanize_string(&old_joined);
+                joined = romanize_string(&old_joined);
             } else {
                 joined = old_joined;
             }
@@ -875,33 +999,33 @@ impl<'a> Base {
     /// - `id` - ID of the entry to get.
     ///
     fn get_ignore_entry(&mut self, id: u16) {
-        if self
+        if !self
             .flags
             .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
         {
-            let mut entry_name: &str =
-                &format!("{file}: {id}", file = self.file_type);
-
-            if self.flags.contains(BaseFlags::Ignore)
-                && self.duplicate_mode.is_remove()
-            {
-                entry_name = &entry_name
-                    [..unsafe { entry_name.find(':').unwrap_unchecked() }];
-            }
-
-            // SAFETY: We're bypassing lifetime and ownership rules here, converting `&'a IgnoreEntry` to `&'static IgnoreEntry`
-            // Because compiler doesn't understand that the access to `self.ignore_entry` is optional based on `self.flags`.
-            let static_entry = mutable!(
-                self.ignore_map
-                    .entry(format!(
-                        "{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"
-                    ))
-                    .or_default(),
-                IgnoreEntry
-            );
-
-            self.ignore_entry = static_entry;
+            return;
         }
+
+        let mut entry_name: &str =
+            &format!("{file}: {id}", file = self.file_type);
+
+        if self.flags.contains(BaseFlags::Ignore)
+            && self.duplicate_mode.is_remove()
+        {
+            entry_name = &entry_name
+                [..unsafe { entry_name.find(':').unwrap_unchecked() }];
+        }
+
+        // SAFETY: We're bypassing lifetime and ownership rules here, converting `&'a IgnoreEntry` to `&'static IgnoreEntry`
+        // Because compiler doesn't understand that the access to `self.ignore_entry` is optional based on `self.flags`.
+        let static_entry = mutable!(
+            self.ignore_map
+                .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"))
+                .or_default(),
+            IgnoreEntry
+        );
+
+        self.ignore_entry = static_entry;
     }
 
     /// Parses RPG Maker file from passed content.
@@ -972,9 +1096,8 @@ impl<'a> Base {
             false
         };
 
-        self.translation_maps.clear();
-
-        let mut translation_lines = translation.lines().enumerate().peekable();
+        self.translation_map = Box::leak(Box::new(TranslationMap::default()));
+        let mut translation_lines = translation.lines().enumerate();
 
         if self.game_type.is_termina() && self.file_type.is_items() {
             for _ in 0..4 {
@@ -1001,152 +1124,151 @@ impl<'a> Base {
                 .insert(u16::MAX, self.translation_map.drain(..).collect());
         }
 
-        loop {
-            let Some((_, next)) = translation_lines.next() else {
-                // Translation drained
-                break;
-            };
+        let mut top_level_comments: Vec<String> = Vec::new();
+        let mut comments: Comments = smallvec![String::new(); 3];
+        let mut id = 0;
+        let mut first = true;
 
-            let mut comments: Comments = smallvec![String::new(); 3];
+        for (i, line) in translation_lines {
+            if line.starts_with(ID_COMMENT) {
+                if id != 0 {
+                    if self.translation_map.is_empty() {
+                        let metadata_entry = self.metadata.entry(id).or_insert(
+                            replace(&mut comments, smallvec![String::new(); 3]),
+                        );
 
-            let id = next
-                .strip_prefix(ID_COMMENT)
-                .and_then(|n| n.strip_prefix(SEPARATOR))
-                .and_then(|n| n.trim_end().parse::<u16>().ok())
-                .unwrap();
+                        let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
-            let mut first = true;
-
-            while let Some((_, line)) = translation_lines.peek() {
-                if line.starts_with(ID_COMMENT) {
-                    break;
-                }
-
-                // SAFETY: We just peeked at this item.
-                let (i, line) =
-                    unsafe { translation_lines.next().unwrap_unchecked() };
-
-                if line.starts_with(COMMENT_PREFIX) {
-                    if [EVENT_ID_COMMENT, EVENT_NAME_COMMENT, EVENT_POS_COMMENT]
-                        .into_iter()
-                        .any(|c| line.starts_with(c))
-                    {
-                        continue;
-                    }
-
-                    if first {
-                        let pos = CommentPos::from_str(line);
-
-                        // TODO: Handle top-level comments that don't correspond to required here
-                        if pos == CommentPos::None {
+                        if self.mode.is_write()
+                            && (display_name.is_empty()
+                                || display_name.ends_with(SEPARATOR))
+                        {
                             continue;
                         }
 
-                        if pos == CommentPos::DisplayName {
-                            let suffix_pos =
-                                line.rfind(COMMENT_SUFFIX).unwrap();
-                            let prefix_len =
-                                MAP_DISPLAY_NAME_COMMENT_PREFIX.len();
-                            let source = &line[prefix_len..suffix_pos];
-                            let translation =
-                                line.rsplit_once(SEPARATOR).unwrap().1;
-                            comments[pos as usize] =
-                                format!("{source}{SEPARATOR}{translation}");
-                        } else {
-                            comments[pos as usize] = line
-                                .split_once(SEPARATOR)
-                                .unwrap()
-                                .1
-                                .to_string();
-                        }
-                    } else {
-                        comments.push(line.to_string());
+                        self.translation_maps
+                            .entry(id)
+                            .or_insert(TranslationMap::with_capacity(512));
                     }
 
-                    continue;
+                    self.translation_maps
+                        .insert(id, self.translation_map.drain(..).collect());
                 }
 
-                // This split is essentially free, since we're not cloning to String
-                let split: Vec<&str> = line.split(SEPARATOR).collect();
+                id = line
+                    .strip_prefix(ID_COMMENT)
+                    .and_then(|n| n.strip_prefix(SEPARATOR))
+                    .and_then(|n| n.trim_end().parse::<u16>().ok())
+                    .unwrap();
+                first = true;
+                comments = smallvec![String::new(); 3];
+                top_level_comments = Vec::new();
 
-                if split.len() < 2 {
-                    warn!(
-                        "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
-                        i = i + 1,
-                        file = self.file_type.to_string().to_lowercase()
-                    );
-                    comments.clear();
-                    continue;
-                }
-
-                // SAFETY: We just checked for split length.
-                let source =
-                    Cow::Borrowed(*unsafe { split.first().unwrap_unchecked() });
-
-                let translation = Cow::Borrowed(
-                    split
-                        .into_iter()
-                        .skip(1)
-                        .rfind(|x| !x.is_empty())
-                        .unwrap_or_default(),
-                );
-
-                let (source, translation) = if trim {
-                    (
-                        Cow::Borrowed(source.trim()),
-                        Cow::Borrowed(translation.trim()),
-                    )
-                } else {
-                    (source, translation)
-                };
-
-                let (source, translation) = if self.mode.is_write() {
-                    // Discard lines with empty translation, those are unused on write
-                    if translation.is_empty() {
-                        continue;
-                    }
-
-                    (source.denormalize(), translation.denormalize())
-                } else {
-                    (source, translation)
-                };
-
-                if first {
-                    self.metadata.insert(id, comments.drain(..).collect());
-                    first = false;
-                }
-
-                self.translation_map.insert(
-                    source.into(),
-                    TranslationEntry {
-                        comments: comments.drain(..).collect(),
-                        translation: translation.into(),
-                    },
-                );
+                continue;
             }
 
-            if self.translation_map.is_empty() {
-                let metadata_entry = self
-                    .metadata
-                    .entry(id)
-                    .or_insert(comments.drain(..).collect());
-
-                let display_name = &metadata_entry[DISPLAY_NAME_POS];
-
-                if self.mode.is_write()
-                    && (display_name.is_empty()
-                        || display_name.ends_with(SEPARATOR))
+            if line.starts_with(COMMENT_PREFIX) {
+                if [EVENT_ID_COMMENT, EVENT_NAME_COMMENT, EVENT_POS_COMMENT]
+                    .into_iter()
+                    .any(|c| line.starts_with(c))
                 {
                     continue;
                 }
 
-                self.translation_maps
-                    .entry(id)
-                    .or_insert(TranslationMap::with_capacity(512));
+                if first {
+                    let pos = CommentPos::from_str(line);
+
+                    if pos == CommentPos::None {
+                        top_level_comments.push(line.to_string());
+                        continue;
+                    }
+
+                    if pos == CommentPos::DisplayName {
+                        let suffix_pos = line.rfind(COMMENT_SUFFIX).unwrap();
+                        let prefix_len = MAP_DISPLAY_NAME_COMMENT_PREFIX.len();
+                        let source = &line[prefix_len..suffix_pos];
+                        let translation =
+                            line.rsplit_once(SEPARATOR).unwrap().1;
+                        comments[pos as usize] =
+                            format!("{source}{SEPARATOR}{translation}");
+                    } else {
+                        comments[pos as usize] =
+                            line.split_once(SEPARATOR).unwrap().1.to_string();
+                    }
+                } else {
+                    comments.push(line.to_string());
+                }
+
+                continue;
             }
 
-            self.translation_maps
-                .insert(id, self.translation_map.drain(..).collect());
+            // This split is essentially free, since we're not cloning to String
+            let split: Vec<&str> = line.split(SEPARATOR).collect();
+
+            if split.len() < 2 {
+                warn!(
+                    "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
+                    i = i + 1,
+                    file = self.file_type.to_string().to_lowercase()
+                );
+                comments = smallvec![String::new(); 3];
+                continue;
+            }
+
+            // SAFETY: We just checked for split length.
+            let source =
+                Cow::Borrowed(*unsafe { split.first().unwrap_unchecked() });
+
+            let translation = Cow::Borrowed(
+                split
+                    .into_iter()
+                    .skip(1)
+                    .rfind(|x| !x.is_empty())
+                    .unwrap_or_default(),
+            );
+
+            let (source, translation) = if trim {
+                (
+                    Cow::Borrowed(source.trim()),
+                    Cow::Borrowed(translation.trim()),
+                )
+            } else {
+                (source, translation)
+            };
+
+            let (source, translation) = if self.mode.is_write() {
+                // Discard lines with empty translation, those are unused on write
+                if translation.is_empty() {
+                    continue;
+                }
+
+                (source.denormalize(), translation.denormalize())
+            } else {
+                (source, translation)
+            };
+
+            if first {
+                self.top_level_comments
+                    .insert(id, top_level_comments.drain(..).collect());
+                self.metadata.insert(id, comments.drain(..).collect());
+                first = false;
+            }
+
+            self.translation_map.insert(
+                source.into(),
+                TranslationEntry {
+                    comments: replace(
+                        &mut comments,
+                        smallvec![String::new(); 3],
+                    )
+                    .into_vec(),
+                    translation: translation.into(),
+                },
+            );
+        }
+
+        unsafe {
+            let _ = Box::from_raw(std::ptr::from_mut(self.translation_map));
         }
 
         Ok(())
@@ -1238,95 +1360,6 @@ impl<'a> Base {
             Value::string(string)
         } else {
             Value::bytes(string.as_bytes())
-        }
-    }
-
-    /// Replaces Eastern symbols in string to their Western (or sort of Western) equivalents.
-    ///
-    /// # Parameters
-    ///
-    /// - `string` - String to romanize.
-    ///
-    /// # Returns
-    ///
-    /// - [`Cow<str>`] - as owned if replacements occured, as borrowed otherwise.
-    ///
-    fn romanize_string(string: &str) -> Cow<'_, str> {
-        let mut result: Option<String> = None;
-
-        for (i, char) in string.chars().enumerate() {
-            let replacement = match char {
-                '。' => ".",
-                '、' | '，' => ",",
-                '・' | '※' => "·",
-                '゠' => "–",
-                '＝' | 'ー' => "—",
-                '「' | '」' | '〈' | '〉' => "'",
-                '『' | '』' | '《' | '》' => "\"",
-                '（' | '〔' | '｟' | '〘' => "(",
-                '）' | '〕' | '｠' | '〙' => ")",
-                '｛' => "{",
-                '｝' => "}",
-                '［' | '【' | '〖' | '〚' => "[",
-                '］' | '】' | '〗' | '〛' => "]",
-                '〜' => "~",
-                '？' => "?",
-                '！' => "!",
-                '：' => ":",
-                '…' | '‥' => "...",
-                '　' => " ",
-                'Ⅰ' => "I",
-                'ⅰ' => "i",
-                'Ⅱ' => "II",
-                'ⅱ' => "ii",
-                'Ⅲ' => "III",
-                'ⅲ' => "iii",
-                'Ⅳ' => "IV",
-                'ⅳ' => "iv",
-                'Ⅴ' => "V",
-                'ⅴ' => "v",
-                'Ⅵ' => "VI",
-                'ⅵ' => "vi",
-                'Ⅶ' => "VII",
-                'ⅶ' => "vii",
-                'Ⅷ' => "VIII",
-                'ⅷ' => "viii",
-                'Ⅸ' => "IX",
-                'ⅸ' => "ix",
-                'Ⅹ' => "X",
-                'ⅹ' => "x",
-                'Ⅺ' => "XI",
-                'ⅺ' => "xi",
-                'Ⅻ' => "XII",
-                'ⅻ' => "xii",
-                'Ⅼ' => "L",
-                'ⅼ' => "l",
-                'Ⅽ' => "C",
-                'ⅽ' => "c",
-                'Ⅾ' => "D",
-                'ⅾ' => "d",
-                'Ⅿ' => "M",
-                'ⅿ' => "m",
-                _ => {
-                    if let Some(s) = &mut result {
-                        s.push(char);
-                    }
-                    continue;
-                }
-            };
-
-            if result.is_none() {
-                let mut s = String::with_capacity(string.len());
-                s.push_str(&string[..string.char_indices().nth(i).unwrap().0]);
-                result = Some(s);
-            }
-
-            result.as_mut().unwrap().push_str(replacement);
-        }
-
-        match result {
-            Some(s) => Cow::Owned(s),
-            None => Cow::Borrowed(string),
         }
     }
 
@@ -1432,38 +1465,8 @@ impl<'a> Base {
         })
     }
 
-    /// Checks if `key` is present in translation.
+    /// ONLY CALLED ON WRITE.
     ///
-    /// This will check if `key` is present in `self.translation_map`, and also will seek it in maps of `self.translation_maps` if `self.duplicate_mode` is [`DuplicateMode::Remove`].
-    ///
-    /// # Parameters
-    ///
-    /// - `key` - key to find in translation.
-    ///
-    /// # Returns
-    ///
-    /// - [`bool`] - whether the key is present in translation.
-    ///
-    fn contains_key(&self, key: &str) -> bool {
-        let contains = self.translation_map.contains_key(key);
-
-        if contains {
-            return contains;
-        }
-
-        if self.duplicate_mode.is_remove() {
-            for translation_map in self.translation_maps.values() {
-                let contains = translation_map.contains_key(key);
-
-                if contains {
-                    return contains;
-                }
-            }
-        }
-
-        false
-    }
-
     /// Gets the [`TranslationEntry`] corresponding to the `key` from translation.
     ///
     /// This will return [`TranslationEntry`] corresponding to the `key` from `self.translation_map`, and also will seek it in maps `self.translation_maps` if `self.duplicate_mode` is [`DuplicateMode::Remove`].
@@ -1478,13 +1481,9 @@ impl<'a> Base {
     /// - [`&TranslationEntry`] - entry corresponding to the `key`.
     ///
     fn get_key(&self, key: &str) -> Option<&TranslationEntry> {
-        let value = self.translation_map.get(key);
-
-        if value.is_some() {
-            return value;
-        }
-
-        if self.duplicate_mode.is_remove() {
+        if self.duplicate_mode.is_allow() {
+            self.translation_map.get(key)
+        } else {
             for translation_map in self.translation_maps.values() {
                 let option = translation_map.get(key);
 
@@ -1492,9 +1491,8 @@ impl<'a> Base {
                     return option;
                 }
             }
+            None
         }
-
-        None
     }
 
     /// Returns the RPG Maker data if `self.mode` is [`Mode::Write`], else returns translation data.
@@ -1563,42 +1561,6 @@ impl<'a> Base {
         comments
     }
 
-    fn push_metadata(output: &mut Vec<u8>, id: u16, metadata: &[String]) {
-        output.extend_from_slice(ID_COMMENT.as_bytes());
-        output.extend_from_slice(SEPARATOR.as_bytes());
-        output.extend_from_slice(id.to_string().as_bytes());
-        output.push(b'\n');
-
-        for comment in metadata.iter().filter(|c| !c.is_empty()) {
-            output.extend_from_slice(comment.as_bytes());
-            output.push(b'\n');
-        }
-    }
-
-    fn push_entries(
-        output: &mut Vec<u8>,
-        source: &str,
-        translation: &TranslationEntry,
-    ) {
-        for comment in translation.comments.iter().filter(|c| !c.is_empty()) {
-            output.extend_from_slice(comment.as_bytes());
-            output.push(b'\n');
-        }
-
-        if !source.is_empty() {
-            output.extend_from_slice(source.as_bytes());
-            output.extend_from_slice(SEPARATOR.as_bytes());
-        }
-
-        if !translation.is_empty() {
-            output.extend_from_slice(translation.as_bytes());
-        }
-
-        if !source.is_empty() || !translation.is_empty() {
-            output.push(b'\n');
-        }
-    }
-
     fn finish_translation(&mut self) -> ProcessedData {
         let allow_dup =
             self.duplicate_mode.is_allow() || self.file_type.is_misc();
@@ -1623,18 +1585,27 @@ impl<'a> Base {
             output.push(b'\n');
         }
 
-        let mut accumulated_map = if allow_dup {
-            TranslationMap::default()
+        let mut accumulated_map: indexmap::IndexMap<
+            String,
+            (u16, TranslationEntry),
+            gxhash::GxBuildHasher,
+        > = if allow_dup {
+            indexmap::IndexMap::default()
         } else {
             let len = self.translation_maps.values().fold(0, |mut acc, map| {
                 acc += map.len();
                 acc
             });
 
-            self.translation_maps.drain(..).map(|(_, m)| m).fold(
-                TranslationMap::with_capacity(len),
-                |mut acc, map| {
-                    acc.extend(map);
+            self.translation_maps.drain(..).fold(
+                indexmap::IndexMap::with_capacity_and_hasher(
+                    len,
+                    GxBuildHasher::default(),
+                ),
+                |mut acc, (k, v)| {
+                    for (key, value) in v {
+                        acc.insert(key, (k, value));
+                    }
                     acc
                 },
             )
@@ -1655,18 +1626,25 @@ impl<'a> Base {
 
             if skip {
                 if self.mode.is_append() || self.mode.is_purge() {
-                    Self::push_metadata(&mut output, *id, meta);
+                    push_metadata(&mut output, *id, meta);
 
                     for (source, translation) in map {
-                        Self::push_entries(&mut output, source, translation);
+                        push_entries(&mut output, source, translation);
                     }
                 }
 
                 continue;
             }
 
+            if let Some(comments) = self.top_level_comments.get(id) {
+                for comment in comments {
+                    output.extend_from_slice(comment.as_bytes());
+                    output.push(b'\n');
+                }
+            }
+
             if self.mode.is_purge() {
-                Self::push_metadata(&mut output, *id, meta);
+                push_metadata(&mut output, *id, meta);
 
                 for (mut source, translation) in take(map) {
                     if translation.is_empty() {
@@ -1679,7 +1657,7 @@ impl<'a> Base {
                         }
                     }
 
-                    Self::push_entries(&mut output, &source, &translation);
+                    push_entries(&mut output, &source, &translation);
                 }
 
                 continue;
@@ -1700,7 +1678,7 @@ impl<'a> Base {
                 let should_push_other = !lines.is_empty() || has_display_name;
 
                 if should_push_map || should_push_other {
-                    Self::push_metadata(&mut output, *id, meta);
+                    push_metadata(&mut output, *id, meta);
                 }
 
                 prev_id = *id;
@@ -1713,7 +1691,7 @@ impl<'a> Base {
 
             if !next_lines_empty {
                 if let Some((_, entry)) = map.first() {
-                    Self::push_entries(&mut output, "", entry);
+                    push_entries(&mut output, "", entry);
                 }
             }
 
@@ -1724,11 +1702,33 @@ impl<'a> Base {
                     }
                     (false, true) => accumulated_map
                         .swap_remove(source.as_ref())
+                        .unzip()
+                        .1
                         .unwrap_or_default(),
                     (_, false) => TranslationEntry::default(),
                 };
 
-                Self::push_entries(&mut output, source, &translation);
+                push_entries(&mut output, source, &translation);
+            }
+
+            if self.flags.contains(BaseFlags::SkipObsolete) {
+                continue;
+            }
+
+            match (allow_dup, self.mode.is_append()) {
+                (true, true) => {
+                    for (source, translation) in map {
+                        push_entries(&mut output, source, translation);
+                    }
+                }
+                (false, true) => {
+                    for (source, (i, translation)) in &accumulated_map {
+                        if *id == *i {
+                            push_entries(&mut output, source, translation);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -2012,72 +2012,6 @@ impl<'a> MapBase<'a> {
                     (CommentPos::DisplayName, &display_name),
                 ]),
             );
-
-            let events = if self.base.engine_type.is_new() {
-                // SAFETY: Always an array in new maps.
-                EventIterator::New(unsafe {
-                    map_object[self.base.labels.events]
-                        .as_array_mut()
-                        .unwrap_unchecked()
-                        .iter_mut()
-                        .skip(1)
-                })
-            } else {
-                // SAFETY: Always a hashmap in old maps.
-                EventIterator::Old(unsafe {
-                    map_object[self.base.labels.events]
-                        .as_hashmap_mut()
-                        .unwrap_unchecked()
-                        .values_mut()
-                })
-            };
-
-            for event in events {
-                if event.is_null() {
-                    continue;
-                }
-
-                let Some(pages) = mutable!(event, Value)
-                    [self.base.labels.pages]
-                    .as_array_mut()
-                else {
-                    continue;
-                };
-
-                if self.base.map_events {
-                    self.base.flush_translation(id);
-
-                    let event_id = event["id"].as_int().unwrap();
-                    let event_name = event["name"].as_str().unwrap();
-                    let event_x = event["x"].as_int().unwrap();
-                    let event_y = event["y"].as_int().unwrap();
-
-                    self.base.accumulated_translation.push((
-                        id,
-                        SmallVec::default(),
-                        Vec::new(),
-                        TranslationMap::from_iter([(String::new(), TranslationEntry {
-                            comments: vec![format!(
-                                "{EVENT_ID_COMMENT}{SEPARATOR}{event_id}"
-                            ),
-                            format!("{EVENT_NAME_COMMENT}{SEPARATOR}{event_name}"),
-                            format!("{EVENT_POS_COMMENT}{SEPARATOR}{event_x},{event_y}")],
-                            translation: String::new(),
-                        })])
-                    ));
-                }
-
-                for page in pages {
-                    // SAFETY: List is always in map files.
-                    let list = unsafe {
-                        page[self.base.labels.list]
-                            .as_array_mut()
-                            .unwrap_unchecked()
-                    };
-
-                    self.base.process_list(list);
-                }
-            }
         } else if !display_name.is_empty() {
             let display_name_comment_line = &self.base.metadata[&id][2];
 
@@ -2104,6 +2038,71 @@ impl<'a> MapBase<'a> {
             }
         }
 
+        let events = if self.base.engine_type.is_new() {
+            // SAFETY: Always an array in new maps.
+            EventIterator::New(unsafe {
+                map_object[self.base.labels.events]
+                    .as_array_mut()
+                    .unwrap_unchecked()
+                    .iter_mut()
+                    .skip(1)
+            })
+        } else {
+            // SAFETY: Always a hashmap in old maps.
+            EventIterator::Old(unsafe {
+                map_object[self.base.labels.events]
+                    .as_hashmap_mut()
+                    .unwrap_unchecked()
+                    .values_mut()
+            })
+        };
+
+        for event in events {
+            if event.is_null() {
+                continue;
+            }
+
+            let Some(pages) =
+                mutable!(event, Value)[self.base.labels.pages].as_array_mut()
+            else {
+                continue;
+            };
+
+            if self.base.map_events {
+                self.base.flush_translation(id);
+
+                let event_id = event["id"].as_int().unwrap();
+                let event_name = event["name"].as_str().unwrap();
+                let event_x = event["x"].as_int().unwrap();
+                let event_y = event["y"].as_int().unwrap();
+
+                self.base.accumulated_translation.push((
+                        id,
+                        SmallVec::default(),
+                        Vec::new(),
+                        TranslationMap::from_iter([(String::new(), TranslationEntry {
+                            comments: vec![format!(
+                                "{EVENT_ID_COMMENT}{SEPARATOR}{event_id}"
+                            ),
+                            format!("{EVENT_NAME_COMMENT}{SEPARATOR}{event_name}"),
+                            format!("{EVENT_POS_COMMENT}{SEPARATOR}{event_x},{event_y}")],
+                            translation: String::new(),
+                        })])
+                    ));
+            }
+
+            for page in pages {
+                // SAFETY: List is always in map files.
+                let list = unsafe {
+                    page[self.base.labels.list]
+                        .as_array_mut()
+                        .unwrap_unchecked()
+                };
+
+                self.base.process_list(list);
+            }
+        }
+
         if self.base.mode.is_write() {
             Ok(Some(self.base.finish(map_object)))
         } else {
@@ -2123,7 +2122,7 @@ impl<'a> MapBase<'a> {
     /// - [`u16`] - The parsed map ID.
     ///
     fn parse_map_id(filename: &str) -> u16 {
-let filename_bytes = filename.as_bytes();
+        let filename_bytes = filename.as_bytes();
         let mut id: [u8; 4] = [0; 4];
 
         // We do this because there might be more than 999 maps.
@@ -2135,12 +2134,14 @@ let filename_bytes = filename.as_bytes();
             id[i] = byte;
         }
 
+        let parsed = &id[..id.iter().position(|&c| c == b'\0').unwrap_or(4)];
+
         // SAFETY: We discarded all files, which don't contain a digit at index 3.
         unsafe {
-            str::from_utf8_unchecked(&id)
-.parse::<u16>()
-.unwrap_unchecked()
-}
+            str::from_utf8_unchecked(parsed)
+                .parse::<u16>()
+                .unwrap_unchecked()
+        }
     }
 
     /// Determines whether a map is unused based on its existence in `self.mapinfos`.
@@ -2228,7 +2229,7 @@ let filename_bytes = filename.as_bytes();
                         let name_replaced = name.normalize();
 
                         if self.base.flags.contains(BaseFlags::Romanize) {
-                            Base::romanize_string(&name_replaced)
+                            romanize_string(&name_replaced)
                         } else {
                             name_replaced
                         }
@@ -2365,7 +2366,7 @@ impl<'a> OtherBase<'a> {
     }
 
     fn process_variable_termina(
-        &mut self,
+        &self,
         mut variable_text: Cow<'_, str>,
         variable_type: Variable,
         note_text: Option<&str>,
@@ -2582,7 +2583,7 @@ impl<'a> OtherBase<'a> {
 
     #[allow(clippy::collapsible_match, clippy::single_match)]
     fn process_variable(
-        &mut self,
+        &self,
         variable_text: &str,
         note_text: Option<&str>,
         variable_type: Variable,
@@ -2635,7 +2636,7 @@ impl<'a> OtherBase<'a> {
         let old_variable_text = take(&mut variable_text);
 
         if self.base.flags.contains(BaseFlags::Romanize) {
-            variable_text = Base::romanize_string(&old_variable_text);
+            variable_text = romanize_string(&old_variable_text);
         } else {
             variable_text = old_variable_text;
         }
@@ -2742,7 +2743,7 @@ impl<'a> OtherBase<'a> {
             let mut string = if self.base.mode.is_write()
                 && self.base.flags.contains(BaseFlags::Romanize)
             {
-                Base::romanize_string(string)
+                romanize_string(string)
             } else {
                 Cow::Borrowed(string)
             };
@@ -2765,11 +2766,9 @@ impl<'a> OtherBase<'a> {
                 None
             };
 
-            let Some(parsed) = mutable!(self, Self).process_variable(
-                &string,
-                note_text,
-                variable_type,
-            ) else {
+            let Some(parsed) =
+                self.process_variable(&string, note_text, variable_type)
+            else {
                 continue;
             };
 
@@ -2978,7 +2977,7 @@ impl<'a> SystemBase<'a> {
         };
 
         let extracted = if self.base.flags.contains(BaseFlags::Romanize) {
-            Base::romanize_string(extracted)
+            romanize_string(extracted)
         } else {
             Cow::Borrowed(extracted)
         };
@@ -3001,8 +3000,9 @@ impl<'a> SystemBase<'a> {
 
     fn process_currency_unit(&mut self) {
         if !self.base.engine_type.is_new() {
-            mutable!(self, Self).process_value(
-                &mut self.system_value[self.base.labels.currency_unit],
+            self.process_value(
+                &mut mutable!(self, Self).system_value
+                    [self.base.labels.currency_unit],
             );
         }
     }
@@ -3023,7 +3023,7 @@ impl<'a> SystemBase<'a> {
             };
 
             let game_title = if self.base.flags.contains(BaseFlags::Romanize) {
-                Base::romanize_string(game_title)
+                romanize_string(game_title)
             } else {
                 Cow::Borrowed(game_title)
             };
@@ -3161,7 +3161,7 @@ impl<'a> ScriptBase<'a> {
                     let old_extracted = take(&mut extracted);
 
                     if self.base.flags.contains(BaseFlags::Romanize) {
-                        extracted = Base::romanize_string(&old_extracted);
+                        extracted = romanize_string(&old_extracted);
                     } else {
                         extracted = old_extracted;
                     }
@@ -3201,7 +3201,7 @@ impl<'a> ScriptBase<'a> {
                     let old_extracted = take(&mut extracted);
 
                     if self.base.flags.contains(BaseFlags::Romanize) {
-                        extracted = Base::romanize_string(&old_extracted);
+                        extracted = romanize_string(&old_extracted);
                     } else {
                         extracted = old_extracted;
                     }
@@ -3498,7 +3498,6 @@ impl<'a> PluginBase<'a> {
             }
 
             processed = true;
-
             // SAFETY: Each plugin always contains name.
             let plugin_name =
                 unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
@@ -3555,16 +3554,12 @@ impl<'a> PluginBase<'a> {
                     let old_string = take(&mut string);
 
                     if self.base.flags.contains(BaseFlags::Romanize) {
-                        string = Base::romanize_string(&old_string);
+                        string = romanize_string(&old_string);
                     } else {
                         string = old_string;
                     }
 
                     if self.base.mode.is_write() {
-                        if !self.base.contains_key(&string) {
-                            return;
-                        }
-
                         if let Some(translated) = self.base.get_key(&string) {
                             *value = Value::string(translated.as_str());
                         }
