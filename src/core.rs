@@ -3326,8 +3326,25 @@ impl<'a> ScriptBase<'a> {
 
         for script in scripts_array {
             // SAFETY: Scripts always have a layout like this. `0` is magic number, `1` is name and `2` is actual script data.
-            let script_number =
-                unsafe { script[0].as_int().unwrap_unchecked() };
+            let script_number = if script[0].is_bytes() {
+                unsafe {
+                    str::from_utf8_unchecked(
+                        script[0].as_byte_vec().unwrap_unchecked(),
+                    )
+                    .parse::<i32>()
+                    .unwrap_unchecked()
+                }
+            } else if script[0].is_string() {
+                unsafe {
+                    script[0]
+                        .as_str()
+                        .unwrap_unchecked()
+                        .parse::<i32>()
+                        .unwrap_unchecked()
+                }
+            } else {
+                unsafe { script[0].as_int().unwrap_unchecked() }
+};
             let script_name_data =
                 unsafe { script[1].as_byte_vec().unwrap_unchecked() };
             let script_data =
