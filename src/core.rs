@@ -352,7 +352,7 @@ pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
     }
 
     for line in split_lines(ini_file_content) {
-        if line.starts_with(b"Title") {
+        if line.to_ascii_lowercase().starts_with(b"title") {
             if let Some(pos) = line.iter().position(|&b| b == b'=') {
                 let right = &line[pos + 1..];
                 let trimmed = trim_bytes(right);
@@ -3344,7 +3344,7 @@ impl<'a> ScriptBase<'a> {
                 }
             } else {
                 unsafe { script[0].as_int().unwrap_unchecked() }
-};
+            };
             let script_name_data =
                 unsafe { script[1].as_byte_vec().unwrap_unchecked() };
             let script_data =
