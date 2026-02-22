@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "11.1.1"
+version = "11.1.2"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.82.0"
@@ -22,7 +22,7 @@ phf = { version = "0.13.1", features = ["macros"] }
 smallvec = "1.15.1"
 gxhash = { version = "3.5.0", features = ["deterministic"] }
 const_format = "0.2.35"
-bitflags = { version = "2.10.0", features = ["serde"] }
+bitflags = { version = "2.11.0", features = ["serde"] }
 strum_macros = "0.27.2"
 thiserror = "2.0.18"
 num_enum = "0.7.5"
