@@ -662,6 +662,7 @@ pub enum EngineType {
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
+    #[repr(transparent)]
     /// There's four [`FileFlags`] variants:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
@@ -806,6 +807,7 @@ impl Default for FileFlags {
 bitflags! {
     #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
+    #[repr(transparent)]
     /// Indicates different modes of processing the text.
     ///
     /// Check each flag to see what it does.
