@@ -2039,14 +2039,15 @@ impl<'a> MapBase<'a> {
         }
 
         let events = if self.base.engine_type.is_new() {
-            // SAFETY: Always an array in new maps.
-            EventIterator::New(unsafe {
-                map_object[self.base.labels.events]
-                    .as_array_mut()
-                    .unwrap_unchecked()
-                    .iter_mut()
-                    .skip(1)
-            })
+            // Previously, this line was using `unwrap_unchecked`, because it assumed, that events are always an array in MV/MZ.
+            // This is not the case. This array can also contain just `bool`. Now, it returns, if encounters something else than an array.
+            let Some(array) =
+                map_object[self.base.labels.events].as_array_mut()
+            else {
+                return Ok(None);
+            };
+
+            EventIterator::New(array.iter_mut().skip(1))
         } else {
             // SAFETY: Always a hashmap in old maps.
             EventIterator::Old(unsafe {
