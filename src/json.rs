@@ -101,7 +101,7 @@ pub fn generate<P: AsRef<Path>>(
             .join(Path::new(&filename).with_extension("json"));
 
         if !force && output_file_path.exists() {
-log::info!(
+            log::info!(
                 "{}: File already exists. Use force mode to overwrite.",
                 output_file_path.display()
             );
@@ -133,8 +133,9 @@ log::info!(
                     .fold(String::new(), |mut result, ((a, b), c)| {
                         let _ = write!(
                             result,
-                            "{a}<##>\n{b}<##>\n{c}\n<###>\n",
-                            c = c.replace("\r\n", "\n")
+                            "<!-- SCRIPT: {a}, {b} -->\n{c}{end}",
+                            c = c.replace("\r\n", "\n"),
+                            end = if c.ends_with('\n') { "" } else { "\n" }
                         );
 
                         result
@@ -218,22 +219,46 @@ pub fn write<P: AsRef<Path>>(
                 Vec::with_capacity(256),
             );
 
-            for script in content.split("\n<###>\n") {
-                let mut split = script.split("<##>\n");
+            let mut prev_content_start = 0;
+            let mut read = 0;
 
-                let number = unsafe {
-                    split
-                        .next()
-                        .unwrap_unchecked()
-                        .parse::<i32>()
-                        .unwrap_unchecked()
-                };
-                let name = unsafe { split.next().unwrap_unchecked() };
-                let content = unsafe { split.next().unwrap_unchecked() };
+            for script_line in content.split_inclusive('\n') {
+                if script_line.starts_with("<!-- SCRIPT") {
+                    let without_prefix_and_suffix = unsafe {
+                        script_line
+                            .strip_prefix("<!-- SCRIPT: ")
+                            .unwrap_unchecked()
+                            .strip_suffix(" -->\n")
+                            .unwrap_unchecked()
+                    };
 
-                scripts.numbers.push(number);
-                scripts.contents.push(content.to_string());
-                scripts.names.push(name.to_string());
+                    let (magic_number, name) = unsafe {
+                        without_prefix_and_suffix
+                            .split_once(',')
+                            .unwrap_unchecked()
+                    };
+
+                    scripts.numbers.push(unsafe {
+                        magic_number.parse::<i32>().unwrap_unchecked()
+                    });
+                    scripts.names.push(name.to_string());
+
+                    if prev_content_start != 0 {
+                        scripts.contents.push(
+                            content[prev_content_start..read].to_string(),
+                        );
+                    }
+
+                    prev_content_start = read + script_line.len();
+                }
+
+                read += script_line.len();
+            }
+
+            if prev_content_start != 0 && prev_content_start < content.len() {
+                scripts
+                    .contents
+                    .push(content[prev_content_start..].to_string());
             }
 
             dump(Value::array(ScriptBase::encode_scripts(&scripts)), None)
