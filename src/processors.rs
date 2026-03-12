@@ -194,7 +194,7 @@ impl Processor {
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
-                    let id = filename[3..=5].parse::<u16>().unwrap();
+                    let id = MapBase::parse_map_id(filename);
 
                     let mut skipped = false;
 

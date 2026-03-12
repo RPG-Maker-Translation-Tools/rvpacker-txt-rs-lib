@@ -2122,7 +2122,7 @@ impl<'a> MapBase<'a> {
     ///
     /// - [`u16`] - The parsed map ID.
     ///
-    fn parse_map_id(filename: &str) -> u16 {
+    pub fn parse_map_id(filename: &str) -> u16 {
         let filename_bytes = filename.as_bytes();
         let mut id: [u8; 4] = [0; 4];
 
