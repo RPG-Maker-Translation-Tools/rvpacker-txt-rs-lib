@@ -101,6 +101,10 @@ pub fn generate<P: AsRef<Path>>(
             .join(Path::new(&filename).with_extension("json"));
 
         if !force && output_file_path.exists() {
+log::info!(
+                "{}: File already exists. Use force mode to overwrite.",
+                output_file_path.display()
+            );
             continue;
         }
 
