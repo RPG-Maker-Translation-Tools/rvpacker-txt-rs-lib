@@ -495,7 +495,7 @@ impl Default for Reader {
     fn default() -> Self {
         Self {
             processor: Processor {
-                mode: Mode::Read(ReadMode::Default(false)),
+                mode: Mode::Read(ReadMode::Default { force: false }),
                 ..Default::default()
             },
         }

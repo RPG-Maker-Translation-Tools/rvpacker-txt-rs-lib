@@ -572,7 +572,7 @@ pub struct Base {
 impl Default for Base {
     fn default() -> Self {
         Self {
-            mode: Mode::Read(ReadMode::Default(false)),
+            mode: Mode::Read(ReadMode::Default { force: false }),
             flags: BaseFlags::empty(),
             game_type: GameType::None,
             engine_type: EngineType::New,

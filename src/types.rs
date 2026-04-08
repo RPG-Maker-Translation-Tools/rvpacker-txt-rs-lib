@@ -399,43 +399,43 @@ impl Mode {
     /// Checks if [`Mode`] is [`ReadMode::Default`] with any force boolean.
     #[must_use]
     pub const fn is_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default(_)))
+        matches!(self, Self::Read(ReadMode::Default { force: _ }))
     }
 
     /// Checks if [`Mode`] is [`ReadMode::Append`] with any force boolean.
     #[must_use]
     pub const fn is_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append(_)))
+        matches!(self, Self::Read(ReadMode::Append { force: _ }))
     }
 
     /// Checks if [`Mode`] is [`ReadMode::Default`] without a force boolean.
     #[must_use]
     pub const fn is_default_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default(false)))
+        matches!(self, Self::Read(ReadMode::Default { force: false }))
     }
 
     /// Checks if [`Mode`] is [`ReadMode::Append`] without a force boolean.
     #[must_use]
     pub const fn is_append_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append(false)))
+        matches!(self, Self::Read(ReadMode::Append { force: false }))
     }
 
     /// Checks if [`Mode`] is [`ReadMode::Default`] with a force boolean.
     #[must_use]
     pub const fn is_force(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default(true)))
+        matches!(self, Self::Read(ReadMode::Default { force: true }))
     }
 
     /// Checks if [`Mode`] is [`ReadMode::Append`] with a force boolean.
     #[must_use]
     pub const fn is_force_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append(true)))
+        matches!(self, Self::Read(ReadMode::Append { force: true }))
     }
 }
 
 impl Default for Mode {
     fn default() -> Self {
-        Self::Read(ReadMode::Default(false))
+        Self::Read(ReadMode::Default { force: false })
     }
 }
 
@@ -540,21 +540,21 @@ pub enum GameType {
 ///
 /// Each of the modes holds a [`bool`]. It defines whether to read in force mode (overwrite existing files/bypass hashes).
 pub enum ReadMode {
-    Default(bool),
-    Append(bool),
+    Default { force: bool },
+    Append { force: bool },
 }
 
 impl Default for ReadMode {
     fn default() -> Self {
-        Self::Default(false)
+        Self::Default { force: false }
     }
 }
 
 impl From<ReadMode> for u8 {
     fn from(val: ReadMode) -> Self {
         match val {
-            ReadMode::Default(force) => u8::from(force),
-            ReadMode::Append(force) => {
+            ReadMode::Default { force } => u8::from(force),
+            ReadMode::Append { force } => {
                 if force {
                     3
                 } else {
@@ -570,8 +570,8 @@ impl TryFrom<u8> for ReadMode {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Ok(match value {
-            0..=1 => Self::Default(value != 0),
-            2..=3 => Self::Append(value != 2),
+            0..=1 => Self::Default { force: value != 0 },
+            2..=3 => Self::Append { force: value != 2 },
             _ => return Err("Expected a number from 0 to 3"),
         })
     }
@@ -582,10 +582,10 @@ impl FromStr for ReadMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "default" => Self::Default(false),
-            "append" => Self::Append(false),
-            "force" => Self::Default(true),
-            "force-append" => Self::Append(true),
+            "default" => Self::Default { force: false },
+            "append" => Self::Append { force: false },
+            "force" => Self::Default { force: true },
+            "force-append" => Self::Append { force: true },
             _ => {
                 return Err(
                     "Expected `default`, `append`, `force` or `force-append` string",
@@ -599,37 +599,37 @@ impl ReadMode {
     /// Checks if [`ReadMode`] is [`ReadMode::Default`] with any force boolean.
     #[must_use]
     pub const fn is_default(self) -> bool {
-        matches!(self, ReadMode::Default(_))
+        matches!(self, ReadMode::Default { force: _ })
     }
 
     /// Checks if [`ReadMode`] is [`ReadMode::Append`] with any force boolean.
     #[must_use]
     pub const fn is_append(self) -> bool {
-        matches!(self, ReadMode::Append(_))
+        matches!(self, ReadMode::Append { force: _ })
     }
 
     /// Checks if [`ReadMode`] is [`ReadMode::Default`] without a force boolean.
     #[must_use]
     pub const fn is_default_default(self) -> bool {
-        matches!(self, ReadMode::Default(false))
+        matches!(self, ReadMode::Default { force: false })
     }
 
     /// Checks if [`ReadMode`] is [`ReadMode::Append`] without a force boolean.
     #[must_use]
     pub const fn is_append_default(self) -> bool {
-        matches!(self, ReadMode::Append(false))
+        matches!(self, ReadMode::Append { force: false })
     }
 
     /// Checks if [`ReadMode`] is [`ReadMode::Default`] with a force boolean.
     #[must_use]
     pub const fn is_force(self) -> bool {
-        matches!(self, ReadMode::Default(true))
+        matches!(self, ReadMode::Default { force: true })
     }
 
     /// Checks if [`ReadMode`] is [`ReadMode::Append`] with a force boolean.
     #[must_use]
     pub const fn is_force_append(self) -> bool {
-        matches!(self, ReadMode::Append(true))
+        matches!(self, ReadMode::Append { force: true })
     }
 }
 

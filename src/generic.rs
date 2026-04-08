@@ -26,7 +26,7 @@ pub struct GenericBase {
 impl Default for GenericBase {
     fn default() -> Self {
         Self {
-            mode: Mode::Read(ReadMode::Default(false)),
+            mode: Mode::Read(ReadMode::Default { force: false }),
             flags: BaseFlags::empty(),
 
             ignore_map: IgnoreMap::default(),
