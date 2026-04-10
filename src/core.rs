@@ -572,7 +572,7 @@ pub struct Base {
 impl Default for Base {
     fn default() -> Self {
         Self {
-            mode: Mode::Read(ReadMode::Default { force: false }),
+            mode: Mode::Read(ReadMode::Default(false)),
             flags: BaseFlags::empty(),
             game_type: GameType::None,
             engine_type: EngineType::New,
@@ -1265,6 +1265,38 @@ impl<'a> Base {
                     translation: translation.into(),
                 },
             );
+        }
+
+        // Flush the last parsed section at EOF.
+        // Without this, the final `<!-- ID --><#>...` block is dropped if there
+        // is no following ID marker to trigger the regular section flush path.
+        if id != 0 {
+            let mut skip_entry = false;
+
+            if self.translation_map.is_empty() {
+                let metadata_entry = self
+                    .metadata
+                    .entry(id)
+                    .or_insert(replace(&mut comments, smallvec![String::new(); 3]));
+
+                let display_name = &metadata_entry[DISPLAY_NAME_POS];
+
+                if self.mode.is_write()
+                    && (display_name.is_empty()
+                        || display_name.ends_with(SEPARATOR))
+                {
+                    skip_entry = true;
+                } else {
+                    self.translation_maps
+                        .entry(id)
+                        .or_insert(TranslationMap::with_capacity(512));
+                }
+            }
+
+            if !skip_entry {
+                self.translation_maps
+                    .insert(id, self.translation_map.drain(..).collect());
+            }
         }
 
         unsafe {
