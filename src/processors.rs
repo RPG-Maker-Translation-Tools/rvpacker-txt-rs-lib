@@ -2,7 +2,7 @@ use crate::{
     RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
     core::{
-        Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
+        self, Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
         filter_maps, filter_other, get_engine_extension, parse_ignore,
     },
     types::{
@@ -32,6 +32,7 @@ pub(crate) struct Processor {
     pub skip_maps: Vec<u16>,
     pub skip_events: Vec<(RPGMFileType, Vec<u16>)>,
     pub map_events: bool,
+    pub game_title: String,
 }
 
 impl Processor {
@@ -300,7 +301,7 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let system_base = SystemBase::new(base_ref);
+            let mut system_base = SystemBase::new(base_ref);
             let translation_file_path = translation_path.join("system.txt");
 
             if base.mode.is_default_default() && translation_file_path.exists()
@@ -310,6 +311,8 @@ impl Processor {
                     translation_file_path.display()
                 );
             } else {
+                system_base.set_game_title(&self.game_title);
+
                 let translation = load_translation(&translation_file_path)?;
                 let filename = format!("System.{engine_extension}");
 
@@ -548,7 +551,7 @@ impl Reader {
     /// use rvpacker_txt_rs_lib::{Reader, ReadMode};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_read_mode(ReadMode::Default(false));
+    /// reader.set_read_mode(ReadMode::Default { force: false });
     /// ```
     pub fn set_read_mode(&mut self, mode: ReadMode) {
         self.processor.mode = Mode::Read(mode);
@@ -572,6 +575,37 @@ impl Reader {
     /// ```
     pub fn set_game_type(&mut self, game_type: GameType) {
         self.processor.game_type = game_type;
+    }
+
+    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace.
+    ///
+    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8-encoded.
+    ///
+    /// Since there's no way to tell the encoding, it's user responsibility to call [`core::get_ini_title`], find title's encoding through trial-and-error, and pass it here.
+    ///
+    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, if title even exists there.
+    ///
+    /// # Parameters
+    ///
+    /// `title` - UTF-8 encoded [`&str`] title.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rvpacker_txt_rs_lib::{Reader, GameType};
+    ///
+    /// let ini_file_contents = std::fs::read("./Game.ini").unwrap();
+    /// let ini_title = rvpacker_txt_rs_lib::core::get_ini_title(&ini_file_contents).unwrap();
+    ///
+    /// // Right now we're assuming that INI title is UTF-8, but it may not be UTF-8.
+    /// // Set up encoding-rs and find the right encoding.
+    /// let ini_title = std::str::from_utf8(&ini_title).unwrap();
+    ///
+    /// let mut reader = Reader::new();
+    /// reader.set_game_title(ini_title);
+    /// ```
+    pub fn set_game_title(&mut self, game_title: &str) {
+        self.processor.game_title = game_title.to_owned();
     }
 
     /// Sets the flags of the processor.
@@ -810,7 +844,7 @@ impl ReaderBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, ReadMode};
     ///
-    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default(false)).build();
+    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default { force: false }).build();
     /// ```
     #[must_use]
     pub fn read_mode(mut self, mode: ReadMode) -> Self {
@@ -853,6 +887,38 @@ impl ReaderBuilder {
     #[must_use]
     pub fn game_type(mut self, game_type: GameType) -> Self {
         self.reader.processor.game_type = game_type;
+        self
+    }
+
+    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace.
+    ///
+    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8-encoded.
+    ///
+    /// Since there's no way to tell the encoding, it's user responsibility to call [`core::get_ini_title`], find title's encoding through trial-and-error, and pass it here.
+    ///
+    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, even if title exists there.
+    ///
+    /// # Parameters
+    ///
+    /// `title` - UTF-8 encoded [`&str`] title.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rvpacker_txt_rs_lib::{ReaderBuilder, GameType};
+    ///
+    /// let ini_file_contents = std::fs::read("./Game.ini").unwrap();
+    /// let ini_title = rvpacker_txt_rs_lib::core::get_ini_title(&ini_file_contents).unwrap();
+    ///
+    /// // Right now we're assuming that INI title is UTF-8, but it may not be UTF-8.
+    /// // Set up encoding-rs and find the right encoding.
+    /// let ini_title = std::str::from_utf8(&ini_title).unwrap();
+    ///
+    /// let reader = ReaderBuilder::new().game_title(ini_title).build();
+    /// ```
+    #[must_use]
+    pub fn game_title(mut self, game_title: &str) -> Self {
+        self.reader.processor.game_title = game_title.to_string();
         self
     }
 

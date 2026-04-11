@@ -1274,10 +1274,9 @@ impl<'a> Base {
             let mut skip_entry = false;
 
             if self.translation_map.is_empty() {
-                let metadata_entry = self
-                    .metadata
-                    .entry(id)
-                    .or_insert(replace(&mut comments, smallvec![String::new(); 3]));
+                let metadata_entry = self.metadata.entry(id).or_insert(
+                    replace(&mut comments, smallvec![String::new(); 3]),
+                );
 
                 let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
@@ -1917,7 +1916,7 @@ impl<'a> MapBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     /// let mut map_base = MapBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -1941,7 +1940,7 @@ impl<'a> MapBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
@@ -1994,7 +1993,7 @@ impl<'a> MapBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
@@ -2288,7 +2287,7 @@ impl<'a> OtherBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, OtherBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     /// let mut other_base = OtherBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -2329,7 +2328,7 @@ impl<'a> OtherBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     ///     let mut other_base = OtherBase::new(&mut base);
     ///
     ///     let other_file_content = read("C:/Game/Data/Actors.rvdata2")?;
@@ -2849,7 +2848,7 @@ impl<'a> SystemBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, SystemBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     /// let mut system_base = SystemBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -2860,6 +2859,28 @@ impl<'a> SystemBase<'a> {
             base,
             game_title: String::new(),
             system_value: Value::default(),
+        }
+    }
+
+    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace. It should be called only when reading.
+    ///
+    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8 encoded.
+    ///
+    /// Since there's no way to tell the encoding, it's user responsibility to call [`get_ini_title`], find title's encoding through trial-and-error, and pass it here.
+    ///
+    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, if title even exists there.
+    ///
+    /// # Parameters
+    ///
+    /// `title` - UTF-8 encoded [`&str`] title.
+    ///
+    /// # Note
+    ///
+    /// This function is no-op if mode is not [`Mode::Read`].
+    ///
+    pub fn set_game_title(&mut self, title: &str) {
+        if self.base.mode.is_read() {
+            self.game_title = title.to_string();
         }
     }
 
@@ -2893,7 +2914,7 @@ impl<'a> SystemBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     ///     let mut system_base = SystemBase::new(&mut base);
     ///
     ///     let system_file_content = read("C:/Game/Data/System.rvdata2")?;
@@ -3046,22 +3067,33 @@ impl<'a> SystemBase<'a> {
                 self.system_value[self.base.labels.game_title] =
                     Value::string(self.game_title.as_str());
             }
-        } else if let Some(game_title_value) =
-            self.system_value.get(self.base.labels.game_title)
-        {
-            let Some(game_title) =
-                self.base.extract_string(game_title_value, true)
-            else {
+        } else {
+            // User previously set the game title through set_game_title
+            if !self.game_title.is_empty() {
+                mutable!(self, Self)
+                    .base
+                    .insert_string(Cow::Owned(take(&mut self.game_title)));
                 return;
-            };
+            }
 
-            let game_title = if self.base.flags.contains(BaseFlags::Romanize) {
-                romanize_string(game_title)
-            } else {
-                Cow::Borrowed(game_title)
-            };
+            if let Some(game_title_value) =
+                self.system_value.get(self.base.labels.game_title)
+            {
+                let Some(game_title) =
+                    self.base.extract_string(game_title_value, true)
+                else {
+                    return;
+                };
 
-            mutable!(self, Self).base.insert_string(game_title);
+                let game_title =
+                    if self.base.flags.contains(BaseFlags::Romanize) {
+                        romanize_string(game_title)
+                    } else {
+                        Cow::Borrowed(game_title)
+                    };
+
+                mutable!(self, Self).base.insert_string(game_title);
+            }
         }
     }
 }
@@ -3079,7 +3111,7 @@ impl<'a> ScriptBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, ScriptBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     /// let mut script_base = ScriptBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -3119,7 +3151,7 @@ impl<'a> ScriptBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
     ///     let mut script_base = ScriptBase::new(&mut base);
     ///
     ///     let script_file_content = read("C:/Game/Data/Scripts.rvdata2")?;
@@ -3464,7 +3496,7 @@ impl<'a> PluginBase<'a> {
     /// ```
     /// use rvpacker_txt_rs_lib::{core::{Base, PluginBase}, Mode, ReadMode, EngineType};
     ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::New);
+    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::New);
     /// let mut plugin_base = PluginBase::new(&mut base);
     /// ```
     pub fn new(base: &'a mut Base) -> Self {
@@ -3503,7 +3535,7 @@ impl<'a> PluginBase<'a> {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default(false)), EngineType::New);
+    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::New);
     ///     let mut plugin_base = PluginBase::new(&mut base);
     ///
     ///     let plugins_file_content = read("plugins.js")?;
