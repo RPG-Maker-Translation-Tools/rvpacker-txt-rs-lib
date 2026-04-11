@@ -13,9 +13,12 @@ use std::{
 
 /// Generates JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`), and returns the result, that can be converted back later with [`write_file`].
 ///
+/// This function has special case for when `filename` starts with "Scripts" - it will generate a text representation of Ruby code.
+///
 /// # Parameters
 ///
 /// - `file_content` - content of the RPG Maker data file.
+/// - `filename` - name of the RPG Maker data file.
 ///
 /// # Returns
 ///
@@ -26,9 +29,38 @@ use std::{
 ///
 /// - [`Error::MarshalLoad`] - if parsing `file_content` Marshal data fails.
 ///
-pub fn generate_file(file_content: &[u8]) -> Result<String, Error> {
-    let loaded = load_utf8(file_content, INSTANCE_VAR_PREFIX)?;
-    Ok(unsafe { to_string_pretty(&loaded).unwrap_unchecked() })
+pub fn generate_file(
+    file_content: &[u8],
+    filename: &str,
+) -> Result<String, Error> {
+    if filename.starts_with("Scripts") {
+        let scripts_array = unsafe {
+            load_binary(file_content, INSTANCE_VAR_PREFIX)?
+                .into_array()
+                .unwrap_unchecked()
+        };
+
+        let scripts = ScriptBase::decode_scripts(&scripts_array);
+
+        Ok(scripts
+            .numbers
+            .into_iter()
+            .zip(scripts.names)
+            .zip(scripts.contents)
+            .fold(String::new(), |mut result, ((a, b), c)| {
+                let _ = write!(
+                    result,
+                    "<!-- SCRIPT: {a}, {b} -->\n{c}{end}",
+                    c = c.replace("\r\n", "\n"),
+                    end = if c.ends_with('\n') { "" } else { "\n" }
+                );
+
+                result
+            }))
+    } else {
+        let loaded = load_utf8(file_content, INSTANCE_VAR_PREFIX)?;
+        Ok(unsafe { to_string_pretty(&loaded).unwrap_unchecked() })
+    }
 }
 
 /// Converts JSON representation of RPG Maker data file (`rxdata`/`rvdata`/`rvdata2`) created with [`generate_file`] back to initial form.
@@ -111,38 +143,13 @@ pub fn generate<P: AsRef<Path>>(
         let path = entry.path();
         let content = read(&path).map_err(|e| Error::Io(path, e))?;
 
-        let output_content =
-            if (unsafe { output_file_path.file_stem().unwrap_unchecked() }
-                == "Scripts")
-            {
-                let scripts_array = unsafe {
-                    load_binary(&content, INSTANCE_VAR_PREFIX)?
-                        .into_array()
-                        .unwrap_unchecked()
-                };
+        let filename_str = filename.to_string_lossy();
 
-                let scripts = ScriptBase::decode_scripts(&scripts_array);
+        if filename_str.starts_with("Scripts") {
+            output_file_path.set_extension("rb");
+        }
 
-                output_file_path.set_extension("rb");
-
-                scripts
-                    .numbers
-                    .into_iter()
-                    .zip(scripts.names)
-                    .zip(scripts.contents)
-                    .fold(String::new(), |mut result, ((a, b), c)| {
-                        let _ = write!(
-                            result,
-                            "<!-- SCRIPT: {a}, {b} -->\n{c}{end}",
-                            c = c.replace("\r\n", "\n"),
-                            end = if c.ends_with('\n') { "" } else { "\n" }
-                        );
-
-                        result
-                    })
-            } else {
-                generate_file(&content)?
-            };
+        let output_content = generate_file(&content, filename_str.as_ref())?;
 
         fs::write(&output_file_path, output_content)
             .map_err(|e| Error::Io(output_file_path, e))?;
