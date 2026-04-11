@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "12.0.0"
+version = "12.1.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2021"
 rust-version = "1.82.0"
@@ -13,7 +13,7 @@ license-file = "LICENSE.md"
 [dependencies]
 encoding_rs = "0.8.35"
 flate2 = "1.1.9"
-indexmap = "2.13.1"
+indexmap = "2.14.0"
 marshal-rs = "2.0.1"
 regex = "1.12.3"
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
