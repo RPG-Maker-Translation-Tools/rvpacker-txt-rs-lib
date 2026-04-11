@@ -29,6 +29,3 @@ num_enum = "0.7.6"
 log = "0.4.29"
 strum = { version = "0.28.0", features = ["strum_macros"] }
 rayon = { version = "1.11.0", optional = true }
-
-[features]
-parallel = ["dep:rayon"]
