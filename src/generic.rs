@@ -4,7 +4,7 @@ use crate::{
     constants::{
         AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG,
     },
-    core::{CustomReplace, push_entries, romanize_string},
+    core::{CustomReplace, push_entries},
 };
 use log::warn;
 use marshal_rs::{Value, ValueType, load_utf8};
@@ -56,12 +56,6 @@ impl GenericBase {
                     } else {
                         str
                     });
-
-                let str = if self.flags.contains(BaseFlags::Romanize) {
-                    romanize_string(str.as_ref())
-                } else {
-                    str
-                };
 
                 if self.flags.contains(BaseFlags::Ignore)
                     && self.ignore_entry.contains(str.as_ref())

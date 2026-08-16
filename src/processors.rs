@@ -623,7 +623,7 @@ impl Reader {
     /// use rvpacker_txt_rs_lib::{Reader, BaseFlags};
     ///
     /// let mut reader = Reader::new();
-    /// reader.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// reader.set_flags(BaseFlags::Trim);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
         self.processor.flags = flags;
@@ -826,7 +826,7 @@ impl ReaderBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{ReaderBuilder, BaseFlags};
     ///
-    /// let mut reader = ReaderBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// let mut reader = ReaderBuilder::new().with_flags(BaseFlags::Trim);
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {
@@ -1083,7 +1083,7 @@ impl Writer {
     /// use rvpacker_txt_rs_lib::{Writer, BaseFlags};
     ///
     /// let mut writer = Writer::new();
-    /// writer.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// writer.set_flags(BaseFlags::Trim);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
         self.processor.flags = flags;
@@ -1283,7 +1283,7 @@ impl WriterBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{WriterBuilder, BaseFlags};
     ///
-    /// let mut writer = WriterBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// let mut writer = WriterBuilder::new().with_flags(BaseFlags::Trim);
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {
@@ -1455,7 +1455,7 @@ impl Purger {
     /// use rvpacker_txt_rs_lib::{Purger, BaseFlags};
     ///
     /// let mut purger = Purger::new();
-    /// purger.set_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// purger.set_flags(BaseFlags::Trim);
     /// ```
     pub fn set_flags(&mut self, flags: BaseFlags) {
         self.processor.flags = flags;
@@ -1643,7 +1643,7 @@ impl PurgerBuilder {
     /// ```
     /// use rvpacker_txt_rs_lib::{PurgerBuilder, BaseFlags};
     ///
-    /// let mut purger = PurgerBuilder::new().with_flags(BaseFlags::Trim | BaseFlags::Romanize);
+    /// let mut purger = PurgerBuilder::new().with_flags(BaseFlags::Trim);
     /// ```
     #[must_use]
     pub fn with_flags(mut self, flags: BaseFlags) -> Self {

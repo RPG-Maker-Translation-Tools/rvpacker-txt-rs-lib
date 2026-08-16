@@ -457,17 +457,17 @@ pub fn get_system_title(
         .ok_or(Error::NoTitle)
 }
 
-/// Replaces Eastern symbols in string to their Western (or sort of Western) equivalents.
+/// Latinize CJK/Unicode (mainly punctuation) characters to their Latin equivalents.
 ///
 /// # Parameters
 ///
-/// - `string` - String to romanize.
+/// - `string` - String to latinize.
 ///
 /// # Returns
 ///
 /// - [`Cow<str>`] - as owned if replacements occurred, as borrowed otherwise.
 ///
-pub(crate) fn romanize_string(string: &str) -> Cow<'_, str> {
+pub fn latinize_string(string: &str) -> Cow<'_, str> {
     let mut result: Option<String> = None;
 
     for (i, char) in string.chars().enumerate() {
@@ -802,11 +802,7 @@ impl<'a> Base {
                 translation
             })
         } else {
-            Some(if self.flags.contains(BaseFlags::Romanize) {
-                romanize_string(parameter).into_owned()
-            } else {
-                parameter.to_string()
-            })
+            Some(parameter.to_string())
         }
     }
 
@@ -816,13 +812,7 @@ impl<'a> Base {
         code: Code,
         parameter: &str,
     ) {
-        let parameter = if self.flags.contains(BaseFlags::Romanize) {
-            romanize_string(parameter)
-        } else {
-            Cow::Borrowed(parameter)
-        };
-
-        let Some(mut parsed) = self.process_parameter(code, &parameter) else {
+        let Some(mut parsed) = self.process_parameter(code, parameter) else {
             return;
         };
 
@@ -866,22 +856,13 @@ impl<'a> Base {
         dialogue_line_indices: &mut SmallVec<[usize; 4]>,
         write_string_literally: bool,
     ) {
-        let mut joined =
-            Cow::Owned(dialogue_lines.join(if self.mode.is_write() {
-                "\n"
-            } else {
-                NEW_LINE
-            }));
+        let joined = dialogue_lines.join(if self.mode.is_write() {
+            "\n"
+        } else {
+            NEW_LINE
+        });
 
         if self.mode.is_write() {
-            let old_joined = take(&mut joined);
-
-            if self.flags.contains(BaseFlags::Romanize) {
-                joined = romanize_string(&old_joined);
-            } else {
-                joined = old_joined;
-            }
-
             let Some(translation) =
                 self.process_parameter(Code::Dialogue, &joined)
             else {
@@ -1122,7 +1103,8 @@ impl<'a> Base {
                         .insert(source.into(), translation.into());
                 } else {
                     panic!(
-                        "items.txt in Fear & Hunger 2: Termina should start with 4 `Menu Category` entries."
+                        "items.txt in Fear & Hunger 2: Termina should start \
+                         with 4 `Menu Category` entries."
                     );
                 }
             }
@@ -1214,7 +1196,8 @@ impl<'a> Base {
 
             if split.len() < 2 {
                 warn!(
-                    "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
+                    "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: \
+                     {i}\n{IN_FILE_MSG}: {file}.txt",
                     i = i + 1,
                     file = self.file_type.to_string().to_lowercase()
                 );
@@ -1405,7 +1388,7 @@ impl<'a> Base {
         !string.chars().any(|c| !SYMBOLS.contains(&c))
     }
 
-    // TODO: Check when starts with if
+    // TODO(v14): Check when starts with if
     //* This is breaking
     fn ends_with_if_index(string: &str) -> Option<usize> {
         if !string.ends_with(')') {
@@ -2079,7 +2062,8 @@ impl<'a> MapBase<'a> {
                     Value::string(translation);
             } else {
                 log::warn!(
-                    "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
+                    "{COULD_NOT_SPLIT_LINE_MSG} \
+                     {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
                     file = self.base.file_type.to_string().to_lowercase()
                 );
             }
@@ -2273,16 +2257,7 @@ impl<'a> MapBase<'a> {
             .map(|display_name| {
                 display_name
                     .as_str()
-                    .map(|name| {
-                        let name_replaced = name.normalize();
-
-                        if self.base.flags.contains(BaseFlags::Romanize) {
-                            romanize_string(&name_replaced)
-                        } else {
-                            name_replaced
-                        }
-                        .into_owned()
-                    })
+                    .map(|name| name.normalize().into_owned())
                     .unwrap_or_default()
             })
             .unwrap_or_default()
@@ -2685,14 +2660,6 @@ impl<'a> OtherBase<'a> {
             _ => {}
         }
 
-        let old_variable_text = take(&mut variable_text);
-
-        if self.base.flags.contains(BaseFlags::Romanize) {
-            variable_text = romanize_string(&old_variable_text);
-        } else {
-            variable_text = old_variable_text;
-        }
-
         if self.base.mode.is_read() {
             return Some(variable_text.into_owned());
         }
@@ -2792,13 +2759,7 @@ impl<'a> OtherBase<'a> {
                 continue;
             };
 
-            let mut string = if self.base.mode.is_write()
-                && self.base.flags.contains(BaseFlags::Romanize)
-            {
-                romanize_string(string)
-            } else {
-                Cow::Borrowed(string)
-            };
+            let mut string = Cow::Borrowed(string);
 
             if self.base.mode.is_write() {
                 string = Cow::Owned(
@@ -3054,14 +3015,8 @@ impl<'a> SystemBase<'a> {
             return;
         };
 
-        let extracted = if self.base.flags.contains(BaseFlags::Romanize) {
-            romanize_string(extracted)
-        } else {
-            Cow::Borrowed(extracted)
-        };
-
         if self.base.mode.is_read() {
-            self.base.insert_string(extracted);
+            self.base.insert_string(Cow::Borrowed(extracted));
         } else if self.base.mode.is_write() {
             if let Some(translated) = self.base.get_key(&extracted) {
                 *value = Base::make_string_value(
@@ -3109,14 +3064,9 @@ impl<'a> SystemBase<'a> {
                     return;
                 };
 
-                let game_title =
-                    if self.base.flags.contains(BaseFlags::Romanize) {
-                        romanize_string(game_title)
-                    } else {
-                        Cow::Borrowed(game_title)
-                    };
-
-                mutable!(self, Self).base.insert_string(game_title);
+                mutable!(self, Self)
+                    .base
+                    .insert_string(Cow::Borrowed(game_title));
             }
         }
     }
@@ -3243,21 +3193,12 @@ impl<'a> ScriptBase<'a> {
             if self.base.mode.is_write() {
                 let mut code_changed = false;
 
-                for (mut extracted, range) in extracted_strings
+                for (extracted, range) in extracted_strings
                     .into_iter()
                     .zip(ranges)
                     .filter(|(s, _)| !s.trim().is_empty())
                     .rev()
-                    .map(|(s, r)| (Cow::Owned(s), r))
                 {
-                    let old_extracted = take(&mut extracted);
-
-                    if self.base.flags.contains(BaseFlags::Romanize) {
-                        extracted = romanize_string(&old_extracted);
-                    } else {
-                        extracted = old_extracted;
-                    }
-
                     if let Some(translated) = self.base.get_key(&extracted) {
                         code.replace_range(range, translated);
                         code_changed = true;
@@ -3277,7 +3218,6 @@ impl<'a> ScriptBase<'a> {
                 for mut extracted in extracted_strings
                     .into_iter()
                     .filter(|s| !s.trim().is_empty())
-                    .map(Cow::Owned)
                 {
                     if Base::string_is_only_symbols(&extracted)
                         || extracted.contains("@window")
@@ -3292,13 +3232,9 @@ impl<'a> ScriptBase<'a> {
 
                     let old_extracted = take(&mut extracted);
 
-                    if self.base.flags.contains(BaseFlags::Romanize) {
-                        extracted = romanize_string(&old_extracted);
-                    } else {
-                        extracted = old_extracted;
-                    }
+                    extracted = old_extracted;
 
-                    self.base.insert_string(extracted);
+                    self.base.insert_string(Cow::Owned(extracted));
                 }
 
                 self.base.flush_translation(id);
@@ -3659,14 +3595,7 @@ impl<'a> PluginBase<'a> {
                     || value_string.starts_with("rgba"))
                     || key.is_some_and(|x| x.starts_with("LATIN"))
                 {
-                    let mut string = value_string.normalize();
-                    let old_string = take(&mut string);
-
-                    if self.base.flags.contains(BaseFlags::Romanize) {
-                        string = romanize_string(&old_string);
-                    } else {
-                        string = old_string;
-                    }
+                    let string = value_string.normalize();
 
                     if self.base.mode.is_write() {
                         if let Some(translated) = self.base.get_key(&string) {

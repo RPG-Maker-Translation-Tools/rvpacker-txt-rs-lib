@@ -848,13 +848,6 @@ bitflags! {
     ///
     /// Check each flag to see what it does.
     pub struct BaseFlags: u8 {
-        /// Convert all encountered Unicode/CJK typographic/punctuation symbols to their Western/ASCII equivalents.
-        ///
-        /// That includes characters like Japanese quotation marks, for example `「」` are converted to `''` single quotes.
-        ///
-        /// This flag **must be set on write or purge** if it was set on read.
-        const Romanize = 1 << 0;
-
         /// Trim leading and trailing whitespace from all encountered text.
         ///
         /// This flag **must be set on write or purge** if it was set on read.
@@ -875,7 +868,7 @@ bitflags! {
         /// No effect, for convenience.
         const DisableCustomProcessing = 1 << 4;
 
-        /// Skip obsolete entries that not in game files anymore on reads with [`ReadMode::Append`].
+        /// Skip obsolete entries that are not in game files anymore on reads with [`ReadMode::Append`].
         const SkipObsolete = 1 << 5;
     }
 }
