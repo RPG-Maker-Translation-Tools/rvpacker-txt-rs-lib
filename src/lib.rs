@@ -10,6 +10,7 @@ mod processors;
 
 pub mod constants;
 pub mod core;
+pub mod serde;
 pub mod generic;
 pub mod json;
 pub mod types;
