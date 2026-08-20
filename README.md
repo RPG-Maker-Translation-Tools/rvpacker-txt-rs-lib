@@ -4,7 +4,7 @@
 
 It also provides the `json` module to convert `.rxdata`, `.rvdata` and `.rvdata2` files to JSON and back.
 
-This library is used in [RPGMTranslate GUI](https://github.com/rpg-maker-translation-tools/rpgmtranslate) and [rvpacker-txt-rs CLI](https://github.com/rpg-maker-translation-tools/rvpacker-txt-rs).
+This library is used in [RPGMTranslate GUI](https://github.com/RPG-Maker-Translation-Tools/rpgmtranslate-qt) and [rvpacker-txt-rs CLI](https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs).
 
 ## Installation
 
