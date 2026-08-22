@@ -160,7 +160,7 @@ impl Base {
                 ]),
             );
         } else if !display_name.is_empty() {
-            let display_name_comment_line = &self.metadata[&id][2];
+            let display_name_comment_line = &self.translation.metadata[&id][2];
 
             let split: Vec<&str> =
                 display_name_comment_line.split(SEPARATOR).collect();
@@ -231,7 +231,7 @@ impl Base {
             {
                 self.flush_translation(id);
 
-                self.accumulated_translation.push((
+                self.output.accumulated.push((
                         id,
                         SmallVec::default(),
                         FlushedLines::EMPTY,

@@ -171,7 +171,7 @@ impl Processor {
 
             match ignore_file_content {
                 Ok(content) => {
-                    base.ignore_map = parse_ignore(
+                    base.ignore.map = parse_ignore(
                         &content,
                         self.duplicate_mode,
                         mode.is_read(),
@@ -515,7 +515,7 @@ impl Processor {
         if flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
-            let contents: String = take(&mut base.ignore_map).into_iter().fold(
+            let contents: String = take(&mut base.ignore.map).into_iter().fold(
                 String::new(),
                 |mut output, (file, lines)| {
                     let _ = write!(

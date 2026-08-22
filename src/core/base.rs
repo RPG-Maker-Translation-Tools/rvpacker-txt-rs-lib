@@ -13,6 +13,107 @@ use marshal_rs::{Value, dump};
 use serde_json::{Value as SerdeValue, to_vec};
 use std::{borrow::Cow, fmt::Write as FmtWrite};
 
+/// Everything parsed out of a translation `.txt`.
+///
+/// Built once by [`Base::initialize_translation`] and read from there on; the only
+/// mutation during processing is selecting the current section and draining it.
+pub(super) struct Translation {
+    pub(super) initialized: bool,
+
+    pub(super) maps: IndexMapGx<u16, TranslationMap>,
+
+    /// Index of the currently selected map in `maps`, or `usize::MAX` when none is
+    /// selected. An index rather than a reference because the map it points at is
+    /// owned by this same struct; `maps` is only ever appended to while a selection
+    /// is live, so indices stay valid.
+    pub(super) map_index: usize,
+
+    /// Flattened `maps`, built once on write with [`DuplicateMode::Remove`].
+    /// See [`Base::build_write_lookup`].
+    pub(super) write_lookup: TranslationMap,
+
+    pub(super) metadata: HashMap<u16, Comments>,
+    pub(super) top_level_comments: HashMap<u16, Vec<String>>,
+}
+
+impl Default for Translation {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            maps: IndexMapGx::default(),
+            // Sentinel: no section selected. Deriving `Default` would make this 0,
+            // which is a valid index.
+            map_index: usize::MAX,
+            write_lookup: TranslationMap::default(),
+            metadata: HashMap::default(),
+            top_level_comments: HashMap::default(),
+        }
+    }
+}
+
+impl Default for Ignore {
+    fn default() -> Self {
+        Self {
+            map: IgnoreMap::default(),
+            // Sentinel: no entry selected.
+            entry_index: usize::MAX,
+        }
+    }
+}
+
+impl Ignore {
+    /// The currently selected entry, or [`None`] if none was selected.
+    pub(super) fn entry(&self) -> Option<&IgnoreEntry> {
+        self.map.get_index(self.entry_index).map(|(_, entry)| entry)
+    }
+
+    /// Mutable counterpart of [`Ignore::entry`].
+    pub(super) fn entry_mut(&mut self) -> Option<&mut IgnoreEntry> {
+        self.map
+            .get_index_mut(self.entry_index)
+            .map(|(_, entry)| entry)
+    }
+}
+
+impl Translation {
+    fn reset(&mut self) {
+        self.initialized = false;
+        self.maps.clear();
+        self.map_index = usize::MAX;
+        self.write_lookup.clear();
+        self.metadata.clear();
+    }
+}
+
+/// Everything accumulated while processing, drained by [`Base::finish_translation`].
+#[derive(Default)]
+pub(super) struct Output {
+    pub(super) lines: Lines,
+
+    /// How much of `lines` has already been claimed by a flushed section, so the
+    /// next flush can record the range it added.
+    pub(super) total_length: usize,
+
+    pub(super) accumulated: Vec<(u16, Comments, FlushedLines, TranslationMap)>,
+}
+
+impl Output {
+    fn reset(&mut self) {
+        self.lines.clear();
+        self.total_length = 0;
+        self.accumulated.clear();
+    }
+}
+
+/// Entries to skip on read, or to collect on purge.
+pub struct Ignore {
+    pub map: IgnoreMap,
+
+    /// Index of the currently selected entry in `map`, or `usize::MAX` when none is
+    /// selected. Only set when the ignore flags are on.
+    pub(super) entry_index: usize,
+}
+
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
@@ -24,35 +125,10 @@ pub struct Base {
     pub skip_events: HashMap<RPGMFileType, HashSet<u16>>,
     pub map_events: bool,
 
-    pub ignore_map: IgnoreMap,
+    pub ignore: Ignore,
 
-    /// Index of the currently selected entry in `ignore_map`, or `usize::MAX` when
-    /// none is selected. Only set when the ignore flags are on; an index rather than
-    /// a reference because the entry is owned by this same struct.
-    pub(super) ignore_entry_index: usize,
-
-    pub(super) translation_initialized: bool,
-
-    pub(super) lines: Lines,
-    pub(super) total_length: usize,
-
-    pub(super) metadata: HashMap<u16, Comments>,
-
-    pub(super) translation_maps: IndexMapGx<u16, TranslationMap>,
-
-    /// Index of the currently selected map in `translation_maps`, or `usize::MAX`
-    /// when none is selected. An index rather than a reference because the map it
-    /// points at is owned by this same struct; `translation_maps` is only ever
-    /// appended to while a selection is live, so indices stay valid.
-    pub(super) translation_map_index: usize,
-
-    /// Flattened `translation_maps`, built once on write with [`DuplicateMode::Remove`].
-    /// See [`Base::build_write_lookup`].
-    pub(super) write_lookup: TranslationMap,
-
-    pub(super) accumulated_translation:
-        Vec<(u16, Comments, FlushedLines, TranslationMap)>,
-    pub(super) top_level_comments: HashMap<u16, Vec<String>>,
+    pub(super) translation: Translation,
+    pub(super) output: Output,
 
     /// `MapInfos` for the current run of maps, parsed once by
     /// [`Base::process_map`] and reused across the run.
@@ -75,22 +151,9 @@ impl Default for Base {
             engine_type: EngineType::New,
             duplicate_mode: DuplicateMode::Remove,
 
-            ignore_map: IgnoreMap::default(),
-            ignore_entry_index: usize::MAX,
-
-            translation_initialized: false,
-
-            lines: Lines::default(),
-            total_length: 0,
-
-            metadata: HashMap::default(),
-
-            translation_map_index: usize::MAX,
-            translation_maps: IndexMapGx::default(),
-            write_lookup: TranslationMap::default(),
-
-            accumulated_translation: Vec::new(),
-            top_level_comments: HashMap::default(),
+            ignore: Ignore::default(),
+            translation: Translation::default(),
+            output: Output::default(),
 
             map_events: false,
             mapinfos: Value::default(),
@@ -118,10 +181,17 @@ impl Base {
             mode,
             engine_type,
             labels: Labels::new(engine_type),
-            lines: Lines::with_capacity(512),
 
-            metadata: HashMap::with_capacity(1024),
-            translation_maps: IndexMapGx::with_capacity(1024),
+            translation: Translation {
+                maps: IndexMapGx::with_capacity(1024),
+                metadata: HashMap::with_capacity(1024),
+                ..Default::default()
+            },
+
+            output: Output {
+                lines: Lines::with_capacity(512),
+                ..Default::default()
+            },
 
             ..Default::default()
         }
@@ -131,25 +201,17 @@ impl Base {
     ///
     /// This function is used by file-specific bases' constructors, so you generally mustn't call it manually.
     pub fn reset(&mut self) {
-        self.translation_initialized = false;
-
-        self.lines.clear();
-        self.total_length = 0;
-
-        self.metadata.clear();
-
-        self.translation_maps.clear();
-        self.write_lookup.clear();
-        self.accumulated_translation.clear();
+        self.translation.reset();
+        self.output.reset();
     }
 
-    /// Inserts `string` to `self.lines` if `self.mode`.
+    /// Inserts `string` to `self.output.lines` if `self.mode`.
     ///
     /// Will skip inserting if `self.mode` is not [`Mode::Write`] or `self.flags` contain [`BaseFlags::Ignore`] and `self.ignore_entry` contains the string.
     ///
     /// # Parameters
     ///
-    /// - `string` - String to insert in `self.lines`.
+    /// - `string` - String to insert in `self.output.lines`.
     ///
     pub(super) fn insert_string(&mut self, string: Cow<'_, str>) {
         if self.mode.is_write()
@@ -161,10 +223,10 @@ impl Base {
             return;
         }
 
-        self.lines.insert(string.into_owned());
+        self.output.lines.insert(string.into_owned());
     }
 
-    /// Gets ignore entry from `self.ignore_map` by `id`.
+    /// Gets ignore entry from `self.ignore.map` by `id`.
     ///
     /// Skips getting an entry if `self.flags` do not contain [`BaseFlags::Ignore`] or [`BaseFlags::CreateIgnore`].
     ///
@@ -199,18 +261,16 @@ impl Base {
             let _ = write!(key, ": {id}");
         }
 
-        let entry = self.ignore_map.entry(key);
+        let entry = self.ignore.map.entry(key);
 
-        self.ignore_entry_index = entry.index();
+        self.ignore.entry_index = entry.index();
         entry.or_default();
     }
 
     /// The currently selected ignore entry, or [`None`] if the ignore flags are off
     /// and no entry was ever selected.
     pub(super) fn ignore_entry(&self) -> Option<&IgnoreEntry> {
-        self.ignore_map
-            .get_index(self.ignore_entry_index)
-            .map(|(_, entry)| entry)
+        self.ignore.entry()
     }
 
     /// The currently selected translation map.
@@ -219,7 +279,7 @@ impl Base {
     ///
     /// Panics if no map is selected, i.e. if called before [`Base::get_translation_map`].
     pub(super) fn translation_map(&self) -> &TranslationMap {
-        &self.translation_maps[self.translation_map_index]
+        &self.translation.maps[self.translation.map_index]
     }
 
     /// Mutable counterpart of [`Base::translation_map`].
@@ -228,7 +288,7 @@ impl Base {
     ///
     /// Panics if no map is selected, i.e. if called before [`Base::get_translation_map`].
     pub(super) fn translation_map_mut(&mut self) -> &mut TranslationMap {
-        &mut self.translation_maps[self.translation_map_index]
+        &mut self.translation.maps[self.translation.map_index]
     }
 
     /// Wraps string in a [`Value`].
@@ -295,7 +355,7 @@ impl Base {
     ///
     /// Gets the [`TranslationEntry`] corresponding to the `key` from translation.
     ///
-    /// This will return [`TranslationEntry`] corresponding to the `key` from `self.translation_map`, and also will seek it in maps `self.translation_maps` if `self.duplicate_mode` is [`DuplicateMode::Remove`].
+    /// This will return [`TranslationEntry`] corresponding to the `key` from `self.translation_map`, and also will seek it in maps `self.translation.maps` if `self.duplicate_mode` is [`DuplicateMode::Remove`].
     ///
     /// # Parameters
     ///
@@ -310,7 +370,7 @@ impl Base {
         if self.duplicate_mode.is_allow() {
             self.translation_map().get(key)
         } else {
-            self.write_lookup.get(key)
+            self.translation.write_lookup.get(key)
         }
     }
 

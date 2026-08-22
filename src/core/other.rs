@@ -149,7 +149,7 @@ impl Base {
             note_text,
             self.mode,
             self.file_type,
-            self.translation_maps.get(&u16::MAX),
+            self.translation.maps.get(&u16::MAX),
         ) {
             game::VariableOutcome::Drop => return None,
             game::VariableOutcome::Done(text) => return Some(text),

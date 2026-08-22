@@ -1,3 +1,4 @@
+use super::base::Output;
 use super::*;
 use crate::{
     BaseFlags, CommentPos, Comments, ProcessedData,
@@ -53,7 +54,7 @@ impl FlushedLines {
 }
 
 impl Base {
-    /// Initializes translation by filling `self.translation_maps` with parsed maps from `translation`.
+    /// Initializes translation by filling `self.translation.maps` with parsed maps from `translation`.
     ///
     /// # Parameters
     ///
@@ -63,7 +64,7 @@ impl Base {
         &mut self,
         translation: Option<&str>,
     ) -> Result<(), Error> {
-        if self.mode.is_default() || self.translation_initialized {
+        if self.mode.is_default() || self.translation.initialized {
             return Ok(());
         }
 
@@ -71,7 +72,7 @@ impl Base {
             return Err(Error::NoTranslation);
         };
 
-        self.translation_initialized = true;
+        self.translation.initialized = true;
 
         let trim = if self.file_type.is_main() {
             self.flags.contains(BaseFlags::Trim)
@@ -104,7 +105,8 @@ impl Base {
                 scratch.insert(source.into(), translation.into());
             }
 
-            self.translation_maps
+            self.translation
+                .maps
                 .insert(u16::MAX, scratch.drain(..).collect());
         }
 
@@ -117,9 +119,13 @@ impl Base {
             if line.starts_with(ID_COMMENT) {
                 if id != 0 {
                     if scratch.is_empty() {
-                        let metadata_entry = self.metadata.entry(id).or_insert(
-                            replace(&mut comments, smallvec![String::new(); 3]),
-                        );
+                        let metadata_entry =
+                            self.translation.metadata.entry(id).or_insert(
+                                replace(
+                                    &mut comments,
+                                    smallvec![String::new(); 3],
+                                ),
+                            );
 
                         let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
@@ -130,12 +136,14 @@ impl Base {
                             continue;
                         }
 
-                        self.translation_maps
+                        self.translation
+                            .maps
                             .entry(id)
                             .or_insert(TranslationMap::with_capacity(512));
                     }
 
-                    self.translation_maps
+                    self.translation
+                        .maps
                         .insert(id, scratch.drain(..).collect());
                 }
 
@@ -209,9 +217,12 @@ impl Base {
             };
 
             if first {
-                self.top_level_comments
+                self.translation
+                    .top_level_comments
                     .insert(id, top_level_comments.drain(..).collect());
-                self.metadata.insert(id, comments.drain(..).collect());
+                self.translation
+                    .metadata
+                    .insert(id, comments.drain(..).collect());
                 first = false;
             }
 
@@ -243,9 +254,11 @@ impl Base {
             let mut skip_entry = false;
 
             if scratch.is_empty() {
-                let metadata_entry = self.metadata.entry(id).or_insert(
-                    replace(&mut comments, smallvec![String::new(); 3]),
-                );
+                let metadata_entry =
+                    self.translation.metadata.entry(id).or_insert(replace(
+                        &mut comments,
+                        smallvec![String::new(); 3],
+                    ));
 
                 let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
@@ -255,14 +268,16 @@ impl Base {
                 {
                     skip_entry = true;
                 } else {
-                    self.translation_maps
+                    self.translation
+                        .maps
                         .entry(id)
                         .or_insert(TranslationMap::with_capacity(512));
                 }
             }
 
             if !skip_entry {
-                self.translation_maps
+                self.translation
+                    .maps
                     .insert(id, scratch.drain(..).collect());
             }
         }
@@ -272,7 +287,7 @@ impl Base {
         Ok(())
     }
 
-    /// Flattens `self.translation_maps` into `self.write_lookup`.
+    /// Flattens `self.translation.maps` into `self.translation.write_lookup`.
     ///
     /// Only relevant on write with [`DuplicateMode::Remove`], where [`Base::get_key`]
     /// has to resolve a key against *every* parsed map. Doing that by scanning is
@@ -289,15 +304,16 @@ impl Base {
         }
 
         let total: usize = self
-            .translation_maps
+            .translation
+            .maps
             .iter()
             .filter(|(id, _)| **id != u16::MAX)
             .map(|(_, map)| map.len())
             .sum();
 
-        self.write_lookup = TranslationMap::with_capacity(total);
+        self.translation.write_lookup = TranslationMap::with_capacity(total);
 
-        for (id, map) in &mut self.translation_maps {
+        for (id, map) in &mut self.translation.maps {
             if *id == u16::MAX {
                 continue;
             }
@@ -305,14 +321,17 @@ impl Base {
             // `or_insert` keeps the first occurrence, matching the order the
             // previous linear scan resolved duplicates in.
             for (source, translation) in map.drain(..) {
-                self.write_lookup.entry(source).or_insert(translation);
+                self.translation
+                    .write_lookup
+                    .entry(source)
+                    .or_insert(translation);
             }
         }
     }
 
-    /// Sets `self.translation_map` to the entry from `self.translation_maps`.
+    /// Sets `self.translation_map` to the entry from `self.translation.maps`.
     ///
-    /// If `self.mode` is [`Mode::Purge`], it will push entries from `self.translation_map` to `self.accumulated_translation` and break.
+    /// If `self.mode` is [`Mode::Purge`], it will push entries from `self.translation_map` to `self.output.accumulated` and break.
     ///
     /// If `self.flags` contains any of ignore flags, it will also set `self.ignore_entry`.
     ///
@@ -323,13 +342,13 @@ impl Base {
     /// # Returns
     ///
     /// - [`ControlFlow::Break`]
-    ///     - If mode is [`Mode::Write`] and `id` is not in `self.translation_maps`.
+    ///     - If mode is [`Mode::Write`] and `id` is not in `self.translation.maps`.
     ///     - If `id` is skipped.
     ///     - If mode is [`Mode::Purge`].
     /// - [`ControlFlow::Continue`] - In other situations.
     ///
     pub(super) fn get_translation_map(&mut self, id: u16) -> ControlFlow<()> {
-        let entry = self.translation_maps.entry(id);
+        let entry = self.translation.maps.entry(id);
         let index = entry.index();
 
         // Select the map for `id`, creating it if we're not writing.
@@ -344,7 +363,7 @@ impl Base {
             }
         }
 
-        self.translation_map_index = index;
+        self.translation.map_index = index;
 
         if self
             .skip_events
@@ -356,7 +375,7 @@ impl Base {
                 let metadata = self.get_metadata(id);
 
                 let map = take(self.translation_map_mut());
-                self.accumulated_translation.push((
+                self.output.accumulated.push((
                     id,
                     metadata,
                     FlushedLines::EMPTY,
@@ -364,7 +383,7 @@ impl Base {
                 ));
             }
 
-            self.total_length = self.lines.len();
+            self.output.total_length = self.output.lines.len();
             return ControlFlow::Break(());
         }
 
@@ -379,7 +398,7 @@ impl Base {
     }
 
     pub(super) fn get_metadata(&mut self, id: u16) -> Comments {
-        let Some(mut comments) = self.metadata.remove(&id) else {
+        let Some(mut comments) = self.translation.metadata.remove(&id) else {
             return SmallVec::default();
         };
 
@@ -411,7 +430,6 @@ impl Base {
         let allow_dup =
             self.duplicate_mode.is_allow() || self.file_type.is_misc();
         let skip_events_entry = self.skip_events.get(&self.file_type);
-        let ignore_index = self.ignore_entry_index;
 
         let additional_data = self.get_additional_data();
 
@@ -423,7 +441,7 @@ impl Base {
             output.extend_from_slice(data.as_bytes());
             output.extend_from_slice(SEPARATOR.as_bytes());
 
-            if let Some(additional) = self.translation_maps.get(&u16::MAX) {
+            if let Some(additional) = self.translation.maps.get(&u16::MAX) {
                 if let Some(translation) = additional.get(data) {
                     output.extend_from_slice(translation.as_bytes());
                 }
@@ -439,12 +457,12 @@ impl Base {
         > = if allow_dup {
             indexmap::IndexMap::default()
         } else {
-            let len = self.translation_maps.values().fold(0, |mut acc, map| {
+            let len = self.translation.maps.values().fold(0, |mut acc, map| {
                 acc += map.len();
                 acc
             });
 
-            self.translation_maps.drain(..).fold(
+            self.translation.maps.drain(..).fold(
                 indexmap::IndexMap::with_capacity_and_hasher(
                     len,
                     GxBuildHasher::default(),
@@ -458,17 +476,25 @@ impl Base {
             )
         };
 
-        // Moved out so the loop can read the rest of `self` freely. `lines_store`
-        // backs every `FlushedLines::Range`.
-        let mut accumulated = take(&mut self.accumulated_translation);
-        let lines_store = take(&mut self.lines);
+        // `output` is consumed here while the rest of `self` is only read, so
+        // destructuring makes the two borrows disjoint. `lines` backs every
+        // `FlushedLines::Range`.
+        let Base {
+            output:
+                Output {
+                    accumulated, lines, ..
+                },
+            ignore,
+            ..
+        } = self;
+
         let mut prev_id = u16::MAX;
 
         for i in 0..accumulated.len() {
             // Splitting gives the current entry mutably and the lookahead
             // immutably at the same time.
             let (current, rest) = accumulated[i..].split_first_mut().unwrap();
-            let (id, meta, lines, map) = current;
+            let (id, meta, flushed, map) = current;
 
             let skip = skip_events_entry.is_some_and(|e| e.contains(id))
                 || (self.file_type.is_map() && self.skip_maps.contains(id))
@@ -488,7 +514,8 @@ impl Base {
                 continue;
             }
 
-            if let Some(comments) = self.top_level_comments.get(id) {
+            if let Some(comments) = self.translation.top_level_comments.get(id)
+            {
                 for comment in comments {
                     output.extend_from_slice(comment.as_bytes());
                     output.push(b'\n');
@@ -505,12 +532,7 @@ impl Base {
                         if self.flags.contains(BaseFlags::CreateIgnore)
                             && !moved.is_empty()
                         {
-                            // Field access rather than `ignore_entry_mut`, so
-                            // that `skip_events_entry`'s borrow of the disjoint
-                            // `skip_events` field stays live.
-                            if let Some((_, entry)) =
-                                self.ignore_map.get_index_mut(ignore_index)
-                            {
+                            if let Some(entry) = ignore.entry_mut() {
                                 entry.insert(moved);
                             }
                         }
@@ -526,7 +548,7 @@ impl Base {
                 let has_display_name =
                     meta.get(DISPLAY_NAME_POS).is_some_and(|c| !c.is_empty());
 
-                let same_id_has_lines = !lines.is_empty()
+                let same_id_has_lines = !flushed.is_empty()
                     || rest.iter().any(|(next_id, _, next_lines, _)| {
                         *next_id == *id && !next_lines.is_empty()
                     });
@@ -535,7 +557,7 @@ impl Base {
                     && self.map_events
                     && (same_id_has_lines || has_display_name);
 
-                let should_push_other = !lines.is_empty() || has_display_name;
+                let should_push_other = !flushed.is_empty() || has_display_name;
 
                 if should_push_map || should_push_other {
                     push_metadata(&mut output, *id, meta);
@@ -554,8 +576,8 @@ impl Base {
                 }
             }
 
-            for line_index in 0..lines.len() {
-                let source = lines.get(&lines_store, line_index);
+            for line_index in 0..flushed.len() {
+                let source = flushed.get(lines, line_index);
 
                 let translation = match (allow_dup, self.mode.is_append()) {
                     (true, true) => map.swap_remove(source).unwrap_or_default(),
@@ -595,7 +617,7 @@ impl Base {
         ProcessedData::TranslationData(output)
     }
 
-    /// Flushes current `self.translation_map` and `self.lines` to `self.accumulated_translation` along with metadata and id.
+    /// Flushes current `self.translation_map` and `self.output.lines` to `self.output.accumulated` along with metadata and id.
     ///
     /// It's necessary to call [`Base::finish_translation`] once we've finished flushing entries.
     ///
@@ -613,7 +635,7 @@ impl Base {
                     .is_some_and(|x| !x.is_empty())
             {
                 let map = take(self.translation_map_mut());
-                self.accumulated_translation.push((
+                self.output.accumulated.push((
                     id,
                     metadata,
                     FlushedLines::EMPTY,
@@ -627,32 +649,32 @@ impl Base {
                 .is_some_and(|e| e.contains(&id))
                 || (self.file_type.is_map() && self.skip_maps.contains(&id))
             {
-                self.lines.clear();
+                self.output.lines.clear();
                 self.translation_map_mut().clear();
             } else {
-                let lines = FlushedLines::Owned(self.lines.drain(..).collect());
+                let lines =
+                    FlushedLines::Owned(self.output.lines.drain(..).collect());
 
                 let map = take(self.translation_map_mut());
-                self.accumulated_translation
-                    .push((id, metadata, lines, map));
+                self.output.accumulated.push((id, metadata, lines, map));
             }
         } else {
-            let total_length = self.total_length;
-            let current_length = self.lines.len() - total_length;
+            let total_length = self.output.total_length;
+            let current_length = self.output.lines.len() - total_length;
 
-            // Left in `self.lines`; only the range is recorded, so nothing is copied.
+            // Left in `self.output.lines`; only the range is recorded, so nothing is copied.
             let lines = FlushedLines::Range(
                 total_length..total_length + current_length,
             );
 
-            self.accumulated_translation.push((
+            self.output.accumulated.push((
                 id,
                 metadata,
                 lines,
                 TranslationMap::default(),
             ));
 
-            self.total_length += current_length;
+            self.output.total_length += current_length;
         }
     }
 
@@ -662,6 +684,7 @@ impl Base {
         metadata_vec: Vec<(CommentPos, &str)>,
     ) {
         let metadata = self
+            .translation
             .metadata
             .entry(id)
             .or_insert(smallvec![String::new(); 3]);
