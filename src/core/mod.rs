@@ -23,7 +23,7 @@ mod plugin;
 mod plugins;
 mod script;
 mod system;
-mod text;
+pub mod text;
 mod translation;
 
 pub use base::Base;
@@ -32,14 +32,11 @@ pub use file::{
     parse_rpgm_file,
 };
 pub use ignore::{Glob, IgnoreEntry};
-pub use text::latinize_string;
 
 pub(crate) use text::{
-    CustomReplace, TranslationLine, push_entries, push_metadata,
-    split_translation_line, string_is_only_symbols,
+    CustomReplace, TranslationLine, ends_with_if_index, push_entries,
+    push_metadata, split_translation_line, string_is_only_symbols,
 };
-
-pub(crate) use text::ends_with_if_index;
 pub(crate) use translation::FlushedLines;
 
 use crate::types::CommentPos;

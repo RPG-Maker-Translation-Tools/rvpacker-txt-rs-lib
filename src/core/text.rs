@@ -1,3 +1,9 @@
+//! Text handling shared by every file kind, and the `.txt` format's contract.
+//!
+//! [`CustomReplace`] and [`split_translation_line`] define how a translation line
+//! is written and read back, so anything else parsing these files - a GUI, a CLI -
+//! can rely on the same functions rather than reimplementing them.
+
 use crate::{
     constants::{ID_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS},
     types::TranslationEntry,
@@ -14,7 +20,11 @@ thread_local! {
     });
 }
 
-pub(crate) trait CustomReplace {
+/// Converts between RPG Maker's line breaks and the library's.
+///
+/// Implemented for [`str`], so a consumer parsing the generated `.txt` files can
+/// round-trip a line the same way this crate does.
+pub trait CustomReplace {
     /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the format that the library uses (`\#`).
     fn normalize(&self) -> Cow<'_, str>;
 
@@ -122,7 +132,7 @@ pub fn latinize_string(string: &str) -> Cow<'_, str> {
 }
 
 /// Outcome of splitting one `source<#>translation` line from a translation file.
-pub(crate) enum TranslationLine<'a> {
+pub enum TranslationLine<'a> {
     /// No separator present; the caller should warn and skip the line.
     Malformed,
     /// Empty translation on a write pass - the entry is unused, so skip it.
@@ -139,7 +149,7 @@ pub(crate) enum TranslationLine<'a> {
 /// carrying several translation columns still resolve to the rightmost filled one.
 ///
 /// Borrows throughout; allocates only where `write` forces denormalization.
-pub(crate) fn split_translation_line(
+pub fn split_translation_line(
     line: &str,
     trim: bool,
     write: bool,
@@ -217,14 +227,24 @@ pub(crate) fn push_entries(
     }
 }
 
-pub(crate) fn string_is_only_symbols(string: &str) -> bool {
+/// Whether every character is punctuation, whitespace or a numeral form, which
+/// makes the string untranslatable.
+///
+/// Quotes and digits are *not* counted as symbols: a translator may want to swap
+/// quotes for the target locale's, and a bare number can still be meaningful.
+#[must_use]
+pub fn string_is_only_symbols(string: &str) -> bool {
     !string.chars().any(|c| !SYMBOLS.contains(&c))
 }
 
+/// Byte index of a trailing `if(...)` condition, or [`None`] if there is none.
+///
+/// Older engines append a condition to some event parameters; it is code rather
+/// than text, so it is cut before translation and restored on write.
 // TODO(v15): Check when starts with if
 //* This is breaking
-
-pub(crate) fn ends_with_if_index(string: &str) -> Option<usize> {
+#[must_use]
+pub fn ends_with_if_index(string: &str) -> Option<usize> {
     if !string.ends_with(')') {
         return None;
     }
