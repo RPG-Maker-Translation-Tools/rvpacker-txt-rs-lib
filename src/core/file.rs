@@ -1,3 +1,4 @@
+use super::game;
 use crate::{
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX},
     types::{
@@ -138,7 +139,7 @@ pub fn filter_other<'a>(
             let extension = filename_path.extension()?;
             let file_type = RPGMFileType::from_filename(basename);
             if extension == engine_extension && file_type.is_other() {
-                if game_type.is_termina() && file_type.is_states() {
+                if game::skips_file(game_type, file_type) {
                     return None;
                 }
                 return Some(entry);

@@ -350,18 +350,10 @@ impl Base {
     ///
     #[must_use]
     pub(super) fn get_additional_data(&self) -> &[&str] {
-        if !self.mode.is_write()
-            && self.game_type.is_termina()
-            && self.file_type.is_items()
-        {
-            return &[
-                "<Menu Category: Items>",
-                "<Menu Category: Food>",
-                "<Menu Category: Healing>",
-                "<Menu Category: Body bag>",
-            ];
+        if self.mode.is_write() {
+            return &[];
         }
 
-        &[]
+        game::additional_data(self.game_type, self.file_type)
     }
 }

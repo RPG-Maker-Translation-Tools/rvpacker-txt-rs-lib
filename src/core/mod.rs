@@ -10,6 +10,7 @@
 
 mod base;
 mod file;
+mod game;
 mod list;
 mod map;
 mod other;

@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    constants::NEW_LINE,
-    types::{Code, GameType},
-};
+use crate::{constants::NEW_LINE, types::Code};
 use marshal_rs::Value;
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -21,42 +18,25 @@ impl Base {
             SmallVec::with_capacity(4);
         let mut shop_prefix: Option<&str> = None;
 
-        match self.game_type {
-            GameType::Termina => {
-                if parameter.chars().all(|c| {
-                    c.is_ascii_lowercase()
-                        || (c.is_ascii_punctuation() && c != '"')
-                }) {
-                    return None;
-                }
+        if game::drops_parameter(self.game_type, code, parameter) {
+            return None;
+        }
 
-                if code.is_system()
-                    && !parameter.starts_with("Gab")
-                    && (!parameter.starts_with("choice_text")
-                        || parameter.ends_with("????"))
-                {
-                    return None;
-                }
+        if code.is_any_dialogue()
+            && let Some(i) =
+                game::dialogue_prefix_len(self.game_type, parameter)
+        {
+            if string_is_only_symbols(&parameter[i..]) {
+                return None;
             }
-            GameType::LisaRPG => {
-                if code.is_any_dialogue() {
-                    if let Some(i) = Self::find_lisa_prefix_index(parameter) {
-                        if string_is_only_symbols(&parameter[i..]) {
-                            return None;
-                        }
 
-                        if self.mode.is_write() {
-                            extra_strings.push((&parameter[..i], false));
-                        }
-
-                        if !parameter.starts_with(r"\et") {
-                            parameter = &parameter[i..];
-                        }
-                    }
-                }
+            if self.mode.is_write() {
+                extra_strings.push((&parameter[..i], false));
             }
-            // custom processing for other games
-            GameType::None => {}
+
+            if !parameter.starts_with(r"\et") {
+                parameter = &parameter[i..];
+            }
         }
 
         if !self.engine_type.is_new() {
@@ -321,32 +301,6 @@ impl Base {
                     self.process_param(value, parsed);
                 }
             }
-        }
-    }
-
-    pub(super) fn find_lisa_prefix_index(string: &str) -> Option<usize> {
-        if string.starts_with(r"\et[") {
-            let mut index = r"\et[".len() + 1;
-
-            loop {
-                let char = string.as_bytes()[index];
-
-                if char == b']' {
-                    return Some(index + 1);
-                }
-
-                index += 1;
-
-                if index == 10 {
-                    return None;
-                }
-            }
-        } else if string.starts_with(r"\nbt") {
-            Some(r"\nbt".len())
-        } else if string.starts_with(r"\nblt") {
-            Some(r"\nblt".len())
-        } else {
-            None
         }
     }
 }

@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     BaseFlags, CommentPos, ProcessedData,
     constants::NEW_LINE,
-    types::{Error, GameType, RPGMFileType, Variable},
+    types::{Error, RPGMFileType, Variable},
 };
 use marshal_rs::{Get, Value};
 use regex::Regex;
@@ -146,222 +146,6 @@ impl<'a> OtherBase<'a> {
         Ok(Some(self.base.finish(entry_value)))
     }
 
-    fn process_variable_termina(
-        &self,
-        mut variable_text: Cow<'_, str>,
-        variable_type: Variable,
-        note_text: Option<&str>,
-    ) -> Option<String> {
-        if variable_text.starts_with("///") || variable_text.contains("---") {
-            return None;
-        }
-
-        match variable_type {
-            Variable::Description => {
-                if let Some(note) = note_text {
-                    let mut note_is_continuation = false;
-
-                    if !note.starts_with("flesh puppetry") {
-                        let mut note_chars = note.chars();
-
-                        if let Some((note_first_char, note_second_char)) =
-                            note_chars.next().zip(note_chars.next())
-                        {
-                            let is_continuation = note_first_char == '\n'
-                                && note_second_char != '\n';
-
-                            let first_char_is_valid = note_first_char
-                                .is_ascii_alphabetic()
-                                || note_first_char == '"'
-                                || note.starts_with("4 sticks");
-
-                            let first_char_is_punctuation = matches!(
-                                note_first_char,
-                                '.' | '!' | '/' | '?'
-                            );
-
-                            if (is_continuation || first_char_is_valid)
-                                && !first_char_is_punctuation
-                            {
-                                note_is_continuation = true;
-                            }
-                        }
-                    }
-
-                    if note_is_continuation {
-                        let mut note_string = String::from(note);
-
-                        if let Some((mut left, _)) =
-                            note.trim_start().split_once('\n')
-                        {
-                            left = left.trim();
-
-                            if left.ends_with(['.', '%', '!', '"']) {
-                                note_string = String::from(
-                                    if self.base.mode.is_write() {
-                                        "\n"
-                                    } else {
-                                        NEW_LINE
-                                    },
-                                ) + left;
-                            } else if self.base.mode.is_read() {
-                                return None;
-                            }
-                        } else if note.ends_with(['.', '%', '!', '"'])
-                            || note.ends_with("takes place?")
-                        {
-                            note_string = note.into();
-                        } else if self.base.mode.is_read() {
-                            return None;
-                        }
-
-                        if note_string.is_empty() {
-                            if self.base.mode.is_read() {
-                                return None;
-                            }
-                        } else {
-                            variable_text = Cow::Owned(format!(
-                                "{variable_text}{note_string}"
-                            ));
-                        }
-                    }
-                }
-            }
-            Variable::Message1
-            | Variable::Message2
-            | Variable::Message3
-            | Variable::Message4 => {
-                return None;
-            }
-            Variable::Note => {
-                if self.base.mode.is_write() && self.base.file_type.is_items() {
-                    for string in [
-                        "<Menu Category: Items>",
-                        "<Menu Category: Food>",
-                        "<Menu Category: Healing>",
-                        "<Menu Category: Body bag>",
-                    ] {
-                        if variable_text.rfind(string).is_some() {
-                            return Some(variable_text.replace(
-                                string,
-                                &self.base.translation_maps[&u16::MAX][string],
-                            ));
-                        }
-                    }
-                }
-
-                if !self.base.file_type.is_classes() {
-                    return None;
-                }
-            }
-            Variable::Name | Variable::Nickname => match self.base.file_type {
-                RPGMFileType::Actors => {
-                    if ![
-                        "Levi",
-                        "Marina",
-                        "Daan",
-                        "Abella",
-                        "O'saa",
-                        "Blood golem",
-                        "Black Kalev",
-                        "Marcoh",
-                        "Karin",
-                        "Olivia",
-                        "Ghoul",
-                        "Villager",
-                        "August",
-                        "Caligura",
-                        "Henryk",
-                        "Pav",
-                        "Tanaka",
-                        "Samarie",
-                    ]
-                    .contains(&variable_text.as_ref())
-                    {
-                        return None;
-                    }
-                }
-                RPGMFileType::Armors => {
-                    if variable_text.starts_with("test_armor") {
-                        return None;
-                    }
-                }
-                RPGMFileType::Classes => {
-                    if [
-                        "Girl",
-                        "Kid demon",
-                        "Captain",
-                        "Marriage",
-                        "Marriage2",
-                        "Baby demon",
-                        "Buckman",
-                        "Nas'hrah",
-                        "Skeleton",
-                    ]
-                    .contains(&variable_text.as_ref())
-                    {
-                        return None;
-                    }
-                }
-                RPGMFileType::Enemies => {
-                    if ["Spank Tank", "giant", "test"]
-                        .contains(&variable_text.as_ref())
-                    {
-                        return None;
-                    }
-                }
-                RPGMFileType::Items => {
-                    if [
-                        "Torch",
-                        "Flashlight",
-                        "Stick",
-                        "Quill",
-                        "Empty scroll",
-                        "Soul stone_NOT_USE",
-                        "Cube of depths",
-                        "Worm juice",
-                        "Silver shilling",
-                        "Coded letter #1 - UNUSED",
-                        "Black vial",
-                        "Torturer's notes 1",
-                        "Purple vial",
-                        "Orange vial",
-                        "Red vial",
-                        "Green vial",
-                        "Pinecone pig instructions",
-                        "Grilled salmonsnake meat",
-                        "Empty scroll",
-                        "Water vial",
-                        "Blood vial",
-                        "Devil's Grass",
-                        "Stone",
-                        "Codex #1",
-                        "The Tale of the Pocketcat I",
-                        "The Tale of the Pocketcat II",
-                    ]
-                    .contains(&variable_text.as_ref())
-                        || variable_text.starts_with("The Fellowship")
-                        || variable_text.starts_with("Studies of")
-                        || variable_text.starts_with("Blueish")
-                        || variable_text.starts_with("Skeletal")
-                        || variable_text.ends_with("soul")
-                        || variable_text.ends_with("schematics")
-                    {
-                        return None;
-                    }
-                }
-                RPGMFileType::Weapons => {
-                    if variable_text == "makeshift2" {
-                        return None;
-                    }
-                }
-                _ => {}
-            },
-        }
-
-        Some(variable_text.into_owned())
-    }
-
     #[allow(clippy::collapsible_match, clippy::single_match)]
     fn process_variable(
         &self,
@@ -388,27 +172,18 @@ impl<'a> OtherBase<'a> {
             variable_text = Cow::Owned(variable_text.replace("\r\n", "\n"));
         }
 
-        match self.base.game_type {
-            GameType::Termina => {
-                if let Some(text) = self.process_variable_termina(
-                    variable_text,
-                    variable_type,
-                    note_text,
-                ) {
-                    if self.base.mode.is_write()
-                        && self.base.file_type.is_items()
-                        && variable_type.is_note()
-                    {
-                        return Some(text);
-                    }
-
-                    variable_text = Cow::Owned(text);
-                } else {
-                    return None;
-                }
-            }
-            // custom processing for other games
-            _ => {}
+        match game::process_variable(
+            self.base.game_type,
+            variable_text,
+            variable_type,
+            note_text,
+            self.base.mode,
+            self.base.file_type,
+            self.base.translation_maps.get(&u16::MAX),
+        ) {
+            game::VariableOutcome::Drop => return None,
+            game::VariableOutcome::Done(text) => return Some(text),
+            game::VariableOutcome::Continue(text) => variable_text = text,
         }
 
         if self.base.mode.is_read() {
@@ -425,25 +200,16 @@ impl<'a> OtherBase<'a> {
                 result = String::from(' ') + &result;
             }
 
-            match self.base.game_type {
-                GameType::Termina => match variable_type {
-                    Variable::Note => {
-                        if let Some(first_char) = result.chars().next() {
-                            if first_char != '\n' {
-                                result = String::from('\n') + &result;
-                            }
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
+            if game::variable_needs_leading_newline(
+                self.base.game_type,
+                variable_type,
+            ) && !result.is_empty()
+                && !result.starts_with('\n')
+            {
+                result.insert(0, '\n');
             }
 
-            if self.base.game_type.is_termina()
-                && variable_type.is_description()
-            {
-                result += "\n\n\n\n";
-            }
+            result += game::variable_suffix(self.base.game_type, variable_type);
 
             result
         });
@@ -514,9 +280,10 @@ impl<'a> OtherBase<'a> {
                 );
             }
 
-            let note_text = if self.base.game_type.is_termina()
-                && variable_type.is_description()
-            {
+            let note_text = if game::description_absorbs_note(
+                self.base.game_type,
+                variable_type,
+            ) {
                 array[self.base.labels.note].as_str()
             } else {
                 None

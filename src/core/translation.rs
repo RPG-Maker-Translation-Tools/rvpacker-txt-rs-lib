@@ -82,25 +82,26 @@ impl Base {
         let mut scratch = TranslationMap::default();
         let mut translation_lines = translation.lines().enumerate();
 
-        if self.game_type.is_termina() && self.file_type.is_items() {
-            for _ in 0..4 {
-                let (_, item_category_line) =
+        // Some games reserve the leading lines of a file for entries that belong
+        // to no section; those are keyed under `u16::MAX`.
+        let reserved =
+            game::reserved_leading_lines(self.game_type, self.file_type);
+
+        if reserved != 0 {
+            for _ in 0..reserved {
+                let (_, line) =
                     unsafe { translation_lines.next().unwrap_unchecked() };
 
-                if item_category_line.starts_with("<Menu Category") {
-                    let (source, translation) = unsafe {
-                        item_category_line
-                            .split_once(SEPARATOR)
-                            .unwrap_unchecked()
-                    };
-
-                    scratch.insert(source.into(), translation.into());
-                } else {
+                let Some((source, translation)) = line.split_once(SEPARATOR)
+                else {
                     panic!(
-                        "items.txt in Fear & Hunger 2: Termina should start \
-                         with 4 `Menu Category` entries."
+                        "{file}.txt should start with {reserved} reserved \
+                         entries for this game type.",
+                        file = self.file_type.to_string().to_lowercase()
                     );
-                }
+                };
+
+                scratch.insert(source.into(), translation.into());
             }
 
             self.translation_maps
