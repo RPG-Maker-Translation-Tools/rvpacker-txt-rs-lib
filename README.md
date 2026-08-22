@@ -12,29 +12,37 @@ This library is used in [RPGMTranslate GUI](https://github.com/RPG-Maker-Transla
 
 ## Features
 
-This crate provides core structs and functions in `core` module, but also exports wrappers around those, like `Purger`, `Writer`, `Reader`.
+This crate provides core structs and functions in `core` module, but also exports `Processor`, a wrapper around those.
 
-### `Reader`/`Writer`/`Purger`
+### `Processor`
 
-These structs abstract over the `core` module and process files, handling all system calls.
+`Processor` abstracts over the `core` module and processes files, handling all system calls. It's a plain struct with public fields: set the ones you need, and `mode` decides whether it reads, writes or purges.
 
 #### Example
 
 ```rust no_run
-use rvpacker_txt_rs_lib::{Reader, Writer, Purger, Error, FileFlags, EngineType};
+use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, Mode, Processor, ReadMode};
+use std::path::Path;
 
 fn main() -> Result<(), Error> {
-    let mut reader = Reader::new();
-    reader.set_files(FileFlags::Map | FileFlags::other());
-    reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
+    let mut processor = Processor {
+        mode: Mode::Read(ReadMode::Default { force: false }),
+        file_flags: FileFlags::Map | FileFlags::other(),
+        ..Default::default()
+    };
 
-    let mut writer = Writer::new();
-    writer.set_files(FileFlags::Map | FileFlags::other());
-    writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce)?;
+    processor.process(EngineType::VXAce, "C:/Game/Data", "C:/Game/translation", None)?;
 
-    let mut purger = Purger::new();
-    purger.set_files(FileFlags::Map | FileFlags::other());
-    purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce)?;
+    processor.mode = Mode::Write;
+    processor.process(
+        EngineType::VXAce,
+        "C:/Game/Data",
+        "C:/Game/translation",
+        Some(Path::new("C:/Game/output")),
+    )?;
+
+    processor.mode = Mode::Purge;
+    processor.process(EngineType::VXAce, "C:/Game/Data", "C:/Game/translation", None)?;
     Ok(())
 }
 ```
