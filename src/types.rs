@@ -2,14 +2,14 @@ use crate::constants::{
     MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
 };
 use bitflags::bitflags;
-use gxhash::{GxBuildHasher, HashSet};
+use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::{
-    convert::Infallible, hash::BuildHasher, io, mem::take, ops::Deref,
-    path::PathBuf, str::FromStr,
+    convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf,
+    str::FromStr,
 };
 use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
@@ -17,8 +17,7 @@ use thiserror::Error;
 pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
 pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
 
-pub(crate) type IgnoreEntry = HashSet<String>;
-pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
+pub(crate) type IgnoreMap = IndexMapGx<String, crate::core::IgnoreEntry>;
 
 pub(crate) type Comments = SmallVec<[String; 3]>;
 pub(crate) type Lines = IndexSetGx<String>;
@@ -87,33 +86,6 @@ impl Variable {
     }
 }
 
-pub(crate) trait EachLine {
-    fn each_line(&self) -> Vec<String>;
-}
-
-impl EachLine for str {
-    #[inline]
-    /// Returns a [`Vec`] of strings splitted by lines (inclusive), akin to `each_line` in Ruby
-    fn each_line(&self) -> Vec<String> {
-        let mut result = Vec::with_capacity(1024);
-        let mut current_line = String::new();
-
-        for char in self.chars() {
-            current_line.push(char);
-
-            if char == '\n' {
-                result.push(take(&mut current_line));
-            }
-        }
-
-        if !current_line.is_empty() {
-            result.push(take(&mut current_line));
-        }
-
-        result
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct Labels {
     pub display_name: &'static str,
@@ -140,9 +112,27 @@ pub(crate) struct Labels {
     pub currency_unit: &'static str,
 }
 
-impl Default for Labels {
-    fn default() -> Self {
+impl Labels {
+    /// The fifteen labels that are identical on every engine, plus the seven
+    /// that are not.
+    const fn with_varying(
+        display_name: &'static str,
+        armor_types: &'static str,
+        skill_types: &'static str,
+        terms: &'static str,
+        weapon_types: &'static str,
+        game_title: &'static str,
+        currency_unit: &'static str,
+    ) -> Self {
         Self {
+            display_name,
+            armor_types,
+            skill_types,
+            terms,
+            weapon_types,
+            game_title,
+            currency_unit,
+
             events: "events",
             pages: "pages",
             list: "list",
@@ -156,48 +146,49 @@ impl Default for Labels {
             message3: "message3",
             message4: "message4",
             note: "note",
-
             elements: "elements",
-            currency_unit: "currency_unit",
-
-            game_title: "",
-            display_name: "",
-            armor_types: "",
-            skill_types: "",
-            terms: "",
-            weapon_types: "",
-
             equip_types: "equipTypes",
+        }
+    }
+
+    pub const fn new(engine_type: EngineType) -> Self {
+        match engine_type {
+            // MV/MZ name their JSON fields in camelCase.
+            EngineType::New => Self::with_varying(
+                "displayName",
+                "armorTypes",
+                "skillTypes",
+                "terms",
+                "weaponTypes",
+                "gameTitle",
+                "currencyUnit",
+            ),
+            // XP calls the terms section "words"; VX and VX Ace call it "terms".
+            EngineType::XP => Self::with_varying(
+                "display_name",
+                "armor_types",
+                "skill_types",
+                "words",
+                "weapon_types",
+                "game_title",
+                "currency_unit",
+            ),
+            _ => Self::with_varying(
+                "display_name",
+                "armor_types",
+                "skill_types",
+                "terms",
+                "weapon_types",
+                "game_title",
+                "currency_unit",
+            ),
         }
     }
 }
 
-impl Labels {
-    pub fn new(engine_type: EngineType) -> Self {
-        match engine_type {
-            EngineType::New => Self {
-                display_name: "displayName",
-                armor_types: "armorTypes",
-                skill_types: "skillTypes",
-                terms: "terms",
-                weapon_types: "weaponTypes",
-                game_title: "gameTitle",
-                ..Default::default()
-            },
-            _ => Self {
-                display_name: "display_name",
-                armor_types: "armor_types",
-                skill_types: "skill_types",
-                terms: if engine_type.is_xp() {
-                    "words"
-                } else {
-                    "terms"
-                },
-                weapon_types: "weapon_types",
-                game_title: "game_title",
-                ..Default::default()
-            },
-        }
+impl Default for Labels {
+    fn default() -> Self {
+        Self::new(EngineType::New)
     }
 }
 
@@ -274,29 +265,38 @@ impl RPGMFileType {
 impl FromStr for RPGMFileType {
     type Err = Infallible;
 
+    /// Matches on the first three bytes lowercased in place. Byte-wise rather than
+    /// `value[0..3].to_lowercase()`, which allocated per call and panicked outright
+    /// if byte 3 was not a character boundary.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(if value.len() >= 3 {
-            let letters: &str = &value[0..3].to_lowercase();
+        let bytes = value.as_bytes();
 
-            match letters {
-                "act" => Self::Actors,
-                "arm" => Self::Armors,
-                "cla" => Self::Classes,
-                "com" => Self::Events,
-                "ene" => Self::Enemies,
-                "ite" => Self::Items,
-                "map" => Self::Map,
-                "ski" => Self::Skills,
-                "sta" => Self::States,
-                "sys" => Self::System,
-                "tro" => Self::Troops,
-                "wea" => Self::Weapons,
-                "scr" => Self::Scripts,
-                "plu" => Self::Plugins,
-                _ => Self::Invalid,
-            }
-        } else {
-            Self::Invalid
+        if bytes.len() < 3 {
+            return Ok(Self::Invalid);
+        }
+
+        let prefix = [
+            bytes[0].to_ascii_lowercase(),
+            bytes[1].to_ascii_lowercase(),
+            bytes[2].to_ascii_lowercase(),
+        ];
+
+        Ok(match &prefix {
+            b"act" => Self::Actors,
+            b"arm" => Self::Armors,
+            b"cla" => Self::Classes,
+            b"com" => Self::Events,
+            b"ene" => Self::Enemies,
+            b"ite" => Self::Items,
+            b"map" => Self::Map,
+            b"ski" => Self::Skills,
+            b"sta" => Self::States,
+            b"sys" => Self::System,
+            b"tro" => Self::Troops,
+            b"wea" => Self::Weapons,
+            b"scr" => Self::Scripts,
+            b"plu" => Self::Plugins,
+            _ => Self::Invalid,
         })
     }
 }
@@ -362,7 +362,8 @@ pub enum Error {
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
     #[error(
-        "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
+        "Title couldn't be found. Ensure you've passed right `Game.ini` or \
+         `System.json` file."
     )]
     NoTitle,
     #[error(
@@ -380,71 +381,94 @@ impl Serialize for Error {
     }
 }
 
+/// What to do with a game's files.
+///
+/// Reading is the only operation with options, so they sit on that variant
+/// rather than in a second enum:
+///
+/// - `append` keeps the translations already in the `.txt` files and adds text
+///   that is new since the last read, for a game that got a content update.
+///   Without it, an existing translation file is left alone.
+/// - `force` overwrites files that already exist and bypasses the hash check
+///   that would otherwise skip unchanged files.
 #[derive(Clone, Copy, Debug, Deserialize, EnumIs, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
 #[repr(u8)]
-/// Defines how to read file.
-///
-/// - [`Mode::Read`] holds a [`ReadMode`] that defines the read mode.
-/// - [`Mode::Write`] is used to write files back.
-/// - [`Mode::Purge`] is used to purge lines with empty translation.
 pub enum Mode {
-    Read(ReadMode),
-    Write = 3,
-    Purge = 4,
+    /// Extract text from the game's files into `.txt` files.
+    Read { append: bool, force: bool },
+    /// Write translated text back into the game's files.
+    Write,
+    /// Drop entries that have no translation.
+    Purge,
 }
 
 impl Mode {
-    /// Checks if [`Mode`] is [`ReadMode::Default`] with any force boolean.
+    /// A plain read: no appending, no forcing.
+    #[must_use]
+    pub const fn read() -> Self {
+        Self::Read {
+            append: false,
+            force: false,
+        }
+    }
+
+    /// Reading without appending, forced or not.
     #[must_use]
     pub const fn is_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: _ }))
+        matches!(self, Self::Read { append: false, .. })
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Append`] with any force boolean.
+    /// Reading with appending, forced or not.
     #[must_use]
     pub const fn is_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: _ }))
+        matches!(self, Self::Read { append: true, .. })
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Default`] without a force boolean.
+    /// Reading without appending and without forcing.
     #[must_use]
     pub const fn is_default_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: false }))
+        matches!(
+            self,
+            Self::Read {
+                append: false,
+                force: false
+            }
+        )
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Append`] without a force boolean.
+    /// Reading with appending but without forcing.
     #[must_use]
     pub const fn is_append_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: false }))
-    }
-
-    /// Checks if [`Mode`] is [`ReadMode::Default`] with a force boolean.
-    #[must_use]
-    pub const fn is_force(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: true }))
-    }
-
-    /// Checks if [`Mode`] is [`ReadMode::Append`] with a force boolean.
-    #[must_use]
-    pub const fn is_force_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: true }))
+        matches!(
+            self,
+            Self::Read {
+                append: true,
+                force: false
+            }
+        )
     }
 }
 
 impl Default for Mode {
     fn default() -> Self {
-        Self::Read(ReadMode::Default { force: false })
+        Self::read()
     }
 }
 
+/// Reads occupy 0..=3, with bit 0 as `force` and bit 1 as `append`.
+///
+/// The previous encoding gave `Write` the value 3, which a force-append read
+/// also produced, so that combination could not survive a round trip.
 impl From<Mode> for u8 {
-    fn from(val: Mode) -> Self {
-        match val {
-            Mode::Read(m) => m.into(),
-            Mode::Write => 3,
-            Mode::Purge => 4,
+    fn from(value: Mode) -> Self {
+        match value {
+            Mode::Read { append, force } => {
+                u8::from(force) | (u8::from(append) << 1)
+            }
+            Mode::Write => 4,
+            Mode::Purge => 5,
         }
     }
 }
@@ -453,15 +477,43 @@ impl TryFrom<u8> for Mode {
     type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            3 => Ok(Mode::Write),
-            4 => Ok(Mode::Purge),
-            v => {
-                let r: ReadMode =
-                    v.try_into().map_err(|_| "invalid ReadMode value")?;
-                Ok(Mode::Read(r))
+        Ok(match value {
+            0..=3 => Self::Read {
+                append: value & 0b10 != 0,
+                force: value & 0b01 != 0,
+            },
+            4 => Self::Write,
+            5 => Self::Purge,
+            _ => return Err("Expected a number from 0 to 5"),
+        })
+    }
+}
+
+impl FromStr for Mode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "default" => Self::read(),
+            "append" => Self::Read {
+                append: true,
+                force: false,
+            },
+            "force" => Self::Read {
+                append: false,
+                force: true,
+            },
+            "force-append" => Self::Read {
+                append: true,
+                force: true,
+            },
+            "write" => Self::Write,
+            "purge" => Self::Purge,
+            _ => {
+                return Err("Expected `default`, `append`, `force`, \
+                            `force-append`, `write` or `purge` string");
             }
-        }
+        })
     }
 }
 
@@ -504,139 +556,10 @@ impl FromStr for DuplicateMode {
 
 #[derive(
     Debug,
-    Default,
     Clone,
     Copy,
-    EnumIs,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
-)]
-#[serde(into = "u8", try_from = "u8")]
-#[repr(u8)]
-/// Game type for custom processing.
-///
-/// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-///
-/// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-///
-/// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-pub enum GameType {
-    #[default]
-    None,
-    Termina,
-    LisaRPG,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, VariantNames)]
-#[serde(into = "u8", try_from = "u8")]
-#[strum(serialize_all = "lowercase")]
-#[repr(u8)]
-/// There's two read modes:
-///
-/// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist. `bool` indicates whether mode is force.
-/// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update. `bool` indicates whether mode is force.
-///
-/// Each of the modes holds a [`bool`]. It defines whether to read in force mode (overwrite existing files/bypass hashes).
-pub enum ReadMode {
-    Default { force: bool },
-    Append { force: bool },
-}
-
-impl Default for ReadMode {
-    fn default() -> Self {
-        Self::Default { force: false }
-    }
-}
-
-impl From<ReadMode> for u8 {
-    fn from(val: ReadMode) -> Self {
-        match val {
-            ReadMode::Default { force } => u8::from(force),
-            ReadMode::Append { force } => {
-                if force {
-                    3
-                } else {
-                    2
-                }
-            }
-        }
-    }
-}
-
-impl TryFrom<u8> for ReadMode {
-    type Error = &'static str;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(match value {
-            0..=1 => Self::Default { force: value != 0 },
-            2..=3 => Self::Append { force: value != 2 },
-            _ => return Err("Expected a number from 0 to 3"),
-        })
-    }
-}
-
-impl FromStr for ReadMode {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "default" => Self::Default { force: false },
-            "append" => Self::Append { force: false },
-            "force" => Self::Default { force: true },
-            "force-append" => Self::Append { force: true },
-            _ => {
-                return Err(
-                    "Expected `default`, `append`, `force` or `force-append` string",
-                );
-            }
-        })
-    }
-}
-
-impl ReadMode {
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with any force boolean.
-    #[must_use]
-    pub const fn is_default(self) -> bool {
-        matches!(self, ReadMode::Default { force: _ })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with any force boolean.
-    #[must_use]
-    pub const fn is_append(self) -> bool {
-        matches!(self, ReadMode::Append { force: _ })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] without a force boolean.
-    #[must_use]
-    pub const fn is_default_default(self) -> bool {
-        matches!(self, ReadMode::Default { force: false })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] without a force boolean.
-    #[must_use]
-    pub const fn is_append_default(self) -> bool {
-        matches!(self, ReadMode::Append { force: false })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with a force boolean.
-    #[must_use]
-    pub const fn is_force(self) -> bool {
-        matches!(self, ReadMode::Default { force: true })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with a force boolean.
-    #[must_use]
-    pub const fn is_force_append(self) -> bool {
-        matches!(self, ReadMode::Append { force: true })
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
+    PartialEq,
+    Eq,
     EnumIs,
     Default,
     TryFromPrimitive,
@@ -696,7 +619,7 @@ impl std::fmt::Display for EngineType {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
     #[repr(transparent)]
     /// There's four [`FileFlags`] variants:
@@ -768,55 +691,81 @@ impl FieldNames for FileFlags {
     ];
 }
 
+/// Gives each flag a function form, so a single file kind reads the same at a call
+/// site as the [`FileFlags::other`] group does.
+macro_rules! flag_aliases {
+    ($($name:ident => $flag:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("Alias for [`FileFlags::", stringify!($flag), "`].")]
+            #[must_use]
+            pub const fn $name() -> Self {
+                Self::$flag
+            }
+        )*
+    };
+}
+
 impl FileFlags {
+    /// Everything except [`FileFlags::Map`], [`FileFlags::System`] and
+    /// [`FileFlags::Scripts`].
     #[must_use]
-    /// Other entries. Those include [`FileFlags::Armors`], [`FileFlags::Classes`], [`FileFlags::CommonEvents`], [`FileFlags::Enemies`], [`FileFlags::Items`], [`FileFlags::Skills`], [`FileFlags::States`], [`FileFlags::Troops`], [`FileFlags::Weapons`].
-    pub fn other() -> Self {
+    pub const fn other() -> Self {
         Self::Actors
-            | Self::Armors
-            | Self::Classes
-            | Self::CommonEvents
-            | Self::Enemies
-            | Self::Items
-            | Self::Skills
-            | Self::States
-            | Self::Troops
-            | Self::Weapons
+            .union(Self::Armors)
+            .union(Self::Classes)
+            .union(Self::CommonEvents)
+            .union(Self::Enemies)
+            .union(Self::Items)
+            .union(Self::Skills)
+            .union(Self::States)
+            .union(Self::Troops)
+            .union(Self::Weapons)
+    }
+
+    flag_aliases! {
+        map => Map,
+        actors => Actors,
+        armors => Armors,
+        classes => Classes,
+        common_events => CommonEvents,
+        enemies => Enemies,
+        items => Items,
+        skills => Skills,
+        states => States,
+        troops => Troops,
+        weapons => Weapons,
+        system => System,
+        scripts => Scripts,
     }
 }
 
 impl FromStr for FileFlags {
     type Err = &'static str;
 
+    /// Derived from [`RPGMFileType`] rather than repeating its filename table.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() >= 3 {
-            let letters: &str = &s[0..3].to_lowercase();
+        // SAFETY: `RPGMFileType`'s error type is `Infallible`.
+        let file_type = unsafe { RPGMFileType::from_str(s).unwrap_unchecked() };
 
-            Ok(match letters {
-                "act" => Self::Actors,
-                "arm" => Self::Armors,
-                "cla" => Self::Classes,
-                "com" => Self::CommonEvents,
-                "ene" => Self::Enemies,
-                "ite" => Self::Items,
-                "map" => Self::Map,
-                "ski" => Self::Skills,
-                "sta" => Self::States,
-                "sys" => Self::System,
-                "tro" => Self::Troops,
-                "wea" => Self::Weapons,
-                "scr" | "plu" => Self::Scripts,
-                _ => {
-                    return Err(
-                        "FileFlags require valid RPG Maker data file name to parse from.",
-                    );
-                }
-            })
-        } else {
-            Err(
-                "FileFlags require valid RPG Maker data file name to parse from.",
-            )
-        }
+        Ok(match file_type {
+            RPGMFileType::Actors => Self::Actors,
+            RPGMFileType::Armors => Self::Armors,
+            RPGMFileType::Classes => Self::Classes,
+            RPGMFileType::Events => Self::CommonEvents,
+            RPGMFileType::Enemies => Self::Enemies,
+            RPGMFileType::Items => Self::Items,
+            RPGMFileType::Map => Self::Map,
+            RPGMFileType::Skills => Self::Skills,
+            RPGMFileType::States => Self::States,
+            RPGMFileType::System => Self::System,
+            RPGMFileType::Troops => Self::Troops,
+            RPGMFileType::Weapons => Self::Weapons,
+            RPGMFileType::Scripts | RPGMFileType::Plugins => Self::Scripts,
+            RPGMFileType::Invalid => {
+                return Err("FileFlags require valid RPG Maker data file \
+                            name to parse from.");
+            }
+        })
     }
 }
 
@@ -841,7 +790,7 @@ impl Default for FileFlags {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
     #[repr(transparent)]
     /// Indicates different modes of processing the text.
@@ -857,7 +806,7 @@ bitflags! {
         ///
         /// Prior to using this function, you may need to create `.rvpacker-ignore` file by purging with [`BaseFlags::CreateIgnore`] argument.
         ///
-        /// Only used on reads with [`ReadMode::Append`] to bypass entries that were previously purged.
+        /// Only used on reads with [`Mode::Read`] to bypass entries that were previously purged.
         const Ignore = 1 << 2;
 
         /// Create `.rvpacker-ignore` file with ignore entries from purged entries.
@@ -868,7 +817,7 @@ bitflags! {
         /// No effect, for convenience.
         const DisableCustomProcessing = 1 << 4;
 
-        /// Skip obsolete entries that are not in game files anymore on reads with [`ReadMode::Append`].
+        /// Skip obsolete entries that are not in game files anymore on reads with [`Mode::Read`].
         const SkipObsolete = 1 << 5;
     }
 }

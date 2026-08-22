@@ -1,6 +1,6 @@
 use crate::{
-    constants::INSTANCE_VAR_PREFIX,
-    core::ScriptBase,
+    constants::{INSTANCE_VAR_PREFIX, SCRIPT_COMMENT, SEPARATOR},
+    core::Base,
     types::{EngineType, Error, Scripts},
 };
 use marshal_rs::{Value, dump, load_binary, load_utf8};
@@ -40,7 +40,7 @@ pub fn generate_file(
                 .unwrap_unchecked()
         };
 
-        let scripts = ScriptBase::decode_scripts(&scripts_array);
+        let scripts = Base::decode_scripts(&scripts_array);
 
         Ok(scripts
             .numbers
@@ -50,7 +50,7 @@ pub fn generate_file(
             .fold(String::new(), |mut result, ((a, b), c)| {
                 let _ = write!(
                     result,
-                    "<!-- SCRIPT: {a}, {b} -->\n{c}{end}",
+                    "{SCRIPT_COMMENT}{SEPARATOR}{a}{SEPARATOR}{b}\n{c}{end}",
                     c = c.replace("\r\n", "\n"),
                     end = if c.ends_with('\n') { "" } else { "\n" }
                 );
@@ -80,7 +80,11 @@ pub fn generate_file(
 ///
 pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
     let json = from_str::<Value>(file_content)?;
-    Ok(dump(json, None))
+
+    // The same prefix `generate_file` loaded with. Dumping without it left
+    // every instance variable stripped of its `@`, so the file the game got
+    // back had no fields it could recognise.
+    Ok(dump(json, INSTANCE_VAR_PREFIX))
 }
 
 /// Generates JSON representations of older engine files (`.rxdata`, `.rvdata`, `.rvdata2`).
@@ -229,19 +233,18 @@ pub fn write<P: AsRef<Path>>(
             let mut read = 0;
 
             for script_line in content.split_inclusive('\n') {
-                if script_line.starts_with("<!-- SCRIPT") {
-                    let without_prefix_and_suffix = unsafe {
+                if script_line.starts_with(SCRIPT_COMMENT) {
+                    let header = unsafe {
                         script_line
-                            .strip_prefix("<!-- SCRIPT: ")
+                            .strip_prefix(SCRIPT_COMMENT)
                             .unwrap_unchecked()
-                            .strip_suffix(" -->\n")
+                            .strip_prefix(SEPARATOR)
                             .unwrap_unchecked()
+                            .trim_end_matches('\n')
                     };
 
                     let (magic_number, name) = unsafe {
-                        without_prefix_and_suffix
-                            .split_once(',')
-                            .unwrap_unchecked()
+                        header.split_once(SEPARATOR).unwrap_unchecked()
                     };
 
                     scripts.numbers.push(unsafe {
@@ -267,7 +270,7 @@ pub fn write<P: AsRef<Path>>(
                     .push(content[prev_content_start..].to_string());
             }
 
-            dump(Value::array(ScriptBase::encode_scripts(&scripts)), None)
+            dump(Value::array(Base::encode_scripts(&scripts)), None)
         } else {
             write_file(&content)?
         };

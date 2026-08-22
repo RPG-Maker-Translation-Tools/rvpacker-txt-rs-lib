@@ -1,0 +1,6 @@
+# Fixtures are byte-exact copies of what RPG Maker writes, CRLF included.
+tests/RMMV/** -text
+tests/RMMZ/** -text
+tests/RMVX/** -text
+tests/RMVXACE/** -text
+tests/RMXP/** -text

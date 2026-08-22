@@ -6,13 +6,11 @@
 #![allow(clippy::deref_addrof)]
 #![doc = include_str!("../README.md")]
 
-mod processors;
-
 pub mod constants;
 pub mod core;
-pub mod serde;
-pub mod generic;
 pub mod json;
+pub mod processors;
+pub mod serde;
 pub mod types;
 
 pub use constants::{
@@ -21,7 +19,5 @@ pub use constants::{
 pub use core::{
     filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore,
 };
-pub use processors::{
-    Purger, PurgerBuilder, Reader, ReaderBuilder, Writer, WriterBuilder,
-};
+pub use processors::Processor;
 pub use types::*;

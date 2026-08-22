@@ -13,8 +13,12 @@ use quick_xml::{
 #[cfg(feature = "serde-xlsx")]
 use rust_xlsxwriter::{Format, Workbook};
 
+use crate::constants::{COMMENT_PREFIX, SEPARATOR};
 use serde::{Deserialize, Serialize};
-use std::{error::Error, io::Cursor};
+use std::error::Error;
+
+#[cfg(any(feature = "serde-xlsx", feature = "serde-xml"))]
+use std::io::Cursor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -28,54 +32,39 @@ enum Entry {
     },
 }
 
+/// Splits a translation file into entries.
+///
+/// A line carrying the comment marker is metadata - an id, a name, a map's
+/// displayed name - and is kept whole; every other line is a
+/// `source<#>translation` row.
 fn parse_entries(content: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
-    let mut rest = content;
 
-    loop {
-        match rest.find("<!--") {
-            Some(start) => {
-                process_text_segment(&rest[..start], &mut entries);
-                match rest[start..].find("-->") {
-                    Some(end_rel) => {
-                        let end = start + end_rel + 3;
-                        entries.push(Entry::Comment {
-                            text: rest[start..end].to_string(),
-                        });
-                        rest = &rest[end..];
-                    }
-                    None => {
-                        entries.push(Entry::Comment {
-                            text: rest[start..].to_string(),
-                        });
-                        break;
-                    }
-                }
-            }
-            None => {
-                process_text_segment(rest, &mut entries);
-                break;
-            }
-        }
-    }
-
-    entries
-}
-
-fn process_text_segment(segment: &str, entries: &mut Vec<Entry>) {
-    for raw_line in segment.split('\n') {
+    for raw_line in content.split('\n') {
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+
         if line.trim().is_empty() {
             continue;
         }
-        let mut parts = line.split("<#>");
+
+        if line.starts_with(COMMENT_PREFIX) {
+            entries.push(Entry::Comment {
+                text: line.to_string(),
+            });
+            continue;
+        }
+
+        let mut parts = line.split(SEPARATOR);
         let source = parts.next().unwrap_or("").to_string();
         let translations: Vec<String> = parts.map(|s| s.to_string()).collect();
+
         entries.push(Entry::Translation {
             source,
             translations,
         });
     }
+
+    entries
 }
 
 fn entries_to_content(entries: &[Entry]) -> String {
@@ -89,7 +78,7 @@ fn entries_to_content(entries: &[Entry]) -> String {
             } => {
                 let mut parts = vec![source.clone()];
                 parts.extend(translations.iter().cloned());
-                parts.join("<#>")
+                parts.join(SEPARATOR)
             }
         })
         .collect::<Vec<_>>()
@@ -350,10 +339,25 @@ pub fn export_xml(content: &str) -> Result<String, Box<dyn Error>> {
     ))
 }
 
+/// Appends a piece of text to whichever element is open.
+#[cfg(feature = "serde-xml")]
+fn push_text(
+    text: &str,
+    in_source: bool,
+    in_translation: bool,
+    source: &mut Option<String>,
+    translations: &mut [String],
+) {
+    if in_source {
+        source.get_or_insert_default().push_str(text);
+    } else if in_translation && let Some(last) = translations.last_mut() {
+        last.push_str(text);
+    }
+}
+
 #[cfg(feature = "serde-xml")]
 pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
     let mut reader = XmlReader::from_str(xml_content);
-    reader.config_mut().trim_text(true);
 
     let mut entries: Vec<Entry> = Vec::new();
     let mut buf = Vec::new();
@@ -395,15 +399,36 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
                 }),
                 _ => {}
             },
+            // The reader splits a run of text at every entity reference, so
+            // the pieces are appended rather than assigned - assigning kept
+            // only the piece after the last `&lt;`, which quietly ate the
+            // comment marker and any game text holding a `<`.
             Event::Text(t) => {
-                let text = unescape(&t.decode()?)?.into_owned();
-                if in_source {
-                    current_source = Some(text);
-                } else if in_translation {
-                    if let Some(last) = current_translations.last_mut() {
-                        *last = text;
-                    }
-                }
+                push_text(
+                    &unescape(&t.decode()?)?,
+                    in_source,
+                    in_translation,
+                    &mut current_source,
+                    &mut current_translations,
+                );
+            }
+            Event::GeneralRef(reference) => {
+                let resolved = match reference.resolve_char_ref()? {
+                    Some(char) => char.to_string(),
+                    None => unescape(&format!(
+                        "&{name};",
+                        name = reference.decode()?
+                    ))?
+                    .into_owned(),
+                };
+
+                push_text(
+                    &resolved,
+                    in_source,
+                    in_translation,
+                    &mut current_source,
+                    &mut current_translations,
+                );
             }
             Event::CData(t) => {
                 if in_comment {

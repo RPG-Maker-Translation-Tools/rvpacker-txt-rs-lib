@@ -1,14 +1,8 @@
 use crate::{
-    RPGMFileType,
+    ProcessedData, RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
-    core::{
-        self, Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
-        filter_maps, filter_other, parse_ignore,
-    },
-    types::{
-        BaseFlags, DuplicateMode, EngineType, Error, FileFlags, GameType, Mode,
-        ReadMode,
-    },
+    core::{Base, filter_maps, filter_other, parse_ignore},
+    types::{BaseFlags, DuplicateMode, EngineType, Error, FileFlags, Mode},
 };
 use gxhash::{HashMap, HashSet, gxhash64};
 use log::{debug, info};
@@ -20,27 +14,126 @@ use std::{
     str::FromStr,
 };
 
+/// Reads, writes and purges RPG Maker translation files, handling all system calls.
+///
+/// This is a plain struct with public fields: set the ones you need and call
+/// [`Processor::process`]. [`Processor::mode`] decides which operation runs, so
+/// the same struct covers all three.
+///
+/// # Example
+///
+/// ```no_run
+/// use rvpacker_txt_rs_lib::{EngineType, FileFlags, Mode, Processor};
+///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let mut processor = Processor {
+///         mode: Mode::Read { append: false, force: true },
+///         file_flags: FileFlags::Map | FileFlags::other(),
+///         ..Default::default()
+///     };
+///
+///     processor.process(
+///         EngineType::VXAce,
+///         "C:/Game/Data",
+///         "C:/Game/translation",
+///         None,
+///     )?;
+///
+///     // Writing back needs an output directory and the same options.
+///     processor.mode = Mode::Write;
+///     processor.process(
+///         EngineType::VXAce,
+///         "C:/Game/Data",
+///         "C:/Game/translation",
+///         Some("C:/Game/output".as_ref()),
+///     )?;
+///
+///     Ok(())
+/// }
+/// ```
 #[derive(Default)]
-pub(crate) struct Processor {
-    pub file_flags: FileFlags,
+pub struct Processor {
+    /// Which operation to perform. See [`Mode`].
     pub mode: Mode,
-    pub game_type: GameType,
+
+    /// Which RPG Maker files to process. See [`FileFlags`].
+    pub file_flags: FileFlags,
+
+    /// How to process the text - trimming, ignore entries, and so on. See [`BaseFlags`].
+    ///
+    /// Must match the flags used on read when writing or purging.
     pub flags: BaseFlags,
+
+    /// What to do with duplicate lines. See [`DuplicateMode`].
+    ///
+    /// Must match the mode used on read when writing or purging.
     pub duplicate_mode: DuplicateMode,
-    pub hashes: HashMap<String, u64>,
-    pub skip_maps: Vec<u16>,
-    pub skip_events: Vec<(RPGMFileType, Vec<u16>)>,
-    pub map_events: bool,
+
+    /// Overrides the game title extracted from the system file.
+    ///
+    /// XP/VX/VX Ace games may only carry their title in `Game.ini`, which is not
+    /// necessarily UTF-8. Decode it yourself - see
+    /// [`get_ini_title`](crate::get_ini_title) - and set it here. Only used on read.
     pub game_title: String,
+
+    /// Content hashes keyed by lowercased file stem.
+    ///
+    /// Set these from a previous read to let [`Mode::Read`]
+    /// skip unchanged files, and read them back afterwards to persist them.
+    pub hashes: HashMap<String, u64>,
+
+    /// Map ids to skip. On [`Mode::Read`] the
+    /// corresponding maps are written back unchanged.
+    pub skip_maps: Vec<u16>,
+
+    /// Per-file entry ids to skip. Has no effect on [`RPGMFileType::Map`].
+    pub skip_events: Vec<(RPGMFileType, Vec<u16>)>,
+
+    /// Whether to record event metadata - id, name and coordinates - before each
+    /// event's text.
+    pub map_events: bool,
 }
 
 impl Processor {
-    pub fn process<P: AsRef<Path>>(
+    /// Creates a [`Processor`] for `mode`, with every other option left at its default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rvpacker_txt_rs_lib::{Mode, Processor};
+    ///
+    /// let processor = Processor::new(Mode::Purge);
+    /// ```
+    #[must_use]
+    pub fn new(mode: Mode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    /// Runs the operation selected by [`Processor::mode`].
+    ///
+    /// # Parameters
+    ///
+    /// - `engine_type` - engine the source files belong to.
+    /// - `source_path` - directory holding the RPG Maker data files.
+    /// - `translation_path` - directory holding (or to hold) the `.txt` files.
+    /// - `output_path` - where to write rebuilt data files. Required by
+    ///   [`Mode::Write`], ignored otherwise.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Io`] - if any I/O operation fails.
+    /// - [`Error::JsonParse`] - if parsing any JSON fails.
+    /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
+    /// - [`Error::NoTranslation`] - if the mode needs a translation file and none was found.
+    pub fn process(
         &mut self,
         engine_type: EngineType,
-        source_path: P,
-        translation_path: P,
-        output_path: Option<&P>,
+        source_path: impl AsRef<Path>,
+        translation_path: impl AsRef<Path>,
+        output_path: Option<&Path>,
     ) -> Result<(), Error> {
         if self.file_flags.is_empty() {
             return Ok(());
@@ -48,24 +141,22 @@ impl Processor {
 
         let source_path = source_path.as_ref();
         let translation_path = translation_path.as_ref();
-        let output_path =
-            output_path.map_or_else(|| Path::new(""), |x| x.as_ref());
+        let output_path = output_path.unwrap_or(Path::new(""));
 
         let mut base = Base::new(self.mode, engine_type);
         base.flags = self.flags;
         base.duplicate_mode = self.duplicate_mode;
-        base.game_type = self.game_type;
         base.skip_events = take(&mut self.skip_events)
             .into_iter()
             .map(|(id, vec)| (id, HashSet::from_iter(vec)))
             .collect();
 
+        let mode = base.mode;
+        let flags = base.flags;
+
         let mut ignore_file_path = PathBuf::new();
 
-        if base
-            .flags
-            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
-        {
+        if flags.intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore) {
             ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
             let ignore_file_content = read_to_string(&ignore_file_path)
@@ -73,14 +164,14 @@ impl Processor {
 
             match ignore_file_content {
                 Ok(content) => {
-                    base.ignore_map = parse_ignore(
+                    base.ignore.map = parse_ignore(
                         &content,
-                        base.duplicate_mode,
-                        base.mode.is_read(),
+                        self.duplicate_mode,
+                        mode.is_read(),
                     );
                 }
 
-                Err(err) if base.flags.contains(BaseFlags::Ignore) => {
+                Err(err) if flags.contains(BaseFlags::Ignore) => {
                     return Err(err);
                 }
 
@@ -88,7 +179,7 @@ impl Processor {
             }
         }
 
-        let output_dir = if base.mode.is_read() {
+        let output_dir = if mode.is_read() {
             translation_path
         } else {
             output_path
@@ -103,26 +194,25 @@ impl Processor {
             "Data"
         });
 
-        if base.mode.is_write() {
+        if mode.is_write() {
             create_dir_all(&data_output_path)
                 .map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
 
-        let pre_msg = match base.mode {
-            Mode::Read(_) => "Started reading.",
+        let pre_msg = match mode {
+            Mode::Read { .. } => "Started reading.",
             Mode::Write => "Started writing.",
             Mode::Purge => "Started purging.",
         };
 
-        let post_msg = match base.mode {
-            Mode::Read(_) => "Successfully read.",
+        let post_msg = match mode {
+            Mode::Read { .. } => "Successfully read.",
             Mode::Write => "Successfully written.",
             Mode::Purge => "Successfully purged.",
         };
 
-        let base_ref = unsafe { &mut *(&raw mut base) };
         let load_translation = |p: &Path| -> Result<Option<String>, Error> {
-            if base_ref.mode.is_default() {
+            if mode.is_default() {
                 return Ok(None);
             }
 
@@ -131,7 +221,20 @@ impl Processor {
                 .map(Some)
         };
 
-        let base_ref = unsafe { &mut *(&raw mut base) };
+        // `true` when a translation file is already there and the caller asked us
+        // not to clobber it, i.e. plain default read mode without force.
+        let already_exists = |p: &Path| {
+            if mode.is_default_default() && p.exists() {
+                info!(
+                    "{}: File already exists. Use append mode to append text \
+                     or force mode to overwrite.",
+                    p.display()
+                );
+                true
+            } else {
+                false
+            }
+        };
 
         let mut hash = |content: &[u8], filename: &str| {
             let filename = &filename
@@ -148,13 +251,33 @@ impl Processor {
 
             if unchanged && self.mode.is_append_default() {
                 info!(
-                    "{filename} hasn't changed since the last read. Skipping it. Use `ReadMode::ForceAppend`, if you want to forcefully append data."
+                    "{filename} hasn't changed since the last read. Skipping \
+                     it. Set `force` on the read mode, if you want to \
+                     forcefully append data."
                 );
 
                 return ControlFlow::Break(());
             }
 
             ControlFlow::Continue(())
+        };
+
+        // Writes land next to the source data, everything else lands in the `.txt`.
+        let emit = |data: Option<ProcessedData>,
+                    rpgm_output_path: PathBuf,
+                    translation_file_path: PathBuf|
+         -> Result<(), Error> {
+            let Some(data) = data else {
+                return Ok(());
+            };
+
+            let path = if mode.is_write() {
+                rpgm_output_path
+            } else {
+                translation_file_path
+            };
+
+            write(&path, data).map_err(|e| Error::Io(path, e))
         };
 
         let entries: Vec<DirEntry> = read_dir(source_path)
@@ -165,28 +288,21 @@ impl Processor {
         let engine_extension = engine_type.extension();
 
         if self.file_flags.contains(FileFlags::Map) {
-            let mut map_base = MapBase::new(base_ref);
-
-            let mapinfos_path =
-                source_path.join(format!("MapInfos.{engine_extension}"));
-            let mapinfos = read(&mapinfos_path)
-                .map_err(|e| Error::Io(mapinfos_path, e))?;
-
             let translation_file_path = translation_path.join("maps.txt");
 
-            if base.mode.is_default_default() && translation_file_path.exists()
-            {
-                info!(
-                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                    translation_file_path.display()
-                );
-            } else {
+            if !already_exists(&translation_file_path) {
+                let mapinfos_path =
+                    source_path.join(format!("MapInfos.{engine_extension}"));
+                let mapinfos = read(&mapinfos_path)
+                    .map_err(|e| Error::Io(mapinfos_path, e))?;
+
                 let translation = load_translation(&translation_file_path)?;
-                let mut contents = Vec::new();
 
                 base.map_events = self.map_events;
                 base.skip_maps =
                     take(&mut self.skip_maps).into_iter().collect();
+
+                base.begin_maps();
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
@@ -198,7 +314,7 @@ impl Processor {
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
-                    let id = MapBase::parse_map_id(filename);
+                    let id = Base::parse_map_id(filename);
 
                     let mut skipped = false;
 
@@ -207,14 +323,14 @@ impl Processor {
                         skipped = true;
                     }
 
-                    let result = map_base.process(
+                    let result = base.process_map(
                         filename,
                         &content,
                         &mapinfos,
                         translation.as_deref(),
                     )?;
 
-                    if base.mode.is_write() {
+                    if mode.is_write() {
                         if let Some(result) = result {
                             let output_path = data_output_path.join(filename);
                             write(&output_path, result)
@@ -222,18 +338,18 @@ impl Processor {
                         }
                     }
 
-                    if !skipped {
-                        info!("{filename}: {post_msg}");
-                    } else {
+                    if skipped {
                         info!("{filename}: Skipped.");
+                    } else {
+                        info!("{filename}: {post_msg}");
                     }
                 }
 
-                if !base.mode.is_write() {
-                    contents.extend(match map_base.translation() {
-                        crate::ProcessedData::TranslationData(t) => t,
-                        crate::ProcessedData::RPGMData(_) => unreachable!(),
-                    });
+                if !mode.is_write() {
+                    let contents = match base.finish_maps() {
+                        ProcessedData::TranslationData(t) => t,
+                        ProcessedData::RPGMData(_) => unreachable!(),
+                    };
 
                     write(&translation_file_path, contents)
                         .map_err(|e| Error::Io(translation_file_path, e))?;
@@ -242,11 +358,7 @@ impl Processor {
         }
 
         if self.file_flags.intersects(FileFlags::other()) {
-            let mut other_base = OtherBase::new(base_ref);
-
-            for entry in
-                filter_other(entries.iter(), engine_extension, base.game_type)
-            {
+            for entry in filter_other(entries.iter(), engine_extension) {
                 let path = entry.path();
                 let filename =
                     path.file_name().and_then(|p| p.to_str()).unwrap();
@@ -264,58 +376,39 @@ impl Processor {
                         .with_extension("txt"),
                 );
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
-                    let translation = load_translation(&translation_file_path)?;
-
-                    let content =
-                        read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-
-                    if hash(&content, filename).is_break() {
-                        continue;
-                    }
-
-                    let data = other_base.process(
-                        filename,
-                        &content,
-                        translation.as_deref(),
-                    )?;
-
-                    let output_file_path = if base.mode.is_write() {
-                        data_output_path.join(filename)
-                    } else {
-                        translation_file_path
-                    };
-
-                    if let Some(data) = data {
-                        write(&output_file_path, data)
-                            .map_err(|e| Error::Io(output_file_path, e))?;
-                    }
-
-                    info!("{filename}: {post_msg}");
+                if already_exists(&translation_file_path) {
+                    continue;
                 }
+
+                let translation = load_translation(&translation_file_path)?;
+
+                let content =
+                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+
+                if hash(&content, filename).is_break() {
+                    continue;
+                }
+
+                let data = base.process_other(
+                    filename,
+                    &content,
+                    translation.as_deref(),
+                )?;
+
+                emit(
+                    data,
+                    data_output_path.join(filename),
+                    translation_file_path,
+                )?;
+
+                info!("{filename}: {post_msg}");
             }
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let mut system_base = SystemBase::new(base_ref);
             let translation_file_path = translation_path.join("system.txt");
 
-            if base.mode.is_default_default() && translation_file_path.exists()
-            {
-                info!(
-                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                    translation_file_path.display()
-                );
-            } else {
-                system_base.set_game_title(&self.game_title);
-
+            if !already_exists(&translation_file_path) {
                 let translation = load_translation(&translation_file_path)?;
                 let filename = format!("System.{engine_extension}");
 
@@ -326,19 +419,16 @@ impl Processor {
                     .map_err(|e| Error::Io(system_file_path, e))?;
 
                 if !hash(&content, &filename).is_break() {
-                    let data = system_base
-                        .process(&content, translation.as_deref())?;
+                    base.set_game_title(&self.game_title);
 
-                    let output_path = if base.mode.is_write() {
-                        data_output_path.join(&filename)
-                    } else {
-                        translation_file_path
-                    };
+                    let data =
+                        base.process_system(&content, translation.as_deref())?;
 
-                    if let Some(data) = data {
-                        write(&output_path, data)
-                            .map_err(|e| Error::Io(output_path, e))?;
-                    }
+                    emit(
+                        data,
+                        data_output_path.join(&filename),
+                        translation_file_path,
+                    )?;
 
                     info!("{filename}: {post_msg}");
                 }
@@ -347,19 +437,10 @@ impl Processor {
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugin_base = PluginBase::new(base_ref);
-
                 let translation_file_path =
                     translation_path.join("plugins.txt");
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
+                if !already_exists(&translation_file_path) {
                     debug!("plugins.txt: {pre_msg}");
 
                     let translation = load_translation(&translation_file_path)?;
@@ -370,41 +451,33 @@ impl Processor {
                         .map_err(|e| Error::Io(plugins_file_path, e))?;
 
                     if !hash(&content, "plugins.js").is_break() {
-                        let data = plugin_base
-                            .process(&content, translation.as_deref())?;
+                        let data = base.process_plugins(
+                            &content,
+                            translation.as_deref(),
+                        )?;
 
-                        let output_path = if base.mode.is_write() {
+                        if mode.is_write() {
                             let js_output_path = output_path.join("js");
                             create_dir_all(&js_output_path)
                                 .map_err(|e| Error::Io(js_output_path, e))?;
-                            output_path.join("js/plugins.js")
-                        } else {
-                            translation_file_path
-                        };
-
-                        if let Some(data) = data {
-                            write(&output_path, data)
-                                .map_err(|e| Error::Io(output_path, e))?;
                         }
+
+                        emit(
+                            data,
+                            output_path.join("js/plugins.js"),
+                            translation_file_path,
+                        )?;
 
                         info!("plugins.js: {post_msg}");
                     }
                 }
             } else {
-                let script_base = ScriptBase::new(base_ref);
-
                 let translation_file_path =
                     translation_path.join("scripts.txt");
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
+                if !already_exists(&translation_file_path) {
                     debug!("scripts.txt: {pre_msg}");
+
                     let translation = load_translation(&translation_file_path)?;
 
                     let filename = format!("Scripts.{engine_extension}");
@@ -413,19 +486,16 @@ impl Processor {
                         .map_err(|e| Error::Io(scripts_file_path, e))?;
 
                     if !hash(&content, &filename).is_break() {
-                        let data = script_base
-                            .process(&content, translation.as_deref())?;
+                        let data = base.process_scripts(
+                            &content,
+                            translation.as_deref(),
+                        )?;
 
-                        let output_path = if base.mode.is_write() {
-                            data_output_path.join(&filename)
-                        } else {
-                            translation_file_path
-                        };
-
-                        if let Some(data) = data {
-                            write(&output_path, data)
-                                .map_err(|e| Error::Io(output_path, e))?;
-                        }
+                        emit(
+                            data,
+                            data_output_path.join(&filename),
+                            translation_file_path,
+                        )?;
 
                         info!("{filename}: {post_msg}");
                     }
@@ -433,10 +503,10 @@ impl Processor {
             }
         }
 
-        if base.flags.contains(BaseFlags::CreateIgnore) {
+        if flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
-            let contents: String = take(&mut base.ignore_map).into_iter().fold(
+            let contents: String = take(&mut base.ignore.map).into_iter().fold(
                 String::new(),
                 |mut output, (file, lines)| {
                     let _ = write!(
@@ -444,11 +514,8 @@ impl Processor {
                         "{}\n{}",
                         file,
                         lines
-                            .into_iter()
-                            .map(|mut x| {
-                                x.push('\n');
-                                x
-                            })
+                            .lines()
+                            .map(|line| line.into_owned() + "\n")
                             .collect::<String>()
                     );
 
@@ -461,1272 +528,5 @@ impl Processor {
         }
 
         Ok(())
-    }
-}
-
-/// A struct used for parsing and extracting text from RPG Maker files into `.txt` format.
-///
-/// The [`Reader`] provides a configurable interface to control how files are parsed,
-/// which files are selected, and how text content is filtered.
-///
-/// It also has a builder version: [`ReaderBuilder`].
-///
-/// # Fields
-///
-/// - `mode`: Defines the read strategy. Use [`Reader::set_read_mode`] to set.
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Reader::set_files`] to set.
-/// - `flags`: Indicates different modes of processing the text. Use [`Reader::set_flags`]. For more info, see [`BaseFlags`].
-/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Writer::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Reader::set_game_type`] to set.
-/// - `hashes`: Hashes of the processed files. Use [`Reader::hashes`] to fetch the hashes after a read, and [`Reader::set_hashes`] when reading in [`ReadMode::Append`] mode.
-/// - `skip_maps`: Map indices to skip when processing. Use [`Reader::set_skip_maps`] to set. When reading in [`ReadMode::Append`] mode, specified maps will be written back unchanged.
-/// - `map_events`: Whether to parse event metadata. If event has any text and this option is set, event's metadata will be appended before the text, and it includes event id, name, x and y coordinates. Use [`Reader::set_map_events`] to set.
-///
-/// # Example
-///
-/// ```no_run
-/// use rvpacker_txt_rs_lib::{Reader, FileFlags, EngineType};
-///
-/// let mut reader = Reader::new();
-/// reader.set_files(FileFlags::Map | FileFlags::other());
-/// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
-/// ```
-pub struct Reader {
-    processor: Processor,
-}
-
-impl Default for Reader {
-    fn default() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Read(ReadMode::Default { force: false }),
-                ..Default::default()
-            },
-        }
-    }
-}
-
-impl Reader {
-    /// Creates a new [`Reader`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default(false)`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    /// ```
-    /// use rvpacker_txt_rs_lib::Reader;
-    ///
-    /// let mut reader = Reader::new();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, FileFlags};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_files(FileFlags::Map | FileFlags::other());
-    /// ```
-    pub fn set_files(&mut self, flags: FileFlags) {
-        self.processor.file_flags = flags;
-    }
-
-    /// Sets the read mode that affects how data is parsed. See [`ReadMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`ReadMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, ReadMode};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_read_mode(ReadMode::Default { force: false });
-    /// ```
-    pub fn set_read_mode(&mut self, mode: ReadMode) {
-        self.processor.mode = Mode::Read(mode);
-    }
-
-    /// Sets the game type for custom processing.
-    ///
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, GameType};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_game_type(GameType::Termina);
-    /// ```
-    pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.game_type = game_type;
-    }
-
-    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace.
-    ///
-    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8-encoded.
-    ///
-    /// Since there's no way to tell the encoding, it's user responsibility to call [`core::get_ini_title`], find title's encoding through trial-and-error, and pass it here.
-    ///
-    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, if title even exists there.
-    ///
-    /// # Parameters
-    ///
-    /// `title` - UTF-8 encoded [`&str`] title.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use rvpacker_txt_rs_lib::{Reader, GameType};
-    ///
-    /// let ini_file_contents = std::fs::read("./Game.ini").unwrap();
-    /// let ini_title = rvpacker_txt_rs_lib::core::get_ini_title(&ini_file_contents).unwrap();
-    ///
-    /// // Right now we're assuming that INI title is UTF-8, but it may not be UTF-8.
-    /// // Set up encoding-rs and find the right encoding.
-    /// let ini_title = std::str::from_utf8(&ini_title).unwrap();
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_game_title(ini_title);
-    /// ```
-    pub fn set_game_title(&mut self, game_title: &str) {
-        self.processor.game_title = game_title.to_owned();
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, BaseFlags};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_flags(BaseFlags::Trim);
-    /// ```
-    pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.flags = flags;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Reader, DuplicateMode};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.set_duplicate_mode(DuplicateMode::Allow);
-    /// ```
-    pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.duplicate_mode = mode;
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
-        self.processor.skip_maps = map_indices;
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// When reading in [`ReadMode::Append`] mode, corresponding events will be written back unchanged.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    pub fn set_skip_events(
-        &mut self,
-        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
-    ) {
-        self.processor.skip_events = event_indices;
-    }
-
-    /// Whether to parse event metadata from maps.
-    ///
-    /// If an event has some text inside it, this event's metadata will be written as comments. Has no actual effect other than adding additional context.
-    ///
-    /// # Parameters
-    ///
-    /// - `enabled` - whether to use this mode.
-    ///
-    pub fn set_map_events(&mut self, enabled: bool) {
-        self.processor.map_events = enabled;
-    }
-
-    /// Sets hashes from the previous read.
-    ///
-    /// Hashes are only used during [`ReadMode::Append`] read, and if a processed file matches the hashes, it's skipped.
-    ///
-    /// Note that you need to fetch the hashes again after reading in [`ReadMode::Append`] entries with [`Reader::hashes`], since files that don't match the hashes will cause hash recalculation.
-    ///
-    /// # Parameters
-    ///
-    /// - `hashes` - iterator over (String, u64) pairs of calculated hashes from the previous read.
-    ///
-    pub fn set_hashes(&mut self, hashes: impl Iterator<Item = (String, u64)>) {
-        self.processor.hashes = hashes.collect();
-    }
-
-    /// Returns hashes, corresponding to the processed files.
-    ///
-    /// The purpose of this function is simple: on the subsequent append reads, you pass the hashes back to the reader by calling [`Reader::set_hashes`] or [`ReaderBuilder::hashes`], and if a processed file matches the hashes, it's skipped.
-    ///
-    /// It's done to avoid reading unchanged files, and therefore speed up the process.
-    ///
-    /// # Returns
-    ///
-    /// - Iterator over (String, u64) filenames and hashes.
-    ///
-    pub fn hashes(&mut self) -> impl Iterator<Item = (String, u64)> {
-        take(&mut self.processor.hashes).into_iter()
-    }
-
-    /// Reads the RPG Maker files from `source_path` to `.txt` files in `translation_path`.
-    ///
-    /// Make sure you've configured the reader as you desire before calling it.
-    ///
-    /// # Parameters
-    ///
-    /// - `source_path` - Path to the directory containing RPG Maker files.
-    /// - `translation_path` - Path to the directory where `.txt` files will be created.
-    /// - `engine_type` - Engine type of the source RPG Maker files.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Io`] - if any I/O operation fails.
-    /// - [`Error::JsonParse`] - if parsing any JSON fails.
-    /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use rvpacker_txt_rs_lib::{Reader, EngineType};
-    ///
-    /// let mut reader = Reader::new();
-    /// reader.read("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
-    /// ```
-    pub fn read<P: AsRef<Path>>(
-        &mut self,
-        source_path: P,
-        translation_path: P,
-        engine_type: EngineType,
-    ) -> Result<(), Error> {
-        self.processor.process(
-            engine_type,
-            source_path,
-            translation_path,
-            None,
-        )?;
-        Ok(())
-    }
-}
-
-/// A builder struct for [`Reader`].
-///
-/// The [`Reader`] provides a configurable interface to control how files are parsed,
-/// which files are selected, and how text content is filtered.
-///
-/// For available options, check [`Reader`] struct itself.
-///
-/// # Example
-///
-/// ```
-/// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags, GameType};
-///
-/// let mut reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-/// ```
-#[derive(Default)]
-pub struct ReaderBuilder {
-    reader: Reader,
-}
-
-impl ReaderBuilder {
-    /// Creates a new [`ReaderBuilder`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be read), the [`ReadMode::Default(false)`] read mode is used, duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::ReaderBuilder;
-    ///
-    /// let mut reader = ReaderBuilder::new().build();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`FileFlags`] bitflags indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, FileFlags};
-    ///
-    /// let reader = ReaderBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-    /// ```
-    #[must_use]
-    pub fn with_files(mut self, flags: FileFlags) -> Self {
-        self.reader.processor.file_flags = flags;
-        self
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, BaseFlags};
-    ///
-    /// let mut reader = ReaderBuilder::new().with_flags(BaseFlags::Trim);
-    /// ```
-    #[must_use]
-    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.reader.processor.flags = flags;
-        self
-    }
-
-    /// Sets the read mode that affects how data is parsed. See [`ReadMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`ReadMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, ReadMode};
-    ///
-    /// let reader = ReaderBuilder::new().read_mode(ReadMode::Default { force: false }).build();
-    /// ```
-    #[must_use]
-    pub fn read_mode(mut self, mode: ReadMode) -> Self {
-        self.reader.processor.mode = Mode::Read(mode);
-        self
-    }
-
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, DuplicateMode};
-    ///
-    /// let reader = ReaderBuilder::new().duplicate_mode(DuplicateMode::Allow).build();
-    /// ```
-    #[must_use]
-    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.reader.processor.duplicate_mode = mode;
-        self
-    }
-
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, GameType};
-    ///
-    /// let reader = ReaderBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.reader.processor.game_type = game_type;
-        self
-    }
-
-    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace.
-    ///
-    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8-encoded.
-    ///
-    /// Since there's no way to tell the encoding, it's user responsibility to call [`core::get_ini_title`], find title's encoding through trial-and-error, and pass it here.
-    ///
-    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, even if title exists there.
-    ///
-    /// # Parameters
-    ///
-    /// `title` - UTF-8 encoded [`&str`] title.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use rvpacker_txt_rs_lib::{ReaderBuilder, GameType};
-    ///
-    /// let ini_file_contents = std::fs::read("./Game.ini").unwrap();
-    /// let ini_title = rvpacker_txt_rs_lib::core::get_ini_title(&ini_file_contents).unwrap();
-    ///
-    /// // Right now we're assuming that INI title is UTF-8, but it may not be UTF-8.
-    /// // Set up encoding-rs and find the right encoding.
-    /// let ini_title = std::str::from_utf8(&ini_title).unwrap();
-    ///
-    /// let reader = ReaderBuilder::new().game_title(ini_title).build();
-    /// ```
-    #[must_use]
-    pub fn game_title(mut self, game_title: &str) -> Self {
-        self.reader.processor.game_title = game_title.to_string();
-        self
-    }
-
-    /// Sets hashes from the previous read.
-    ///
-    /// Hashes are only used during [`ReadMode::Append`] read, and if a processed file matches the hashes, it's skipped.
-    ///
-    /// Note that you need to fetch the hashes again after reading in [`ReadMode::Append`] entries with [`Reader::hashes`], since files that don't match the hashes will cause hash recalculation.
-    ///
-    /// # Parameters
-    ///
-    /// - `hashes` - Iterator over (String, u64) of calculated hashes from the previous read.
-    ///
-    #[must_use]
-    pub fn hashes(
-        mut self,
-        hashes: impl Iterator<Item = (String, u64)>,
-    ) -> Self {
-        self.reader.processor.hashes = hashes.collect();
-        self
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    #[must_use]
-    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
-        self.reader.processor.skip_maps = map_indices;
-        self
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// When reading in [`ReadMode::Append`] mode, corresponding events will be written back unchanged.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    #[must_use]
-    pub fn skip_events(
-        mut self,
-        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
-    ) -> Self {
-        self.reader.processor.skip_events = skip_events;
-        self
-    }
-
-    /// Whether to parse event metadata from maps.
-    ///
-    /// If an event has some text inside it, this event's metadata will be written as comments. Has no actual effect other than adding additional context.
-    ///
-    /// # Parameters
-    ///
-    /// - `enabled` - whether to use this mode.
-    ///
-    #[must_use]
-    pub fn map_events(mut self, enabled: bool) -> Self {
-        self.reader.processor.map_events = enabled;
-        self
-    }
-
-    /// Builds and returns the [`Reader`].
-    #[must_use]
-    pub fn build(self) -> Reader {
-        self.reader
-    }
-}
-
-/// A struct used for writing translation from `.txt` files back to RPG Maker files.
-///
-/// The [`Writer`] struct, essentially, should receive the same options as [`Reader`], to ensure proper writing.
-///
-/// # Fields
-///
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Writer::set_files`] to set. See [`FileFlags`] for more info.
-/// - `flags`: Indicates different modes of processing the text. Use [`Writer::set_flags`] to set. See [`BaseFlags`] for more info.
-/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Writer::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Writer::set_game_type`] to set. See [`GameType`] for more info.
-/// - `hashes`: Hashes of the processed files. Use [`Writer::set_hashes`] to set them.
-/// - `skip_maps`: Map indices to skip when processing. Use [`Writer::set_skip_maps`] to set.
-/// - `skip_events`: Event indices to skip when processing. Use [`Writer::set_skip_events`] to set.
-///
-/// # Example
-///
-/// ```no_run
-/// use rvpacker_txt_rs_lib::{Writer, FileFlags, EngineType};
-///
-/// let mut writer = Writer::new();
-/// writer.set_files(FileFlags::Map | FileFlags::other());
-/// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
-/// ```
-pub struct Writer {
-    processor: Processor,
-}
-
-impl Default for Writer {
-    fn default() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Write,
-                ..Default::default()
-            },
-        }
-    }
-}
-
-impl Writer {
-    /// Creates a new [`Writer`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be written), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::Writer;
-    ///
-    /// let mut writer = Writer::new();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Writer, FileFlags};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_files(FileFlags::Map | FileFlags::other());
-    /// ```
-    pub fn set_files(&mut self, file_flags: FileFlags) {
-        self.processor.file_flags = file_flags;
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Writer, BaseFlags};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_flags(BaseFlags::Trim);
-    /// ```
-    pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.flags = flags;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Writer, DuplicateMode};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_duplicate_mode(DuplicateMode::Allow);
-    /// ```
-    pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.duplicate_mode = mode;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Writer, GameType};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.set_game_type(GameType::Termina);
-    /// ```
-    pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.game_type = game_type;
-    }
-
-    /// Sets hashes from the previous read.
-    ///
-    /// # Parameters
-    ///
-    /// - `hashes` - Iterator over (String, u64) of calculated hashes from the previous read
-    ///
-    pub fn set_hashes(&mut self, hashes: impl Iterator<Item = (String, u64)>) {
-        self.processor.hashes = hashes.collect();
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
-        self.processor.skip_maps = map_indices;
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    pub fn set_skip_events(
-        &mut self,
-        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
-    ) {
-        self.processor.skip_events = event_indices;
-    }
-
-    /// Writes the translation from `.txt` files in `translation_path`, and outputs modified
-    /// files from `source_path` to `output_path`.
-    ///
-    /// Make sure you've configured the writer with the same options as reader before calling it.
-    ///
-    /// # Parameters
-    ///
-    /// - `source_path` - Path to the directory containing source RPG Maker files.
-    ///
-    ///   For `MV/MZ` engines, parent directory of `source_path` must contain `js` directory.
-    ///
-    /// - `translation_path` - Path to the directory where `.txt` translation files are located.
-    /// - `output_path` - Path to the directory, where output RPG Maker files will be created.
-    /// - `engine_type` - Engine type of the source RPG Maker files.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use rvpacker_txt_rs_lib::{Writer, EngineType};
-    ///
-    /// let mut writer = Writer::new();
-    /// writer.write("C:/Game/Data", "C:/Game/translation", "C:/Game/output", EngineType::VXAce);
-    /// ```
-    ///
-    /// # Returns
-    ///
-    /// - Nothing on success.
-    /// - [`Error`] otherwise.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Io`] on I/O error.
-    /// - [`Error::MarshalLoad`] on RPG Maker XP/VX/VXAce file parsing fail.
-    /// - [`Error::JsonParse`] on JSON file parsing fail.
-    ///
-    pub fn write<P: AsRef<Path>>(
-        &mut self,
-        source_path: P,
-        translation_path: P,
-        output_path: P,
-        engine_type: EngineType,
-    ) -> Result<(), Error> {
-        self.processor.process(
-            engine_type,
-            source_path,
-            translation_path,
-            Some(&output_path),
-        )?;
-        Ok(())
-    }
-}
-
-/// A builder struct for [`Writer`].
-///
-/// The [`Writer`] struct, essentially, should receive the same options as [`Reader`], to ensure proper writing.
-///
-/// For available options, check [`Writer`] struct itself.
-///
-/// # Example
-///
-/// ```
-/// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags, GameType};
-///
-/// let mut writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-/// ```
-#[derive(Default)]
-pub struct WriterBuilder {
-    writer: Writer,
-}
-
-impl WriterBuilder {
-    /// Creates a new [`WriterBuilder`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be written), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::WriterBuilder;
-    ///
-    /// let mut writer = WriterBuilder::new().build();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{WriterBuilder, FileFlags};
-    ///
-    /// let writer = WriterBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-    /// ```
-    #[must_use]
-    pub fn with_files(mut self, flags: FileFlags) -> Self {
-        self.writer.processor.file_flags = flags;
-        self
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{WriterBuilder, BaseFlags};
-    ///
-    /// let mut writer = WriterBuilder::new().with_flags(BaseFlags::Trim);
-    /// ```
-    #[must_use]
-    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.writer.processor.flags = flags;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{WriterBuilder, DuplicateMode};
-    ///
-    /// let writer = WriterBuilder::new().duplicate_mode(DuplicateMode::Remove).build();
-    /// ```
-    #[must_use]
-    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.writer.processor.duplicate_mode = mode;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{WriterBuilder, GameType};
-    ///
-    /// let writer = WriterBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.writer.processor.game_type = game_type;
-        self
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    #[must_use]
-    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
-        self.writer.processor.skip_maps = map_indices;
-        self
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    #[must_use]
-    pub fn skip_events(
-        mut self,
-        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
-    ) -> Self {
-        self.writer.processor.skip_events = skip_events;
-        self
-    }
-
-    /// Builds and returns the [`Writer`].
-    #[must_use]
-    pub fn build(self) -> Writer {
-        self.writer
-    }
-}
-
-/// A struct used for purging lines with no translation from `.txt` files.
-///
-/// The [`Purger`] struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
-///
-/// # Fields
-/// - `file_flags`: Indicates which RPG Maker files should be processed. Use [`Purger::set_files`] to set. See [`FileFlags`] for more info.
-/// - `flags`: Indicates different modes of processing the text. Use [`Purger::set_flags`] to set. See [`BaseFlags`] for more info.
-/// - `duplicate_mode` : Specifies, what to do with duplicates. Use [`Purger::set_duplicate_mode`] to set. See [`DuplicateMode`] for more info.
-/// - `game_type`: Specifies which RPG Maker game type the data is from. Use [`Purger::set_game_type`] to set. See [`GameType`] for more info.
-/// - `hashes`: Hashes of the processed files. Use [`Purger::set_hashes`] to set them.
-/// - `skip_maps`: Map indices to skip when processing. Use [`Purger::set_skip_maps`] to set. Specified maps won't be purged.
-/// - `skip_events`: Event indices to skip when processing. Use [`Purger::set_skip_events`] to set. Specified events won't be purged.
-///
-/// # Example
-///
-/// ```no_run
-/// use rvpacker_txt_rs_lib::{Purger, FileFlags, EngineType};
-///
-/// let mut purger = Purger::new();
-/// purger.set_files(FileFlags::Map | FileFlags::other());
-/// let result = purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
-/// ```
-pub struct Purger {
-    processor: Processor,
-}
-
-impl Default for Purger {
-    fn default() -> Self {
-        Self {
-            processor: Processor {
-                mode: Mode::Purge,
-                ..Default::default()
-            },
-        }
-    }
-}
-
-impl Purger {
-    /// Creates a new [`Purger`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be purged), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::Purger;
-    ///
-    /// let mut purger = Purger::new();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Purger, FileFlags};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_files(FileFlags::Map | FileFlags::other());
-    /// ```
-    pub fn set_files(&mut self, file_flags: FileFlags) {
-        self.processor.file_flags = file_flags;
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Purger, BaseFlags};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_flags(BaseFlags::Trim);
-    /// ```
-    pub fn set_flags(&mut self, flags: BaseFlags) {
-        self.processor.flags = flags;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Purger, DuplicateMode};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_duplicate_mode(DuplicateMode::Allow);
-    /// ```
-    pub fn set_duplicate_mode(&mut self, mode: DuplicateMode) {
-        self.processor.duplicate_mode = mode;
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{Purger, GameType};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.set_game_type(GameType::Termina);
-    /// ```
-    pub fn set_game_type(&mut self, game_type: GameType) {
-        self.processor.game_type = game_type;
-    }
-
-    /// Sets hashes from the previous read.
-    ///
-    /// # Parameters
-    ///
-    /// - `hashes` - Iterator over (String, u64) of calculated hashes from the previous read
-    ///
-    pub fn set_hashes(&mut self, hashes: impl Iterator<Item = (String, u64)>) {
-        self.processor.hashes = hashes.collect();
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    pub fn set_skip_maps(&mut self, map_indices: Vec<u16>) {
-        self.processor.skip_maps = map_indices;
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    pub fn set_skip_events(
-        &mut self,
-        event_indices: Vec<(RPGMFileType, Vec<u16>)>,
-    ) {
-        self.processor.skip_events = event_indices;
-    }
-
-    /// Purges the lines with no translation from `.txt` files in `translation_path`, using source RPG Maker files from `source_path`.
-    ///
-    /// Make sure you've configured the purger with the same options as reader before calling it.
-    ///
-    /// # Parameters
-    ///
-    /// - `source_path` - Path to the directory containing RPG Maker files.
-    /// - `translation_path` - Path to the directory containing `.txt` translation files.
-    /// - `engine_type` - Engine type of the source RPG Maker files.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::Io`] - if any I/O operation fails.
-    /// - [`Error::JsonParse`] - if parsing any JSON fails.
-    /// - [`Error::MarshalLoad`] - if loading any Marshal byte stream fails.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use rvpacker_txt_rs_lib::{Purger, EngineType};
-    ///
-    /// let mut purger = Purger::new();
-    /// purger.purge("C:/Game/Data", "C:/Game/translation", EngineType::VXAce);
-    /// ```
-    pub fn purge<P: AsRef<Path>>(
-        &mut self,
-        source_path: P,
-        translation_path: P,
-        engine_type: EngineType,
-    ) -> Result<(), Error> {
-        self.processor.process(
-            engine_type,
-            source_path,
-            translation_path,
-            None,
-        )?;
-        Ok(())
-    }
-}
-
-/// A builder struct for [`Purger`].
-///
-/// The [`Purger`] struct, essentially, should receive the same options as [`Reader`], to ensure proper purging.
-///
-/// For available options, check [`Purger`] struct itself.
-///
-/// # Example
-///
-/// ```
-/// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags, GameType};
-///
-/// let mut purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-/// ```
-#[derive(Default)]
-pub struct PurgerBuilder {
-    purger: Purger,
-}
-
-impl PurgerBuilder {
-    /// Creates a new [`PurgerBuilder`] instance with default values.
-    ///
-    /// By default, all four file flags are set (all files will be purged), duplicate mode is set to [`DuplicateMode::Allow`], and all other options are disabled.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::PurgerBuilder;
-    ///
-    /// let mut purger = PurgerBuilder::new().build();
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the file flags to determine which RPG Maker files will be parsed. See [`FileFlags`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - A [`FileFlags`] value indicating the file types to include.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{PurgerBuilder, FileFlags};
-    ///
-    /// let purger = PurgerBuilder::new().with_files(FileFlags::Map | FileFlags::other()).build();
-    /// ```
-    #[must_use]
-    pub fn with_files(mut self, file_flags: FileFlags) -> Self {
-        self.purger.processor.file_flags = file_flags;
-        self
-    }
-
-    /// Sets the flags of the processor.
-    ///
-    /// Flags indicate, how to process text, and include options such as trimming, romanizing etc., for more info check [`BaseFlags`].
-    ///
-    /// # Parameters
-    ///
-    /// - `flags` - [`BaseFlags`] bitflags.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{PurgerBuilder, BaseFlags};
-    ///
-    /// let mut purger = PurgerBuilder::new().with_flags(BaseFlags::Trim);
-    /// ```
-    #[must_use]
-    pub fn with_flags(mut self, flags: BaseFlags) -> Self {
-        self.purger.processor.flags = flags;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets, what to do with duplicates. Works only for map and other files. See [`DuplicateMode`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `mode` - A [`DuplicateMode`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{PurgerBuilder, DuplicateMode};
-    ///
-    /// let purger = PurgerBuilder::new().duplicate_mode(DuplicateMode::Allow).build();
-    /// ```
-    #[must_use]
-    pub fn duplicate_mode(mut self, mode: DuplicateMode) -> Self {
-        self.purger.processor.duplicate_mode = mode;
-        self
-    }
-
-    /// This function must have the same value that was passed to it in [`Reader`] struct.
-    ///
-    /// Sets the game type for custom processing. See [`GameType`] for more info.
-    ///
-    /// # Parameters
-    ///
-    /// - `game_type` - A [`GameType`] variant.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{PurgerBuilder, GameType};
-    ///
-    /// let purger = PurgerBuilder::new().game_type(GameType::Termina).build();
-    /// ```
-    #[must_use]
-    pub fn game_type(mut self, game_type: GameType) -> Self {
-        self.purger.processor.game_type = game_type;
-        self
-    }
-
-    /// Sets map indices to skip when processing.
-    ///
-    /// When reading in [`ReadMode::Append`] mode, corresponding maps will be written back unchanged.
-    ///
-    /// # Parameters
-    ///
-    /// - `map_indices` - [`Vec<u16>`] of indices to skip.
-    ///
-    #[must_use]
-    pub fn skip_maps(mut self, map_indices: Vec<u16>) -> Self {
-        self.purger.processor.skip_maps = map_indices;
-        self
-    }
-
-    /// Sets event indices to skip when processing.
-    ///
-    /// Has no effect on [`RPGMFileType::Map`] files.
-    ///
-    /// # Parameters
-    ///
-    /// - `event_indices` - [`Vec<(RPGMFileType, Vec<u16>)>`] of file types and entries corresponding to them to skip.
-    ///
-    #[must_use]
-    pub fn skip_events(
-        mut self,
-        skip_events: Vec<(RPGMFileType, Vec<u16>)>,
-    ) -> Self {
-        self.purger.processor.skip_events = skip_events;
-        self
-    }
-
-    /// Builds and returns the [`Purger`].
-    #[must_use]
-    pub fn build(self) -> Purger {
-        self.purger
     }
 }
