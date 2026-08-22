@@ -3030,14 +3030,13 @@ impl<'a> SystemBase<'a> {
                     self.base.labels.equip_types,
                 ][id as usize - 1];
 
-                let Some(array) =
-                    mutable!(&self, Self).system_value[label].as_array_mut()
+                let Some(array) = self.system_value[label].as_array_mut()
                 else {
                     continue;
                 };
 
                 for value in array {
-                    self.process_value(value);
+                    Self::process_value(self.base, value);
                 }
             } else if id == 6 {
                 self.process_terms();
@@ -3058,9 +3057,10 @@ impl<'a> SystemBase<'a> {
     }
 
     fn process_terms(&mut self) {
-        let Some(terms) = mutable!(self, Self).system_value
-            [self.base.labels.terms]
-            .as_object_mut()
+        let base = &mut *self.base;
+
+        let Some(terms) =
+            self.system_value[base.labels.terms].as_object_mut()
         else {
             return;
         };
@@ -3069,48 +3069,48 @@ impl<'a> SystemBase<'a> {
             if key == "messages" {
                 if let Some(messages) = value.as_object_mut() {
                     for value in messages.values_mut() {
-                        self.process_value(value);
+                        Self::process_value(base, value);
                     }
                 }
             } else if let Some(array) = value.as_array_mut() {
                 for value in array {
-                    self.process_value(value);
+                    Self::process_value(base, value);
                 }
             } else if value.is_bytes() || value.is_string() {
-                self.process_value(value);
+                Self::process_value(base, value);
             }
         }
     }
 
-    fn process_value(&mut self, value: &mut Value) {
-        let Some(extracted) =
-            mutable!(self, Self).base.extract_string(value, true)
-        else {
+    /// Takes `base` rather than `&mut self`, so callers can hold a mutable borrow
+    /// of the disjoint `system_value` field while calling it.
+    fn process_value(base: &mut Base, value: &mut Value) {
+        let Some(extracted) = base.extract_string(&*value, true) else {
             return;
         };
 
-        if self.base.mode.is_read() {
-            self.base.insert_string(Cow::Borrowed(extracted));
-        } else if self.base.mode.is_write() {
-            if let Some(translated) = self.base.get_key(&extracted) {
-                *value = Base::make_string_value(
-                    translated,
-                    self.base.engine_type.is_new(),
-                );
+        if base.mode.is_read() {
+            let extracted = extracted.to_owned();
+            base.insert_string(Cow::Owned(extracted));
+        } else if base.mode.is_write() {
+            let translated = base
+                .get_key(extracted)
+                .map(|t| Base::make_string_value(t, base.engine_type.is_new()));
+
+            if let Some(translated) = translated {
+                *value = translated;
             }
         } else {
-            self.base
-                .translation_map_mut()
-                .insert(extracted.into(), TranslationEntry::default());
+            let extracted = extracted.to_owned();
+            base.translation_map_mut()
+                .insert(extracted, TranslationEntry::default());
         }
     }
 
     fn process_currency_unit(&mut self) {
         if !self.base.engine_type.is_new() {
-            self.process_value(
-                &mut mutable!(self, Self).system_value
-                    [self.base.labels.currency_unit],
-            );
+            let label = self.base.labels.currency_unit;
+            Self::process_value(self.base, &mut self.system_value[label]);
         }
     }
 
@@ -3123,9 +3123,8 @@ impl<'a> SystemBase<'a> {
         } else {
             // User previously set the game title through set_game_title
             if !self.game_title.is_empty() {
-                mutable!(self, Self)
-                    .base
-                    .insert_string(Cow::Owned(take(&mut self.game_title)));
+                let title = take(&mut self.game_title);
+                self.base.insert_string(Cow::Owned(title));
                 return;
             }
 
@@ -3138,9 +3137,8 @@ impl<'a> SystemBase<'a> {
                     return;
                 };
 
-                mutable!(self, Self)
-                    .base
-                    .insert_string(Cow::Borrowed(game_title));
+                let game_title = game_title.to_owned();
+                self.base.insert_string(Cow::Owned(game_title));
             }
         }
     }
