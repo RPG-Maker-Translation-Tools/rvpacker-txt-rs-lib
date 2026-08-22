@@ -5,7 +5,7 @@ use crate::{
         AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG,
         IGNORE_ENTRY_COMMENT, IN_FILE_MSG,
     },
-    core::{CustomReplace, push_entries},
+    core::{TranslationLine, push_entries, split_translation_line},
 };
 use log::warn;
 use marshal_rs::{Value, ValueType, load_utf8};
@@ -206,50 +206,24 @@ impl GenericBase {
                 continue;
             }
 
-            // This split is essentially free, since we're not cloning to String
-            let split: Vec<&str> = line.split(SEPARATOR).collect();
-
-            if split.len() < 2 {
-                warn!(
-                    "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n
+            let (source, translation) =
+                match split_translation_line(line, trim, self.mode.is_write())
+                {
+                    TranslationLine::Split {
+                        source,
+                        translation,
+                    } => (source, translation),
+                    TranslationLine::Untranslated => continue,
+                    TranslationLine::Malformed => {
+                        warn!(
+                            "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n
                     {IN_FILE_MSG}: {filename}",
-                    i = i + 1,
-                );
-                comments.clear();
-                continue;
-            }
-
-            // SAFETY: We just checked for split length.
-            let source =
-                Cow::Borrowed(*unsafe { split.first().unwrap_unchecked() });
-
-            let translation = Cow::Borrowed(
-                split
-                    .into_iter()
-                    .skip(1)
-                    .rfind(|x| !x.is_empty())
-                    .unwrap_or_default(),
-            );
-
-            let (source, translation) = if trim {
-                (
-                    Cow::Borrowed(source.trim()),
-                    Cow::Borrowed(translation.trim()),
-                )
-            } else {
-                (source, translation)
-            };
-
-            let (source, translation) = if self.mode.is_write() {
-                // Discard lines with empty translation, those are unused on write
-                if translation.is_empty() {
-                    continue;
-                }
-
-                (source.denormalize(), translation.denormalize())
-            } else {
-                (source, translation)
-            };
+                            i = i + 1,
+                        );
+                        comments.clear();
+                        continue;
+                    }
+                };
 
             self.translation_map.insert(
                 source.into(),

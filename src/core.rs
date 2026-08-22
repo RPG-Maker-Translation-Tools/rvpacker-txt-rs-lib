@@ -537,6 +537,62 @@ pub fn latinize_string(string: &str) -> Cow<'_, str> {
     }
 }
 
+/// Outcome of splitting one `source<#>translation` line from a translation file.
+pub(crate) enum TranslationLine<'a> {
+    /// No separator present; the caller should warn and skip the line.
+    Malformed,
+    /// Empty translation on a write pass - the entry is unused, so skip it.
+    Untranslated,
+    Split {
+        source: Cow<'a, str>,
+        translation: Cow<'a, str>,
+    },
+}
+
+/// Splits one translation-file line into its source and translation halves.
+///
+/// The translation is the last non-empty field after the first separator, so files
+/// carrying several translation columns still resolve to the rightmost filled one.
+///
+/// Borrows throughout; allocates only where `write` forces denormalization.
+pub(crate) fn split_translation_line(
+    line: &str,
+    trim: bool,
+    write: bool,
+) -> TranslationLine<'_> {
+    let Some((source, rest)) = line.split_once(SEPARATOR) else {
+        return TranslationLine::Malformed;
+    };
+
+    let translation = rest
+        .rsplit(SEPARATOR)
+        .find(|field| !field.is_empty())
+        .unwrap_or_default();
+
+    let (source, translation) = if trim {
+        (source.trim(), translation.trim())
+    } else {
+        (source, translation)
+    };
+
+    if write {
+        // Lines with no translation are unused on write.
+        if translation.is_empty() {
+            return TranslationLine::Untranslated;
+        }
+
+        TranslationLine::Split {
+            source: source.denormalize(),
+            translation: translation.denormalize(),
+        }
+    } else {
+        TranslationLine::Split {
+            source: Cow::Borrowed(source),
+            translation: Cow::Borrowed(translation),
+        }
+    }
+}
+
 pub(crate) fn push_metadata(
     output: &mut Vec<u8>,
     id: u16,
@@ -1242,51 +1298,25 @@ impl Base {
                 continue;
             }
 
-            // This split is essentially free, since we're not cloning to String
-            let split: Vec<&str> = line.split(SEPARATOR).collect();
-
-            if split.len() < 2 {
-                warn!(
-                    "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: \
-                     {i}\n{IN_FILE_MSG}: {file}.txt",
-                    i = i + 1,
-                    file = self.file_type.to_string().to_lowercase()
-                );
-                comments = smallvec![String::new(); 3];
-                continue;
-            }
-
-            // SAFETY: We just checked for split length.
-            let source =
-                Cow::Borrowed(*unsafe { split.first().unwrap_unchecked() });
-
-            let translation = Cow::Borrowed(
-                split
-                    .into_iter()
-                    .skip(1)
-                    .rfind(|x| !x.is_empty())
-                    .unwrap_or_default(),
-            );
-
-            let (source, translation) = if trim {
-                (
-                    Cow::Borrowed(source.trim()),
-                    Cow::Borrowed(translation.trim()),
-                )
-            } else {
-                (source, translation)
-            };
-
-            let (source, translation) = if self.mode.is_write() {
-                // Discard lines with empty translation, those are unused on write
-                if translation.is_empty() {
-                    continue;
-                }
-
-                (source.denormalize(), translation.denormalize())
-            } else {
-                (source, translation)
-            };
+            let (source, translation) =
+                match split_translation_line(line, trim, self.mode.is_write())
+                {
+                    TranslationLine::Split {
+                        source,
+                        translation,
+                    } => (source, translation),
+                    TranslationLine::Untranslated => continue,
+                    TranslationLine::Malformed => {
+                        warn!(
+                            "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: \
+                             {i}\n{IN_FILE_MSG}: {file}.txt",
+                            i = i + 1,
+                            file = self.file_type.to_string().to_lowercase()
+                        );
+                        comments = smallvec![String::new(); 3];
+                        continue;
+                    }
+                };
 
             if first {
                 self.top_level_comments
