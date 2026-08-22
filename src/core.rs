@@ -1370,11 +1370,19 @@ impl Base {
             scratch.insert(
                 source.into(),
                 TranslationEntry {
+                    // The three leading slots are positional metadata
+                    // (name/order/display name) and are only ever filled for the
+                    // first entry of a section, which consumes them above. For
+                    // every other entry they are empty placeholders that
+                    // `push_entries` would skip anyway, so dropping them here
+                    // avoids allocating a Vec of empty strings per entry.
                     comments: replace(
                         &mut comments,
                         smallvec![String::new(); 3],
                     )
-                    .into_vec(),
+                    .into_iter()
+                    .filter(|comment| !comment.is_empty())
+                    .collect(),
                     translation: translation.into(),
                 },
             );

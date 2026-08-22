@@ -10,7 +10,6 @@ use crate::{
 use log::warn;
 use marshal_rs::{Value, ValueType, load_utf8};
 use serde_json::{Value as SerdeValue, from_str, to_vec};
-use smallvec::smallvec;
 use std::{borrow::Cow, mem::take};
 
 pub struct GenericBase {
@@ -196,11 +195,14 @@ impl GenericBase {
         let trim = self.flags.contains(BaseFlags::Trim);
 
         let translation_lines = translation.lines().enumerate();
-        let mut comments: Comments;
+
+        // Accumulates across iterations: comment lines precede the entry they
+        // belong to. Previously this was reset at the top of every iteration, so a
+        // comment was pushed onto a fresh vector and then dropped by the `continue`
+        // - no entry ever carried one.
+        let mut comments = Comments::new();
 
         for (i, line) in translation_lines {
-            comments = smallvec![String::new(); 3];
-
             if line.starts_with(COMMENT_PREFIX) {
                 comments.push(line.to_string());
                 continue;
@@ -228,7 +230,9 @@ impl GenericBase {
             self.translation_map.insert(
                 source.into(),
                 TranslationEntry {
-                    comments: comments.drain(..).collect(),
+                    // Empty stays empty: `into_vec` on an empty `SmallVec` does
+                    // not allocate.
+                    comments: take(&mut comments).into_vec(),
                     translation: translation.into(),
                 },
             );
