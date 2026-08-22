@@ -1,6 +1,6 @@
 use crate::{
     constants::INSTANCE_VAR_PREFIX,
-    core::ScriptBase,
+    core::Base,
     types::{EngineType, Error, Scripts},
 };
 use marshal_rs::{Value, dump, load_binary, load_utf8};
@@ -40,7 +40,7 @@ pub fn generate_file(
                 .unwrap_unchecked()
         };
 
-        let scripts = ScriptBase::decode_scripts(&scripts_array);
+        let scripts = Base::decode_scripts(&scripts_array);
 
         Ok(scripts
             .numbers
@@ -267,7 +267,7 @@ pub fn write<P: AsRef<Path>>(
                     .push(content[prev_content_start..].to_string());
             }
 
-            dump(Value::array(ScriptBase::encode_scripts(&scripts)), None)
+            dump(Value::array(Base::encode_scripts(&scripts)), None)
         } else {
             write_file(&content)?
         };

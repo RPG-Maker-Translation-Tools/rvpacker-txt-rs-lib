@@ -29,29 +29,7 @@ thread_local! {
     });
 }
 
-pub struct PluginBase<'a> {
-    pub base: &'a mut Base,
-}
-
-impl<'a> PluginBase<'a> {
-    /// Initializes system base using [`Base`].
-    /// Before calling this, you should create a base and pass it here.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{core::{Base, PluginBase}, Mode, ReadMode, EngineType};
-    ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::New);
-    /// let mut plugin_base = PluginBase::new(&mut base);
-    /// ```
-    pub fn new(base: &'a mut Base) -> Self {
-        base.reset();
-        base.file_type = RPGMFileType::Plugins;
-
-        Self { base }
-    }
-
+impl Base {
     /// Processes the RPG Maker plugins file content.
     ///
     /// # Parameters
@@ -77,24 +55,25 @@ impl<'a> PluginBase<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// use rvpacker_txt_rs_lib::{core::{Base, PluginBase}, Mode, ReadMode, EngineType, Error};
+    /// use rvpacker_txt_rs_lib::{core::Base, Mode, ReadMode, EngineType, Error};
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::New);
-    ///     let mut plugin_base = PluginBase::new(&mut base);
     ///
     ///     let plugins_file_content = read("plugins.js")?;
-    ///     plugin_base.process(&plugins_file_content, None)?;
+    ///     base.process_plugins(&plugins_file_content, None)?;
     ///     Ok(())
     /// }
     /// ```
-    pub fn process(
-        mut self,
+    pub fn process_plugins(
+        &mut self,
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        self.base.initialize_translation(translation)?;
+        self.reset();
+        self.file_type = RPGMFileType::Plugins;
+        self.initialize_translation(translation)?;
 
         // SAFETY: Plugins content should always be like `plugins = [...]`, and JSON is always valid UTF-8.
         let plugins_array_str = unsafe {
@@ -117,8 +96,8 @@ impl<'a> PluginBase<'a> {
         for (plugin_id, plugin_object) in plugins_array.iter_mut().enumerate() {
             let id = plugin_id as u16 + 1;
 
-            if self.base.get_translation_map(id).is_break() {
-                if self.base.mode.is_purge() {
+            if self.get_translation_map(id).is_break() {
+                if self.mode.is_purge() {
                     processed = true;
                 }
 
@@ -130,19 +109,19 @@ impl<'a> PluginBase<'a> {
             let plugin_name =
                 unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
 
-            self.base.update_metadata(
+            self.update_metadata(
                 id,
                 Vec::from([(CommentPos::Name, plugin_name)]),
             );
             self.parse_plugin(None, plugin_object);
-            self.base.flush_translation(id);
+            self.flush_translation(id);
         }
 
         if !processed {
             return Ok(None);
         }
 
-        Ok(Some(self.base.finish(Value::array(plugins_array))))
+        Ok(Some(self.finish(Value::array(plugins_array))))
     }
 
     fn parse_plugin(&mut self, key: Option<&str>, value: &mut Value) {
@@ -180,12 +159,12 @@ impl<'a> PluginBase<'a> {
                 {
                     let string = value_string.normalize();
 
-                    if self.base.mode.is_write() {
-                        if let Some(translated) = self.base.get_key(&string) {
+                    if self.mode.is_write() {
+                        if let Some(translated) = self.get_key(&string) {
                             *value = Value::string(translated.as_str());
                         }
                     } else {
-                        self.base.insert_string(string);
+                        self.insert_string(string);
                     }
                 }
             }

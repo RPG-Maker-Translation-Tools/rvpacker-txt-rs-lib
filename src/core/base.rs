@@ -54,6 +54,14 @@ pub struct Base {
         Vec<(u16, Comments, FlushedLines, TranslationMap)>,
     pub(super) top_level_comments: HashMap<u16, Vec<String>>,
 
+    /// `MapInfos` for the current run of maps, parsed once by
+    /// [`Base::process_map`] and reused across the run.
+    pub(super) mapinfos: Value,
+
+    /// Title override set through [`Base::set_game_title`], for engines that keep
+    /// it in `Game.ini` rather than the system file.
+    pub(super) game_title: String,
+
     pub(super) file_type: RPGMFileType,
     pub(super) labels: Labels,
 }
@@ -85,6 +93,8 @@ impl Default for Base {
             top_level_comments: HashMap::default(),
 
             map_events: false,
+            mapinfos: Value::default(),
+            game_title: String::new(),
             file_type: RPGMFileType::Invalid,
             labels: Labels::default(),
 

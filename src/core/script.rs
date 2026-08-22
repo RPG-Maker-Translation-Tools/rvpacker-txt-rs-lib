@@ -13,29 +13,7 @@ use std::{
     ops::Range,
 };
 
-pub struct ScriptBase<'a> {
-    pub base: &'a mut Base,
-}
-
-impl<'a> ScriptBase<'a> {
-    /// Initializes system base using [`Base`].
-    /// Before calling this, you should create a base and pass it here.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{core::{Base, ScriptBase}, Mode, ReadMode, EngineType};
-    ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
-    /// let mut script_base = ScriptBase::new(&mut base);
-    /// ```
-    pub fn new(base: &'a mut Base) -> Self {
-        base.reset();
-        base.file_type = RPGMFileType::Scripts;
-
-        Self { base }
-    }
-
+impl Base {
     /// Processes the RPG Maker scripts file content.
     ///
     /// # Parameters
@@ -62,34 +40,31 @@ impl<'a> ScriptBase<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// use rvpacker_txt_rs_lib::{core::{Base, ScriptBase}, Mode, ReadMode, EngineType, Error};
+    /// use rvpacker_txt_rs_lib::{core::Base, Mode, ReadMode, EngineType, Error};
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
-    ///     let mut script_base = ScriptBase::new(&mut base);
     ///
     ///     let script_file_content = read("C:/Game/Data/Scripts.rvdata2")?;
-    ///     script_base.process(&script_file_content, None)?;
+    ///     base.process_scripts(&script_file_content, None)?;
     ///     Ok(())
     /// }
     /// ```
-    pub fn process(
-        self,
+    pub fn process_scripts(
+        &mut self,
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        self.base.initialize_translation(translation)?;
+        self.reset();
+        self.file_type = RPGMFileType::Scripts;
+        self.initialize_translation(translation)?;
 
         // SAFETY: Scripts are always array.
         let mut scripts_array = unsafe {
-            parse_rpgm_file(
-                content,
-                self.base.engine_type,
-                self.base.file_type,
-            )?
-            .into_array()
-            .unwrap_unchecked()
+            parse_rpgm_file(content, self.engine_type, self.file_type)?
+                .into_array()
+                .unwrap_unchecked()
         };
         let mut scripts = Self::decode_scripts(&scripts_array);
 
@@ -115,8 +90,8 @@ impl<'a> ScriptBase<'a> {
         {
             let id = script_id as u16 + 1;
 
-            if self.base.get_translation_map(id).is_break() {
-                if self.base.mode.is_purge() {
+            if self.get_translation_map(id).is_break() {
+                if self.mode.is_purge() {
                     processed = true;
                 }
 
@@ -125,13 +100,13 @@ impl<'a> ScriptBase<'a> {
 
             processed = true;
 
-            self.base.update_metadata(
+            self.update_metadata(
                 id,
                 Vec::from([(CommentPos::Name, script_name.as_str())]),
             );
             let (extracted_strings, ranges) = self.extract_strings(&code);
 
-            if self.base.mode.is_write() {
+            if self.mode.is_write() {
                 let mut code_changed = false;
 
                 for (extracted, range) in extracted_strings
@@ -140,7 +115,7 @@ impl<'a> ScriptBase<'a> {
                     .filter(|(s, _)| !s.trim().is_empty())
                     .rev()
                 {
-                    if let Some(translated) = self.base.get_key(&extracted) {
+                    if let Some(translated) = self.get_key(&extracted) {
                         code.replace_range(range, translated);
                         code_changed = true;
                     }
@@ -171,10 +146,10 @@ impl<'a> ScriptBase<'a> {
                         continue;
                     }
 
-                    self.base.insert_string(Cow::Owned(extracted));
+                    self.insert_string(Cow::Owned(extracted));
                 }
 
-                self.base.flush_translation(id);
+                self.flush_translation(id);
             }
         }
 
@@ -182,7 +157,7 @@ impl<'a> ScriptBase<'a> {
             return Ok(None);
         }
 
-        Ok(Some(self.base.finish(Value::array(scripts_array))))
+        Ok(Some(self.finish(Value::array(scripts_array))))
     }
 
     fn is_escaped(index: usize, string: &str) -> bool {
@@ -253,7 +228,7 @@ impl<'a> ScriptBase<'a> {
                     {
                         strings.insert(extracted_string.into_owned());
 
-                        if self.base.mode.is_write() {
+                        if self.mode.is_write() {
                             ranges.push(range);
                         }
                     }

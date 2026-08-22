@@ -1,8 +1,13 @@
 //! Building blocks for reading, writing and purging RPG Maker files.
 //!
 //! [`Base`] holds the state shared by every file kind - mode, flags, the parsed
-//! translation, the accumulated output - and each file kind wraps it:
-//! [`MapBase`], [`OtherBase`], [`SystemBase`], [`ScriptBase`] and [`PluginBase`].
+//! translation, the accumulated output - and exposes one method per file kind:
+//! [`Base::process_map`], [`Base::process_other`], [`Base::process_system`],
+//! [`Base::process_scripts`] and [`Base::process_plugins`].
+//!
+//! Maps are the one kind processed as a run rather than one shot, because they
+//! share a single translation file: [`Base::begin_maps`], then
+//! [`Base::process_map`] per file, then [`Base::finish_maps`].
 //!
 //! For the usual case of processing a whole game directory, use
 //! [`Processor`](crate::Processor) instead; it drives all of these and handles
@@ -25,11 +30,6 @@ pub use file::{
     filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore,
     parse_rpgm_file,
 };
-pub use map::MapBase;
-pub use other::OtherBase;
-pub use plugin::PluginBase;
-pub use script::ScriptBase;
-pub use system::SystemBase;
 pub use text::latinize_string;
 
 pub(crate) use text::{

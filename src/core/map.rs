@@ -28,32 +28,15 @@ impl<'a> Iterator for EventIterator<'a> {
     }
 }
 
-/// Base for processing `Map` files.
-pub struct MapBase<'a> {
-    pub base: &'a mut Base,
-    mapinfos: Value,
-}
-
-impl<'a> MapBase<'a> {
-    /// Initializes system base using [`Base`].
-    /// Before calling this, you should create a base and pass it here.
+impl Base {
+    /// Prepares this base to process a run of map files.
     ///
-    /// # Example
-    ///
-    /// ```
-    /// use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, ReadMode, EngineType};
-    ///
-    /// let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
-    /// let mut map_base = MapBase::new(&mut base);
-    /// ```
-    pub fn new(base: &'a mut Base) -> Self {
-        base.reset();
-        base.file_type = RPGMFileType::Map;
-
-        Self {
-            base,
-            mapinfos: Value::default(),
-        }
+    /// Maps accumulate into one translation file, so they are processed as a run:
+    /// call this, then [`Base::process_map`] per file, then [`Base::finish_maps`].
+    pub fn begin_maps(&mut self) {
+        self.reset();
+        self.file_type = RPGMFileType::Map;
+        self.mapinfos = Value::default();
     }
 
     /// Returns the translation data, accumulated after processing multiple maps.
@@ -63,32 +46,31 @@ impl<'a> MapBase<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, ReadMode, EngineType, Error};
+    /// use rvpacker_txt_rs_lib::{core::Base, Mode, ReadMode, EngineType, Error};
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
-    ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
     ///
     ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
-    ///     let data = map_base.process("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     let data = base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
     ///
     ///     let map_file_content = read("C:/Game/Data/Map002.rvdata2")?;
-    ///     let data = map_base.process("Map002.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     let data = base.process_map("Map002.rvdata2", &map_file_content, &mapinfos, None)?;
     ///
-    ///     let translation_data = map_base.translation();
+    ///     let translation_data = base.finish_maps();
     ///     Ok(())
     /// }
     /// ```
-    pub fn translation(&mut self) -> ProcessedData {
-        self.base.finish(Value::default())
+    pub fn finish_maps(&mut self) -> ProcessedData {
+        self.finish(Value::default())
     }
 
     /// Processes the RPG Maker map file content.
     ///
-    /// To get the translation data, you need to call [`MapBase::translation`] after processing required maps.
+    /// To get the translation data, you need to call [`Base::finish_maps`] after processing required maps.
     ///
     /// # Parameters
     ///
@@ -116,23 +98,22 @@ impl<'a> MapBase<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, ReadMode, EngineType, Error};
+    /// use rvpacker_txt_rs_lib::{core::Base, Mode, ReadMode, EngineType, Error};
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
-    ///     let mut map_base = MapBase::new(&mut base);
     ///
     ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
-    ///     let data = map_base.process("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     let data = base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
     ///
     ///     // Required only when reading.
-    ///     let translation_data = map_base.translation();
+    ///     let translation_data = base.finish_maps();
     ///     Ok(())
     /// }
     /// ```
-    pub fn process(
+    pub fn process_map(
         &mut self,
         filename: &str,
         content: &[u8],
@@ -140,48 +121,46 @@ impl<'a> MapBase<'a> {
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
         if self.mapinfos.is_null() {
-            self.mapinfos = parse_rpgm_file(
-                mapinfos,
-                self.base.engine_type,
-                self.base.file_type,
-            )?;
+            self.mapinfos =
+                parse_rpgm_file(mapinfos, self.engine_type, self.file_type)?;
         }
 
-        self.base.initialize_translation(translation)?;
+        self.initialize_translation(translation)?;
 
         let id = Self::parse_map_id(filename);
         if self.is_map_unused(id) {
             return Ok(None);
         }
 
-        if self.base.get_translation_map(id).is_break() {
+        if self.get_translation_map(id).is_break() {
             return Ok(None);
         }
 
-        let mut map_object = parse_rpgm_file(
-            content,
-            self.base.engine_type,
-            self.base.file_type,
-        )?;
+        let mut map_object =
+            parse_rpgm_file(content, self.engine_type, self.file_type)?;
         let display_name = self.get_display_name(&map_object);
 
-        if self.base.mode.is_read() {
+        if self.mode.is_read() {
             let map_order = self.get_map_order(id).to_string();
-            let engine_is_new = self.base.engine_type.is_new();
-            let map_name =
-                Self::get_map_name(&self.mapinfos, engine_is_new, id);
-            let replaced_map_name = map_name.normalize();
+            let engine_is_new = self.engine_type.is_new();
 
-            self.base.update_metadata(
+            // Owned, so the borrow of `self.mapinfos` ends before
+            // `update_metadata` takes `&mut self`. One short allocation per map.
+            let replaced_map_name =
+                Self::get_map_name(&self.mapinfos, engine_is_new, id)
+                    .normalize()
+                    .into_owned();
+
+            self.update_metadata(
                 id,
                 Vec::from([
-                    (CommentPos::Name, replaced_map_name.as_ref()),
-                    (CommentPos::Order, &map_order),
-                    (CommentPos::DisplayName, &display_name),
+                    (CommentPos::Name, replaced_map_name.as_str()),
+                    (CommentPos::Order, map_order.as_str()),
+                    (CommentPos::DisplayName, display_name.as_str()),
                 ]),
             );
         } else if !display_name.is_empty() {
-            let display_name_comment_line = &self.base.metadata[&id][2];
+            let display_name_comment_line = &self.metadata[&id][2];
 
             let split: Vec<&str> =
                 display_name_comment_line.split(SEPARATOR).collect();
@@ -196,22 +175,21 @@ impl<'a> MapBase<'a> {
                 let translation_replaced = translation.denormalize();
                 translation = &translation_replaced;
 
-                map_object[self.base.labels.display_name] =
+                map_object[self.labels.display_name] =
                     Value::string(translation);
             } else {
                 log::warn!(
                     "{COULD_NOT_SPLIT_LINE_MSG} \
                      {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
-                    file = self.base.file_type.to_string().to_lowercase()
+                    file = self.file_type.to_string().to_lowercase()
                 );
             }
         }
 
-        let events = if self.base.engine_type.is_new() {
+        let events = if self.engine_type.is_new() {
             // Previously, this line was using `unwrap_unchecked`, because it assumed, that events are always an array in MV/MZ.
             // This is not the case. This array can also contain just `bool`. Now, it returns, if encounters something else than an array.
-            let Some(array) =
-                map_object[self.base.labels.events].as_array_mut()
+            let Some(array) = map_object[self.labels.events].as_array_mut()
             else {
                 return Ok(None);
             };
@@ -220,7 +198,7 @@ impl<'a> MapBase<'a> {
         } else {
             // SAFETY: Always a hashmap in old maps.
             EventIterator::Old(unsafe {
-                map_object[self.base.labels.events]
+                map_object[self.labels.events]
                     .as_hashmap_mut()
                     .unwrap_unchecked()
                     .values_mut()
@@ -233,7 +211,7 @@ impl<'a> MapBase<'a> {
             }
 
             // Read before borrowing `pages` out of the same event.
-            let event_metadata = if self.base.map_events {
+            let event_metadata = if self.map_events {
                 Some((
                     event["id"].as_int().unwrap(),
                     event["name"].as_str().unwrap().to_owned(),
@@ -244,17 +222,16 @@ impl<'a> MapBase<'a> {
                 None
             };
 
-            let Some(pages) = event[self.base.labels.pages].as_array_mut()
-            else {
+            let Some(pages) = event[self.labels.pages].as_array_mut() else {
                 continue;
             };
 
             if let Some((event_id, event_name, event_x, event_y)) =
                 event_metadata
             {
-                self.base.flush_translation(id);
+                self.flush_translation(id);
 
-                self.base.accumulated_translation.push((
+                self.accumulated_translation.push((
                         id,
                         SmallVec::default(),
                         FlushedLines::EMPTY,
@@ -272,19 +249,17 @@ impl<'a> MapBase<'a> {
             for page in pages {
                 // SAFETY: List is always in map files.
                 let list = unsafe {
-                    page[self.base.labels.list]
-                        .as_array_mut()
-                        .unwrap_unchecked()
+                    page[self.labels.list].as_array_mut().unwrap_unchecked()
                 };
 
-                self.base.process_list(list);
+                self.process_list(list);
             }
         }
 
-        if self.base.mode.is_write() {
-            Ok(Some(self.base.finish(map_object)))
+        if self.mode.is_write() {
+            Ok(Some(self.finish(map_object)))
         } else {
-            self.base.flush_translation(id);
+            self.flush_translation(id);
             Ok(None)
         }
     }
@@ -327,7 +302,7 @@ impl<'a> MapBase<'a> {
     ///
     fn is_map_unused(&self, id: u16) -> bool {
         // If map ID can't be found in mapinfos, then it is unused in game.
-        if self.base.engine_type.is_new() {
+        if self.engine_type.is_new() {
             self.mapinfos.get_index(id as usize).is_none()
         } else {
             self.mapinfos.get(&Value::int(i32::from(id))).is_none()
@@ -347,7 +322,7 @@ impl<'a> MapBase<'a> {
     fn get_map_order(&self, id: u16) -> i32 {
         // SAFETY: "order" always exists in mapinfos and is always an integer.
         unsafe {
-            if self.base.engine_type.is_new() {
+            if self.engine_type.is_new() {
                 &self.mapinfos[id as usize]["order"]
             } else {
                 &self.mapinfos[Value::int(i32::from(id))]["order"]
@@ -368,7 +343,7 @@ impl<'a> MapBase<'a> {
     /// - [`&str`] - The name of the map.
     ///
     /// Takes `mapinfos` explicitly rather than reading it through `&self`, so the
-    /// returned string borrows only that field and leaves `self.base` free.
+    /// returned string borrows only that field and leaves `self` free.
     fn get_map_name(mapinfos: &Value, engine_is_new: bool, id: u16) -> &str {
         // SAFETY: "name" always exists in mapinfos and is always a string.
         unsafe {
@@ -394,7 +369,7 @@ impl<'a> MapBase<'a> {
     ///
     fn get_display_name(&self, map_object: &Value) -> String {
         map_object
-            .get(self.base.labels.display_name)
+            .get(self.labels.display_name)
             .map(|display_name| {
                 display_name
                     .as_str()

@@ -49,24 +49,26 @@ fn main() -> Result<(), Error> {
 
 ### `core` module
 
-This module provides structs `Base`, `MapBase`, `OtherBase`, `SystemBase`, `PluginBase` and `ScriptBase`.
+This module provides the `Base` struct, which exposes one method per RPG Maker file kind: `process_map`, `process_other`, `process_system`, `process_scripts` and `process_plugins`.
+
+Maps are the one kind processed as a run rather than one shot, because they all share a single translation file: call `begin_maps`, then `process_map` per file, then `finish_maps`.
 
 #### Example
 
 ```rust no_run
-use rvpacker_txt_rs_lib::{core::{Base, MapBase}, Mode, EngineType, ReadMode};
+use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType, ReadMode};
 use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut base = Base::new(Mode::Read(ReadMode::Default { force: true }), EngineType::VXAce);
-    let mut map_base = MapBase::new(&mut base);
+    base.begin_maps();
 
     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
-    map_base.process("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
 
-    // To get the translation, you must use `translation` after processing all the maps.
-    let translation_data = map_base.translation();
+    // The translation is only available once every map has been processed.
+    let translation_data = base.finish_maps();
 
     Ok(())
 }

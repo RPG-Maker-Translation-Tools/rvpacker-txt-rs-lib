@@ -1,10 +1,7 @@
 use crate::{
     ProcessedData, RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
-    core::{
-        Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
-        filter_maps, filter_other, parse_ignore,
-    },
+    core::{Base, filter_maps, filter_other, parse_ignore},
     types::{
         BaseFlags, DuplicateMode, EngineType, Error, FileFlags, GameType, Mode,
     },
@@ -312,7 +309,7 @@ impl Processor {
                 base.skip_maps =
                     take(&mut self.skip_maps).into_iter().collect();
 
-                let mut map_base = MapBase::new(&mut base);
+                base.begin_maps();
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
@@ -324,16 +321,16 @@ impl Processor {
                     let content =
                         read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
-                    let id = MapBase::parse_map_id(filename);
+                    let id = Base::parse_map_id(filename);
 
                     let mut skipped = false;
 
                     if hash(&content, filename).is_break() {
-                        map_base.base.skip_maps.insert(id);
+                        base.skip_maps.insert(id);
                         skipped = true;
                     }
 
-                    let result = map_base.process(
+                    let result = base.process_map(
                         filename,
                         &content,
                         &mapinfos,
@@ -356,7 +353,7 @@ impl Processor {
                 }
 
                 if !mode.is_write() {
-                    let contents = match map_base.translation() {
+                    let contents = match base.finish_maps() {
                         ProcessedData::TranslationData(t) => t,
                         ProcessedData::RPGMData(_) => unreachable!(),
                     };
@@ -368,8 +365,6 @@ impl Processor {
         }
 
         if self.file_flags.intersects(FileFlags::other()) {
-            let mut other_base = OtherBase::new(&mut base);
-
             for entry in
                 filter_other(entries.iter(), engine_extension, game_type)
             {
@@ -403,7 +398,7 @@ impl Processor {
                     continue;
                 }
 
-                let data = other_base.process(
+                let data = base.process_other(
                     filename,
                     &content,
                     translation.as_deref(),
@@ -433,11 +428,10 @@ impl Processor {
                     .map_err(|e| Error::Io(system_file_path, e))?;
 
                 if !hash(&content, &filename).is_break() {
-                    let mut system_base = SystemBase::new(&mut base);
-                    system_base.set_game_title(&self.game_title);
+                    base.set_game_title(&self.game_title);
 
-                    let data = system_base
-                        .process(&content, translation.as_deref())?;
+                    let data =
+                        base.process_system(&content, translation.as_deref())?;
 
                     emit(
                         data,
@@ -466,8 +460,10 @@ impl Processor {
                         .map_err(|e| Error::Io(plugins_file_path, e))?;
 
                     if !hash(&content, "plugins.js").is_break() {
-                        let data = PluginBase::new(&mut base)
-                            .process(&content, translation.as_deref())?;
+                        let data = base.process_plugins(
+                            &content,
+                            translation.as_deref(),
+                        )?;
 
                         if mode.is_write() {
                             let js_output_path = output_path.join("js");
@@ -499,8 +495,10 @@ impl Processor {
                         .map_err(|e| Error::Io(scripts_file_path, e))?;
 
                     if !hash(&content, &filename).is_break() {
-                        let data = ScriptBase::new(&mut base)
-                            .process(&content, translation.as_deref())?;
+                        let data = base.process_scripts(
+                            &content,
+                            translation.as_deref(),
+                        )?;
 
                         emit(
                             data,
