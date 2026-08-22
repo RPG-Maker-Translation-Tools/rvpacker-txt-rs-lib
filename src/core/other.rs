@@ -208,7 +208,14 @@ impl Base {
 
             let mut string = Cow::Borrowed(string);
 
-            if self.mode.is_write() {
+            // The read side only trims messages, or everything under
+            // `BaseFlags::Trim`. Trimming unconditionally here built a lookup
+            // key the read never stored, so any field with trailing whitespace
+            // on a line silently failed to write back.
+            if self.mode.is_write()
+                && (variable_type.is_any_message()
+                    || self.flags.contains(BaseFlags::Trim))
+            {
                 string = Cow::Owned(
                     string
                         .lines()

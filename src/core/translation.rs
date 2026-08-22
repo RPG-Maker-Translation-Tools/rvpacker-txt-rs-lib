@@ -1,4 +1,4 @@
-use super::base::Output;
+use super::base::{Ignore, Output};
 use super::*;
 use crate::{
     BaseFlags, CommentPos, Comments, ProcessedData,
@@ -442,11 +442,29 @@ impl Base {
 
         let mut prev_id = u16::MAX;
 
+        // A map with events is flushed once per event, so only the first of an
+        // id's blocks carries the translations parsed for that id. They are
+        // carried across the whole run instead: appending a map with
+        // `map_events` set used to resolve the first event's lines and leave
+        // every later event untranslated.
+        let mut carried = TranslationMap::default();
+        // Entries already handed to a line. A source can appear under two
+        // events of the same map, and both want the one translation the map
+        // holds for it, so a consumed entry stays reachable until the id ends.
+        let mut consumed = TranslationMap::default();
+        let mut carry_id = u16::MAX;
+
         for i in 0..accumulated.len() {
             // Splitting gives the current entry mutably and the lookahead
             // immutably at the same time.
             let (current, rest) = accumulated[i..].split_first_mut().unwrap();
             let (id, meta, flushed, map) = current;
+
+            if *id != carry_id {
+                carried.clear();
+                consumed.clear();
+                carry_id = *id;
+            }
 
             let skip = skip_events_entry.is_some_and(|e| e.contains(id))
                 || (self.file_type.is_map() && self.skip_maps.contains(id))
@@ -484,9 +502,18 @@ impl Base {
                         if self.flags.contains(BaseFlags::CreateIgnore)
                             && !moved.is_empty()
                         {
-                            if let Some(entry) = ignore.entry_mut() {
-                                entry.insert(moved);
-                            }
+                            // Keyed on the id being written, not on whichever
+                            // one was selected last - every purged line used to
+                            // land in the final section, so nothing matched on
+                            // the next read.
+                            ignore
+                                .entry_for(Ignore::key(
+                                    self.file_type,
+                                    *id,
+                                    self.flags,
+                                    self.duplicate_mode,
+                                ))
+                                .insert(moved);
                         }
                     }
 
@@ -518,50 +545,79 @@ impl Base {
                 prev_id = *id;
             }
 
-            let next_lines_empty = rest
-                .first()
-                .is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
+            // An event header is smuggled in as an entry with an empty source
+            // whose comments carry the id, name and position lines. It is only
+            // written when the event that follows actually has text, and it is
+            // taken out of the map so the append pass below cannot print it
+            // again. Keying on the empty source matters: this used to fire for
+            // whatever entry happened to be first, so an append emitted a real
+            // translation with no source beside it.
+            if let Some(entry) = map.shift_remove("") {
+                let next_lines_empty = rest
+                    .first()
+                    .is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
 
-            if !next_lines_empty {
-                if let Some((_, entry)) = map.first() {
-                    push_entries(&mut output, "", entry);
+                if !next_lines_empty {
+                    push_entries(&mut output, "", &entry);
                 }
             }
+
+            if !map.is_empty() {
+                carried = take(map);
+            }
+
+            // Leftovers belong at the end of the id's run, not after each of
+            // its blocks.
+            let last_of_id =
+                rest.first().is_none_or(|(next_id, ..)| *next_id != *id);
+
+            let empty = TranslationEntry::default();
 
             for line_index in 0..flushed.len() {
                 let source = flushed.get(lines, line_index);
+                let deduplicated;
 
                 let translation = match (allow_dup, self.mode.is_append()) {
-                    (true, true) => map.swap_remove(source).unwrap_or_default(),
-                    (false, true) => accumulated_map
-                        .swap_remove(source)
-                        .unzip()
-                        .1
-                        .unwrap_or_default(),
-                    (_, false) => TranslationEntry::default(),
+                    (true, true) => {
+                        if let Some((key, entry)) =
+                            carried.swap_remove_entry(source)
+                        {
+                            consumed.insert(key, entry);
+                        }
+
+                        consumed.get(source).unwrap_or(&empty)
+                    }
+                    (false, true) => {
+                        deduplicated = accumulated_map
+                            .swap_remove(source)
+                            .unzip()
+                            .1
+                            .unwrap_or_default();
+
+                        &deduplicated
+                    }
+                    (_, false) => &empty,
                 };
 
-                push_entries(&mut output, source, &translation);
+                push_entries(&mut output, source, translation);
             }
 
-            if self.flags.contains(BaseFlags::SkipObsolete) {
-                continue;
-            }
-
-            match (allow_dup, self.mode.is_append()) {
-                (true, true) => {
-                    for (source, translation) in map {
-                        push_entries(&mut output, source, translation);
-                    }
-                }
-                (false, true) => {
-                    for (source, (i, translation)) in &accumulated_map {
-                        if *id == *i {
-                            push_entries(&mut output, source, translation);
+            if last_of_id && !self.flags.contains(BaseFlags::SkipObsolete) {
+                match (allow_dup, self.mode.is_append()) {
+                    (true, true) => {
+                        for (source, translation) in carried.drain(..) {
+                            push_entries(&mut output, &source, &translation);
                         }
                     }
+                    (false, true) => {
+                        for (source, (i, translation)) in &accumulated_map {
+                            if *id == *i {
+                                push_entries(&mut output, source, translation);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 

@@ -61,16 +61,47 @@ impl Default for Ignore {
 }
 
 impl Ignore {
+    /// The section key one file's entries live under.
+    ///
+    /// With duplicates removed on a read the whole file shares a single entry,
+    /// so the id is left off; every other combination keys on the entry id.
+    pub(super) fn key(
+        file_type: RPGMFileType,
+        id: u16,
+        flags: BaseFlags,
+        duplicate_mode: DuplicateMode,
+    ) -> String {
+        // Built in one pass. This previously formatted the name, truncated it at
+        // the ':', then formatted the whole key again - two allocations per map
+        // and per event.
+        let mut key = String::with_capacity(
+            IGNORE_ENTRY_COMMENT.len() + SEPARATOR.len() + 24,
+        );
+
+        key.push_str(IGNORE_ENTRY_COMMENT);
+        key.push_str(SEPARATOR);
+        let _ = write!(key, "{file_type}");
+
+        if !(flags.contains(BaseFlags::Ignore) && duplicate_mode.is_remove()) {
+            let _ = write!(key, ": {id}");
+        }
+
+        key
+    }
+
     /// The currently selected entry, or [`None`] if none was selected.
     pub(super) fn entry(&self) -> Option<&IgnoreEntry> {
         self.map.get_index(self.entry_index).map(|(_, entry)| entry)
     }
 
-    /// Mutable counterpart of [`Ignore::entry`].
-    pub(super) fn entry_mut(&mut self) -> Option<&mut IgnoreEntry> {
-        self.map
-            .get_index_mut(self.entry_index)
-            .map(|(_, entry)| entry)
+    /// The entry for `key`, created if it is not there yet.
+    ///
+    /// Purging collects its ignore entries in [`Base::finish_translation`], by
+    /// which point the selected entry is whichever id happened to be processed
+    /// last - so that pass has to name the id it is writing rather than rely on
+    /// the selection.
+    pub(super) fn entry_for(&mut self, key: String) -> &mut IgnoreEntry {
+        self.map.entry(key).or_default()
     }
 }
 
@@ -239,24 +270,12 @@ impl Base {
             return;
         }
 
-        // Built in one pass. This previously formatted the name, truncated it at
-        // the ':', then formatted the whole key again - two allocations per map
-        // and per event.
-        let mut key = String::with_capacity(
-            IGNORE_ENTRY_COMMENT.len() + SEPARATOR.len() + 24,
+        let key = Ignore::key(
+            self.file_type,
+            id,
+            self.flags,
+            self.duplicate_mode,
         );
-
-        key.push_str(IGNORE_ENTRY_COMMENT);
-        key.push_str(SEPARATOR);
-        let _ = write!(key, "{file}", file = self.file_type);
-
-        // With duplicates removed the whole file shares a single entry, so the id
-        // is left off.
-        if !(self.flags.contains(BaseFlags::Ignore)
-            && self.duplicate_mode.is_remove())
-        {
-            let _ = write!(key, ": {id}");
-        }
 
         let entry = self.ignore.map.entry(key);
 
