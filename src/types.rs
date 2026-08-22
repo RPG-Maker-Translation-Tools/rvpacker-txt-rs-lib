@@ -685,20 +685,51 @@ impl FieldNames for FileFlags {
     ];
 }
 
+/// Gives each flag a function form, so a single file kind reads the same at a call
+/// site as the [`FileFlags::other`] group does.
+macro_rules! flag_aliases {
+    ($($name:ident => $flag:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("Alias for [`FileFlags::", stringify!($flag), "`].")]
+            #[must_use]
+            pub const fn $name() -> Self {
+                Self::$flag
+            }
+        )*
+    };
+}
+
 impl FileFlags {
+    /// Everything except [`FileFlags::Map`], [`FileFlags::System`] and
+    /// [`FileFlags::Scripts`].
     #[must_use]
-    /// Other entries. Those include [`FileFlags::Armors`], [`FileFlags::Classes`], [`FileFlags::CommonEvents`], [`FileFlags::Enemies`], [`FileFlags::Items`], [`FileFlags::Skills`], [`FileFlags::States`], [`FileFlags::Troops`], [`FileFlags::Weapons`].
-    pub fn other() -> Self {
+    pub const fn other() -> Self {
         Self::Actors
-            | Self::Armors
-            | Self::Classes
-            | Self::CommonEvents
-            | Self::Enemies
-            | Self::Items
-            | Self::Skills
-            | Self::States
-            | Self::Troops
-            | Self::Weapons
+            .union(Self::Armors)
+            .union(Self::Classes)
+            .union(Self::CommonEvents)
+            .union(Self::Enemies)
+            .union(Self::Items)
+            .union(Self::Skills)
+            .union(Self::States)
+            .union(Self::Troops)
+            .union(Self::Weapons)
+    }
+
+    flag_aliases! {
+        map => Map,
+        actors => Actors,
+        armors => Armors,
+        classes => Classes,
+        common_events => CommonEvents,
+        enemies => Enemies,
+        items => Items,
+        skills => Skills,
+        states => States,
+        troops => Troops,
+        weapons => Weapons,
+        system => System,
+        scripts => Scripts,
     }
 }
 

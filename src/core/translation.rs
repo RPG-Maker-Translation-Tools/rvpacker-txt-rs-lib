@@ -3,11 +3,10 @@ use super::*;
 use crate::{
     BaseFlags, CommentPos, Comments, ProcessedData,
     constants::{
-        AT_POSITION_MSG, COMMENT_PREFIX, COMMENT_SUFFIX,
-        COULD_NOT_SPLIT_LINE_MSG, EVENT_ID_COMMENT, EVENT_NAME_COMMENT,
-        EVENT_POS_COMMENT, ID_COMMENT, IN_FILE_MSG,
-        MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
-        SEPARATOR,
+        AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG,
+        EVENT_ID_COMMENT, EVENT_NAME_COMMENT, EVENT_POS_COMMENT, ID_COMMENT,
+        IN_FILE_MSG, MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT,
+        NAME_COMMENT, SEPARATOR,
     },
     types::{Error, IndexMapExt, Lines, TranslationEntry, TranslationMap},
 };
@@ -149,13 +148,11 @@ impl Base {
                     }
 
                     if pos == CommentPos::DisplayName {
-                        let suffix_pos = line.rfind(COMMENT_SUFFIX).unwrap();
-                        let prefix_len = MAP_DISPLAY_NAME_COMMENT_PREFIX.len();
-                        let source = &line[prefix_len..suffix_pos];
-                        let translation =
-                            line.rsplit_once(SEPARATOR).unwrap().1;
-                        comments[pos as usize] =
-                            format!("{source}{SEPARATOR}{translation}");
+                        // With no closing marker the line past its prefix is
+                        // already the stored form, `{source}<#>{translation}`.
+                        comments[pos as usize] = line
+                            [MAP_DISPLAY_NAME_COMMENT_PREFIX.len()..]
+                            .to_string();
                     } else {
                         comments[pos as usize] =
                             line.split_once(SEPARATOR).unwrap().1.to_string();
@@ -369,26 +366,29 @@ impl Base {
             return SmallVec::default();
         };
 
-        comments.iter_mut().enumerate().filter(|(_, x)| !x.is_empty()).for_each(|(i, x)| {
-            let pos = unsafe { transmute::<i8, CommentPos>(i as i8) };
+        comments
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, x)| !x.is_empty())
+            .for_each(|(i, x)| {
+                let pos = unsafe { transmute::<i8, CommentPos>(i as i8) };
 
-            *x = match pos {
-                CommentPos::Name => {
-                    format!("{NAME_COMMENT}{SEPARATOR}{x}")
+                *x = match pos {
+                    CommentPos::Name => {
+                        format!("{NAME_COMMENT}{SEPARATOR}{x}")
+                    }
+
+                    CommentPos::Order => {
+                        format!("{MAP_ORDER_COMMENT}{SEPARATOR}{x}")
+                    }
+
+                    CommentPos::DisplayName => {
+                        format!("{MAP_DISPLAY_NAME_COMMENT_PREFIX}{x}")
+                    }
+
+                    CommentPos::None => unreachable!(),
                 }
-
-                CommentPos::Order => {
-                    format!("{MAP_ORDER_COMMENT}{SEPARATOR}{x}")
-                }
-
-                CommentPos::DisplayName => {
-                    let (source, translation) = x.split_once(SEPARATOR).unwrap();
-                    format!("{MAP_DISPLAY_NAME_COMMENT_PREFIX}{source}{COMMENT_SUFFIX}{SEPARATOR}{translation}")
-                }
-
-                CommentPos::None => unreachable!()
-            }
-        });
+            });
 
         comments
     }

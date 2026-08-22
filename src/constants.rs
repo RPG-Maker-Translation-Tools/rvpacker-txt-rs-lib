@@ -15,31 +15,30 @@ pub(crate) const SYMBOLS: phf::Set<char> = phf_set! {
 pub const NEW_LINE: &str = r"\#";
 pub const SEPARATOR: &str = "<#>";
 
-pub(crate) const COMMENT_PREFIX: &str = "<!-- ";
-pub(crate) const COMMENT_SUFFIX: &str = " -->";
+/// Marks a line as library metadata rather than translatable text.
+///
+/// There is no closing marker. The old `<!-- ... -->` pair had a suffix that
+/// almost nothing checked, and RPG Maker plugin markup does not use HTML-like
+/// tags, so the opening marker alone separates the two.
+pub(crate) const COMMENT_PREFIX: &str = "<!> ";
 
-pub(crate) const ID_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}ID{COMMENT_SUFFIX}");
-pub(crate) const NAME_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}NAME{COMMENT_SUFFIX}");
+pub(crate) const ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ID");
+pub(crate) const NAME_COMMENT: &str = formatcp!("{COMMENT_PREFIX}NAME");
 
-pub(crate) const EVENT_ID_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT ID{COMMENT_SUFFIX}");
+pub(crate) const EVENT_ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}EVENT ID");
 pub(crate) const EVENT_NAME_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT NAME{COMMENT_SUFFIX}");
+    formatcp!("{COMMENT_PREFIX}EVENT NAME");
 pub(crate) const EVENT_POS_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT POS{COMMENT_SUFFIX}");
+    formatcp!("{COMMENT_PREFIX}EVENT POS");
 
-pub(crate) const MAP_ORDER_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}ORDER{COMMENT_SUFFIX}");
+pub(crate) const MAP_ORDER_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ORDER");
 pub(crate) const MAP_DISPLAY_NAME_COMMENT_PREFIX: &str =
     formatcp!("{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: ");
 pub(crate) const IGNORE_ENTRY_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}Ignore Entry{COMMENT_SUFFIX}");
+    formatcp!("{COMMENT_PREFIX}Ignore Entry");
 
 /// Marks a `.rvpacker-ignore` line as a shell-style pattern rather than a literal.
-pub(crate) const GLOB_ENTRY_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}Glob{COMMENT_SUFFIX}");
+pub(crate) const GLOB_ENTRY_COMMENT: &str = formatcp!("{COMMENT_PREFIX}Glob");
 
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
 pub const RVPACKER_METADATA_FILE: &str = ".rvpacker-metadata";

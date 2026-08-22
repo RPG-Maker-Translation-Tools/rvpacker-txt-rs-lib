@@ -97,15 +97,15 @@ Lines listed in `.rvpacker-ignore` are skipped when reading. Set `BaseFlags::Ign
 The file is a sequence of sections. A section header names the file (and, unless duplicates are removed, the entry id); every following line until the next header is an entry:
 
 ```text
-<!-- Ignore Entry --><#>Items: 1
+<!> Ignore Entry<#>Items: 1
 Torch
 Silver shilling
-<!-- Glob --><#>*soul
-<!-- Ignore Entry --><#>Weapons: 1
+<!> Glob<#>*soul
+<!> Ignore Entry<#>Weapons: 1
 makeshift2
 ```
 
-A plain line matches exactly. A line written `<!-- Glob --><#>pattern` matches as a shell-style pattern, where `*` stands for any run of characters and `?` for exactly one; everything else is literal. Globs exist for text that can only be recognised by shape — a shared prefix or suffix — rather than by a fixed string.
+A plain line matches exactly. A line written `<!> Glob<#>pattern` matches as a shell-style pattern, where `*` stands for any run of characters and `?` for exactly one; everything else is literal. Globs exist for text that can only be recognised by shape — a shared prefix or suffix — rather than by a fixed string.
 
 With `DuplicateMode::Remove` the `: id` suffix is ignored and a section applies to its whole file, so the id you write is arbitrary. With `DuplicateMode::Allow` it must match the entry.
 
