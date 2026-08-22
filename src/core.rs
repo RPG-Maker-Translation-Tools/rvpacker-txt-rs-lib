@@ -10,7 +10,7 @@ use crate::{
         MAP_ORDER_COMMENT, NAME_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS,
     },
     types::{
-        Code, DuplicateMode, EachLine, EngineType, Error, GameType,
+        Code, DuplicateMode, EngineType, Error, GameType,
         IgnoreEntry, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode,
         RPGMFileType, Scripts, TranslationEntry, TranslationMap, Variable,
     },
@@ -3409,7 +3409,7 @@ impl<'a> ScriptBase<'a> {
         let mut current_quote_type = '\0';
         let mut global_index = 0;
 
-        for line in ruby_code.each_line() {
+        for line in ruby_code.split_inclusive('\n') {
             let trimmed = line.trim();
 
             if !inside_string {

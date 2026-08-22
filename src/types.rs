@@ -8,8 +8,8 @@ use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::{
-    convert::Infallible, hash::BuildHasher, io, mem::take, ops::Deref,
-    path::PathBuf, str::FromStr,
+    convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf,
+    str::FromStr,
 };
 use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
@@ -84,33 +84,6 @@ impl Variable {
             self,
             Self::Message1 | Self::Message2 | Self::Message3 | Self::Message4
         )
-    }
-}
-
-pub(crate) trait EachLine {
-    fn each_line(&self) -> Vec<String>;
-}
-
-impl EachLine for str {
-    #[inline]
-    /// Returns a [`Vec`] of strings splitted by lines (inclusive), akin to `each_line` in Ruby
-    fn each_line(&self) -> Vec<String> {
-        let mut result = Vec::with_capacity(1024);
-        let mut current_line = String::new();
-
-        for char in self.chars() {
-            current_line.push(char);
-
-            if char == '\n' {
-                result.push(take(&mut current_line));
-            }
-        }
-
-        if !current_line.is_empty() {
-            result.push(take(&mut current_line));
-        }
-
-        result
     }
 }
 
