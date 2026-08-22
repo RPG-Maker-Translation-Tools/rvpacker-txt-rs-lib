@@ -554,6 +554,8 @@ impl FromStr for DuplicateMode {
     Debug,
     Clone,
     Copy,
+    PartialEq,
+    Eq,
     EnumIs,
     Default,
     TryFromPrimitive,
@@ -613,7 +615,7 @@ impl std::fmt::Display for EngineType {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
     #[repr(transparent)]
     /// There's four [`FileFlags`] variants:
@@ -784,7 +786,7 @@ impl Default for FileFlags {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
     #[repr(transparent)]
     /// Indicates different modes of processing the text.

@@ -13,7 +13,7 @@ use std::{borrow::Cow, cell::LazyCell};
 
 thread_local! {
     static LINE_BREAKS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"\r|\n|\r\n").unwrap_unchecked()
+        Regex::new(r"\r\n|\r|\n").unwrap_unchecked()
     });
     static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
         Regex::new(r"\\#").unwrap_unchecked()
