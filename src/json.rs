@@ -80,7 +80,11 @@ pub fn generate_file(
 ///
 pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
     let json = from_str::<Value>(file_content)?;
-    Ok(dump(json, None))
+
+    // The same prefix `generate_file` loaded with. Dumping without it left
+    // every instance variable stripped of its `@`, so the file the game got
+    // back had no fields it could recognise.
+    Ok(dump(json, INSTANCE_VAR_PREFIX))
 }
 
 /// Generates JSON representations of older engine files (`.rxdata`, `.rvdata`, `.rvdata2`).
@@ -243,6 +247,12 @@ pub fn write<P: AsRef<Path>>(
                             .split_once(',')
                             .unwrap_unchecked()
                     };
+
+                    // `generate_file` puts ", " between the two, so the name
+                    // arrives with a leading space. Keeping it meant every
+                    // round trip through JSON indented the script name by one
+                    // more space.
+                    let name = name.strip_prefix(' ').unwrap_or(name);
 
                     scripts.numbers.push(unsafe {
                         magic_number.parse::<i32>().unwrap_unchecked()
