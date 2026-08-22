@@ -2,7 +2,17 @@ use crate::{
     constants::{ID_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS},
     types::TranslationEntry,
 };
-use std::borrow::Cow;
+use regex::Regex;
+use std::{borrow::Cow, cell::LazyCell};
+
+thread_local! {
+    static LINE_BREAKS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
+        Regex::new(r"\r|\n|\r\n").unwrap_unchecked()
+    });
+    static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
+        Regex::new(r"\\#").unwrap_unchecked()
+    });
+}
 
 pub(crate) trait CustomReplace {
     /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the format that the library uses (`\#`).
@@ -14,58 +24,11 @@ pub(crate) trait CustomReplace {
 
 impl CustomReplace for str {
     fn normalize(&self) -> Cow<'_, str> {
-        let bytes = self.as_bytes();
-
-        let Some(first) = bytes.iter().position(|&b| b == b'\r' || b == b'\n')
-        else {
-            return Cow::Borrowed(self);
-        };
-
-        // `\r` and `\n` are replaced independently, so a CRLF pair yields two
-        // separators - matching the leftmost-first `\r|\n|\r\n` regex this replaced.
-        let mut out = Vec::with_capacity(self.len() + 8);
-        out.extend_from_slice(&bytes[..first]);
-        out.extend_from_slice(NEW_LINE.as_bytes());
-
-        let mut chunk_start = first + 1;
-
-        for i in chunk_start..bytes.len() {
-            if bytes[i] == b'\r' || bytes[i] == b'\n' {
-                out.extend_from_slice(&bytes[chunk_start..i]);
-                out.extend_from_slice(NEW_LINE.as_bytes());
-                chunk_start = i + 1;
-            }
-        }
-
-        out.extend_from_slice(&bytes[chunk_start..]);
-
-        // SAFETY: `self` is valid UTF-8, and the only bytes rewritten are ASCII
-        // `\r`/`\n`, which cannot occur inside a multi-byte sequence. The
-        // replacement is ASCII too, so the result is still valid UTF-8.
-        Cow::Owned(unsafe { String::from_utf8_unchecked(out) })
+        LINE_BREAKS_RE.with(|re| re.replace_all(self, NEW_LINE))
     }
 
     fn denormalize(&self) -> Cow<'_, str> {
-        // The first `find` doubles as the no-match check, so a string without
-        // separators is scanned once and never copied.
-        let Some(first) = self.find(NEW_LINE) else {
-            return Cow::Borrowed(self);
-        };
-
-        let mut out = String::with_capacity(self.len());
-        out.push_str(&self[..first]);
-        out.push('\n');
-
-        let mut rest = &self[first + NEW_LINE.len()..];
-
-        while let Some(i) = rest.find(NEW_LINE) {
-            out.push_str(&rest[..i]);
-            out.push('\n');
-            rest = &rest[i + NEW_LINE.len()..];
-        }
-
-        out.push_str(rest);
-        Cow::Owned(out)
+        NEW_LINE_RE.with(|re| re.replace_all(self, "\n"))
     }
 }
 
