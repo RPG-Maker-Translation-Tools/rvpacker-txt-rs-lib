@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "14.0.0"
+version = "14.0.1"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.87.0"
