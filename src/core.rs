@@ -610,6 +610,10 @@ pub struct Base {
     translation_maps: IndexMapGx<u16, TranslationMap>,
     translation_map: &'static mut TranslationMap,
 
+    /// Flattened `translation_maps`, built once on write with [`DuplicateMode::Remove`].
+    /// See [`Base::build_write_lookup`].
+    write_lookup: TranslationMap,
+
     accumulated_translation:
         Vec<(u16, Comments, Vec<Cow<'static, str>>, TranslationMap)>,
     top_level_comments: HashMap<u16, Vec<String>>,
@@ -639,6 +643,7 @@ impl Default for Base {
 
             translation_map: unsafe { &mut *(16 as *mut TranslationMap) },
             translation_maps: IndexMapGx::default(),
+            write_lookup: TranslationMap::default(),
 
             accumulated_translation: Vec::new(),
             top_level_comments: HashMap::default(),
@@ -695,6 +700,7 @@ impl<'a> Base {
         self.metadata.clear();
 
         self.translation_maps.clear();
+        self.write_lookup.clear();
         self.accumulated_translation.clear();
     }
 
@@ -1292,7 +1298,47 @@ impl<'a> Base {
             let _ = Box::from_raw(std::ptr::from_mut(self.translation_map));
         }
 
+        self.build_write_lookup();
+
         Ok(())
+    }
+
+    /// Flattens `self.translation_maps` into `self.write_lookup`.
+    ///
+    /// Only relevant on write with [`DuplicateMode::Remove`], where [`Base::get_key`]
+    /// has to resolve a key against *every* parsed map. Doing that by scanning is
+    /// `O(maps)` per lookup, i.e. quadratic over the whole file set; flattening once
+    /// makes it a single hash lookup.
+    ///
+    /// Entries are moved rather than cloned, so this costs no extra memory: with
+    /// [`DuplicateMode::Remove`] the per-id maps are only consulted for presence on
+    /// write, never for content. `u16::MAX` is left alone - it holds the Termina item
+    /// category map, which is looked up by id directly.
+    fn build_write_lookup(&mut self) {
+        if !self.mode.is_write() || !self.duplicate_mode.is_remove() {
+            return;
+        }
+
+        let total: usize = self
+            .translation_maps
+            .iter()
+            .filter(|(id, _)| **id != u16::MAX)
+            .map(|(_, map)| map.len())
+            .sum();
+
+        self.write_lookup = TranslationMap::with_capacity(total);
+
+        for (id, map) in &mut self.translation_maps {
+            if *id == u16::MAX {
+                continue;
+            }
+
+            // `or_insert` keeps the first occurrence, matching the order the
+            // previous linear scan resolved duplicates in.
+            for (source, translation) in map.drain(..) {
+                self.write_lookup.entry(source).or_insert(translation);
+            }
+        }
     }
 
     /// Sets `self.translation_map` to the entry from `self.translation_maps`.
@@ -1505,14 +1551,7 @@ impl<'a> Base {
         if self.duplicate_mode.is_allow() {
             self.translation_map.get(key)
         } else {
-            for translation_map in self.translation_maps.values() {
-                let option = translation_map.get(key);
-
-                if option.is_some() {
-                    return option;
-                }
-            }
-            None
+            self.write_lookup.get(key)
         }
     }
 
