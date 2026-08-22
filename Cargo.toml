@@ -36,12 +36,11 @@ calamine = { version = "0.36.1", optional = true }
 yaml_serde = { version = "0.10.7", optional = true }
 
 [features]
-default = ["game-termina", "game-lisa"]
+default = ["game-termina"]
 
 # Per-game custom processing. Disabling one leaves its `GameType` variant inert:
 # files are processed as though `GameType::None` were set.
 game-termina = []
-game-lisa = []
 
 serde-csv = ["dep:csv"]
 serde-xml = ["dep:quick-xml"]

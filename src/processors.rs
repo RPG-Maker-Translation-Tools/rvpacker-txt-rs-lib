@@ -523,11 +523,8 @@ impl Processor {
                         "{}\n{}",
                         file,
                         lines
-                            .into_iter()
-                            .map(|mut x| {
-                                x.push('\n');
-                                x
-                            })
+                            .lines()
+                            .map(|line| line.into_owned() + "\n")
                             .collect::<String>()
                     );
 

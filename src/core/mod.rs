@@ -16,10 +16,12 @@
 mod base;
 mod file;
 mod game;
+mod ignore;
 mod list;
 mod map;
 mod other;
 mod plugin;
+mod plugins;
 mod script;
 mod system;
 mod text;
@@ -30,6 +32,7 @@ pub use file::{
     filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore,
     parse_rpgm_file,
 };
+pub use ignore::{Glob, IgnoreEntry};
 pub use text::latinize_string;
 
 pub(crate) use text::{

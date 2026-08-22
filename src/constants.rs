@@ -37,6 +37,10 @@ pub(crate) const MAP_DISPLAY_NAME_COMMENT_PREFIX: &str =
 pub(crate) const IGNORE_ENTRY_COMMENT: &str =
     formatcp!("{COMMENT_PREFIX}Ignore Entry{COMMENT_SUFFIX}");
 
+/// Marks a `.rvpacker-ignore` line as a shell-style pattern rather than a literal.
+pub(crate) const GLOB_ENTRY_COMMENT: &str =
+    formatcp!("{COMMENT_PREFIX}Glob{COMMENT_SUFFIX}");
+
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
 pub const RVPACKER_METADATA_FILE: &str = ".rvpacker-metadata";
 

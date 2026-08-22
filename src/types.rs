@@ -2,7 +2,7 @@ use crate::constants::{
     MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
 };
 use bitflags::bitflags;
-use gxhash::{GxBuildHasher, HashSet};
+use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
@@ -17,8 +17,7 @@ use thiserror::Error;
 pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
 pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
 
-pub(crate) type IgnoreEntry = HashSet<String>;
-pub(crate) type IgnoreMap = IndexMapGx<String, HashSet<String>>;
+pub(crate) type IgnoreMap = IndexMapGx<String, crate::core::IgnoreEntry>;
 
 pub(crate) type Comments = SmallVec<[String; 3]>;
 pub(crate) type Lines = IndexSetGx<String>;

@@ -1,12 +1,11 @@
+use super::IgnoreEntry;
 use super::game;
 use crate::{
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX},
     types::{
-        DuplicateMode, EngineType, Error, GameType, IgnoreEntry, IgnoreMap,
-        RPGMFileType,
+        DuplicateMode, EngineType, Error, GameType, IgnoreMap, RPGMFileType,
     },
 };
-use gxhash::HashSetExt;
 use marshal_rs::{Value, load_binary, load_utf8};
 use serde_json::{Value as SerdeValue, from_str};
 use smallvec::SmallVec;
@@ -217,7 +216,7 @@ pub fn parse_ignore(
             ignore_entry =
                 unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
         } else {
-            ignore_entry.insert(line.into());
+            ignore_entry.insert_line(line);
         }
     }
 

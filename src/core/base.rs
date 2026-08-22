@@ -3,8 +3,8 @@ use crate::{
     BaseFlags, Comments, IndexSetExt, ProcessedData,
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX, SEPARATOR},
     types::{
-        DuplicateMode, EngineType, GameType, IgnoreEntry, IgnoreMap,
-        IndexMapExt, IndexMapGx, Labels, Lines, Mode, RPGMFileType, ReadMode,
+        DuplicateMode, EngineType, GameType, IgnoreMap, IndexMapExt,
+        IndexMapGx, Labels, Lines, Mode, RPGMFileType, ReadMode,
         TranslationEntry, TranslationMap,
     },
 };

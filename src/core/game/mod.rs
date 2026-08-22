@@ -6,17 +6,14 @@
 //! everyone else, so each game sits behind its own feature:
 //!
 //! - `game-termina` - Fear & Hunger 2: Termina
-//! - `game-lisa` - the `LisaRPG` series
 //!
-//! Both are on by default. With a feature off, the matching
+//! It is on by default. With a feature off, the matching
 //! [`GameType`](crate::GameType) variant still exists but is inert: files are
 //! processed as though [`GameType::None`](crate::GameType::None) were set.
 //!
 //! Every entry point below is a shim that compiles to nothing when its feature
 //! is disabled, so call sites never need a `cfg`.
 
-#[cfg(feature = "game-lisa")]
-mod lisa;
 #[cfg(feature = "game-termina")]
 mod termina;
 
@@ -49,20 +46,6 @@ pub(super) fn drops_parameter(
 
     let _ = (game_type, code, parameter);
     false
-}
-
-/// Byte index just past the engine prefix this game puts on dialogue lines, if any.
-pub(super) fn dialogue_prefix_len(
-    game_type: GameType,
-    parameter: &str,
-) -> Option<usize> {
-    #[cfg(feature = "game-lisa")]
-    if game_type.is_lisa_rpg() {
-        return lisa::dialogue_prefix_len(parameter);
-    }
-
-    let _ = (game_type, parameter);
-    None
 }
 
 /// Source entries this game needs prepended to a freshly read translation file.

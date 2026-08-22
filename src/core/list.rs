@@ -22,9 +22,11 @@ impl Base {
             return None;
         }
 
+        // Advanced Text System is a VX Ace plugin; its prefixes are recognised
+        // by their own markup, so no game identifier is involved.
         if code.is_any_dialogue()
-            && let Some(i) =
-                game::dialogue_prefix_len(self.game_type, parameter)
+            && self.engine_type.is_vx_ace()
+            && let Some(i) = plugins::ats_dialogue_prefix_len(parameter)
         {
             if string_is_only_symbols(&parameter[i..]) {
                 return None;

@@ -1,11 +1,13 @@
 use crate::{
-    BaseFlags, Comments, Error, IgnoreEntry, IgnoreMap, Lines, Mode,
-    ProcessedData, ReadMode, SEPARATOR, TranslationEntry, TranslationMap,
+    BaseFlags, Comments, Error, IgnoreMap, Lines, Mode, ProcessedData,
+    ReadMode, SEPARATOR, TranslationEntry, TranslationMap,
     constants::{
         AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG,
         IGNORE_ENTRY_COMMENT, IN_FILE_MSG,
     },
-    core::{TranslationLine, push_entries, split_translation_line},
+    core::{
+        IgnoreEntry, TranslationLine, push_entries, split_translation_line,
+    },
 };
 use log::warn;
 use marshal_rs::{Value, ValueType, load_utf8};
