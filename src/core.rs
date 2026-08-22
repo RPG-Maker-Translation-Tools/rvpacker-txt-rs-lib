@@ -36,15 +36,6 @@ use std::{
 
 const DISPLAY_NAME_POS: usize = CommentPos::DisplayName as usize;
 
-macro_rules! mutable {
-    ($var:expr, $t:ty) => {{
-        #[allow(invalid_reference_casting)]
-        unsafe {
-            &mut *std::ptr::from_ref::<$t>($var).cast_mut()
-        }
-    }};
-}
-
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// Newer RPG Maker versions store events in arrays while older versions use hash maps.
@@ -586,6 +577,39 @@ pub(crate) fn push_entries(
     }
 }
 
+/// Lines flushed for one accumulated entry.
+///
+/// The duplicate-removing path leaves its lines in [`Base::lines`] and records only
+/// the range they occupy, so they are never copied; the duplicate-allowing path
+/// drains them out and owns them.
+enum FlushedLines {
+    Owned(Vec<String>),
+    Range(Range<usize>),
+}
+
+impl FlushedLines {
+    const EMPTY: Self = Self::Range(0..0);
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(lines) => lines.len(),
+            Self::Range(range) => range.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// `store` must be the [`Base::lines`] these were flushed from.
+    fn get<'a>(&'a self, store: &'a Lines, index: usize) -> &'a str {
+        match self {
+            Self::Owned(lines) => &lines[index],
+            Self::Range(range) => &store[range.start + index],
+        }
+    }
+}
+
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
@@ -624,7 +648,7 @@ pub struct Base {
     write_lookup: TranslationMap,
 
     accumulated_translation:
-        Vec<(u16, Comments, Vec<Cow<'static, str>>, TranslationMap)>,
+        Vec<(u16, Comments, FlushedLines, TranslationMap)>,
     top_level_comments: HashMap<u16, Vec<String>>,
 
     file_type: RPGMFileType,
@@ -1425,7 +1449,7 @@ impl<'a> Base {
                 self.accumulated_translation.push((
                     id,
                     metadata,
-                    Vec::new(),
+                    FlushedLines::EMPTY,
                     map,
                 ));
             }
@@ -1709,13 +1733,18 @@ impl<'a> Base {
             )
         };
 
-        let iter = mutable!(self, Self)
-            .accumulated_translation
-            .iter_mut()
-            .enumerate();
+        // Moved out so the loop can read the rest of `self` freely. `lines_store`
+        // backs every `FlushedLines::Range`.
+        let mut accumulated = take(&mut self.accumulated_translation);
+        let lines_store = take(&mut self.lines);
         let mut prev_id = u16::MAX;
 
-        for (i, (id, meta, lines, map)) in iter {
+        for i in 0..accumulated.len() {
+            // Splitting gives the current entry mutably and the lookahead
+            // immutably at the same time.
+            let (current, rest) = accumulated[i..].split_first_mut().unwrap();
+            let (id, meta, lines, map) = current;
+
             let skip = skip_events_entry.is_some_and(|e| e.contains(id))
                 || (self.file_type.is_map() && self.skip_maps.contains(id))
                 || (self.mode.is_purge()
@@ -1772,13 +1801,14 @@ impl<'a> Base {
                 let has_display_name =
                     meta.get(DISPLAY_NAME_POS).is_some_and(|c| !c.is_empty());
 
+                let same_id_has_lines = !lines.is_empty()
+                    || rest.iter().any(|(next_id, _, next_lines, _)| {
+                        *next_id == *id && !next_lines.is_empty()
+                    });
+
                 let should_push_map = self.file_type.is_map()
                     && self.map_events
-                    && (self.accumulated_translation[i..].iter().any(
-                        |(next_id, _, lines, _)| {
-                            *next_id == *id && !lines.is_empty()
-                        },
-                    ) || has_display_name);
+                    && (same_id_has_lines || has_display_name);
 
                 let should_push_other = !lines.is_empty() || has_display_name;
 
@@ -1789,9 +1819,8 @@ impl<'a> Base {
                 prev_id = *id;
             }
 
-            let next_lines_empty = self
-                .accumulated_translation
-                .get(i + 1)
+            let next_lines_empty = rest
+                .first()
                 .is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
 
             if !next_lines_empty {
@@ -1800,13 +1829,15 @@ impl<'a> Base {
                 }
             }
 
-            for source in lines {
+            for line_index in 0..lines.len() {
+                let source = lines.get(&lines_store, line_index);
+
                 let translation = match (allow_dup, self.mode.is_append()) {
                     (true, true) => {
-                        map.swap_remove(source.as_ref()).unwrap_or_default()
+                        map.swap_remove(source).unwrap_or_default()
                     }
                     (false, true) => accumulated_map
-                        .swap_remove(source.as_ref())
+                        .swap_remove(source)
                         .unzip()
                         .1
                         .unwrap_or_default(),
@@ -1862,7 +1893,7 @@ impl<'a> Base {
                 self.accumulated_translation.push((
                     id,
                     metadata,
-                    Vec::new(),
+                    FlushedLines::EMPTY,
                     map,
                 ));
             }
@@ -1877,7 +1908,7 @@ impl<'a> Base {
                 self.translation_map_mut().clear();
             } else {
                 let lines =
-                    self.lines.drain(..).map(Cow::Owned).collect::<Vec<_>>();
+                    FlushedLines::Owned(self.lines.drain(..).collect());
 
                 let map = take(self.translation_map_mut());
                 self.accumulated_translation.push((
@@ -1891,10 +1922,9 @@ impl<'a> Base {
             let total_length = self.total_length;
             let current_length = self.lines.len() - total_length;
 
-            let lines = self.lines[total_length..]
-                .iter()
-                .map(|x| Cow::Borrowed(mutable!(x.as_str(), str)))
-                .collect::<Vec<_>>();
+            // Left in `self.lines`; only the range is recorded, so nothing is copied.
+            let lines =
+                FlushedLines::Range(total_length..total_length + current_length);
 
             self.accumulated_translation.push((
                 id,
@@ -2116,7 +2146,9 @@ impl<'a> MapBase<'a> {
 
         if self.base.mode.is_read() {
             let map_order = self.get_map_order(id).to_string();
-            let map_name = mutable!(self, Self).get_map_name(id);
+            let engine_is_new = self.base.engine_type.is_new();
+            let map_name =
+                Self::get_map_name(&self.mapinfos, engine_is_new, id);
             let replaced_map_name = map_name.normalize();
 
             self.base.update_metadata(
@@ -2179,24 +2211,33 @@ impl<'a> MapBase<'a> {
                 continue;
             }
 
+            // Read before borrowing `pages` out of the same event.
+            let event_metadata = if self.base.map_events {
+                Some((
+                    event["id"].as_int().unwrap(),
+                    event["name"].as_str().unwrap().to_owned(),
+                    event["x"].as_int().unwrap(),
+                    event["y"].as_int().unwrap(),
+                ))
+            } else {
+                None
+            };
+
             let Some(pages) =
-                mutable!(event, Value)[self.base.labels.pages].as_array_mut()
+                event[self.base.labels.pages].as_array_mut()
             else {
                 continue;
             };
 
-            if self.base.map_events {
+            if let Some((event_id, event_name, event_x, event_y)) =
+                event_metadata
+            {
                 self.base.flush_translation(id);
-
-                let event_id = event["id"].as_int().unwrap();
-                let event_name = event["name"].as_str().unwrap();
-                let event_x = event["x"].as_int().unwrap();
-                let event_y = event["y"].as_int().unwrap();
 
                 self.base.accumulated_translation.push((
                         id,
                         SmallVec::default(),
-                        Vec::new(),
+                        FlushedLines::EMPTY,
                         TranslationMap::from_iter([(String::new(), TranslationEntry {
                             comments: vec![format!(
                                 "{EVENT_ID_COMMENT}{SEPARATOR}{event_id}"
@@ -2313,13 +2354,15 @@ impl<'a> MapBase<'a> {
     ///
     /// - [`&str`] - The name of the map.
     ///
-    fn get_map_name(&self, id: u16) -> &str {
+    /// Takes `mapinfos` explicitly rather than reading it through `&self`, so the
+    /// returned string borrows only that field and leaves `self.base` free.
+    fn get_map_name(mapinfos: &Value, engine_is_new: bool, id: u16) -> &str {
         // SAFETY: "name" always exists in mapinfos and is always a string.
         unsafe {
-            if self.base.engine_type.is_new() {
-                &self.mapinfos[id as usize]["name"]
+            if engine_is_new {
+                &mapinfos[id as usize]["name"]
             } else {
-                &self.mapinfos[Value::int(i32::from(id))]["name"]
+                &mapinfos[Value::int(i32::from(id))]["name"]
             }
             .as_str()
             .unwrap_unchecked()
