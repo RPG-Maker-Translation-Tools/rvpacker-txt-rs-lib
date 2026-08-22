@@ -373,28 +373,28 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Start(e) => match e.name().as_ref() {
-                b"comment" => {
+                "comment" => {
                     in_comment = true;
                     comment_text.clear();
                 }
-                b"entry" => {
+                "entry" => {
                     current_source = None;
                     current_translations = Vec::new();
                 }
-                b"source" => {
+                "source" => {
                     in_source = true;
                     current_source = Some(String::new());
                 }
-                b"translation" => {
+                "translation" => {
                     in_translation = true;
                     current_translations.push(String::new());
                 }
                 _ => {}
             },
             Event::Empty(e) => match e.name().as_ref() {
-                b"source" => current_source = Some(String::new()),
-                b"translation" => current_translations.push(String::new()),
-                b"comment" => entries.push(Entry::Comment {
+                "source" => current_source = Some(String::new()),
+                "translation" => current_translations.push(String::new()),
+                "comment" => entries.push(Entry::Comment {
                     text: String::new(),
                 }),
                 _ => {}
@@ -405,7 +405,7 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
             // comment marker and any game text holding a `<`.
             Event::Text(t) => {
                 push_text(
-                    &unescape(&t.decode()?)?,
+                    &unescape(&t)?,
                     in_source,
                     in_translation,
                     &mut current_source,
@@ -415,11 +415,8 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
             Event::GeneralRef(reference) => {
                 let resolved = match reference.resolve_char_ref()? {
                     Some(char) => char.to_string(),
-                    None => unescape(&format!(
-                        "&{name};",
-                        name = reference.decode()?
-                    ))?
-                    .into_owned(),
+                    None => unescape(&format!("&{name};", name = &*reference))?
+                        .into_owned(),
                 };
 
                 push_text(
@@ -432,20 +429,19 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
             }
             Event::CData(t) => {
                 if in_comment {
-                    comment_text =
-                        String::from_utf8(t.into_inner().into_owned())?;
+                    comment_text = t.into_inner().into_owned();
                 }
             }
             Event::End(e) => match e.name().as_ref() {
-                b"comment" => {
+                "comment" => {
                     in_comment = false;
                     entries.push(Entry::Comment {
                         text: std::mem::take(&mut comment_text),
                     });
                 }
-                b"source" => in_source = false,
-                b"translation" => in_translation = false,
-                b"entry" => {
+                "source" => in_source = false,
+                "translation" => in_translation = false,
+                "entry" => {
                     if let Some(source) = current_source.take() {
                         entries.push(Entry::Translation {
                             source,

@@ -111,7 +111,7 @@ With `DuplicateMode::Remove` the `: id` suffix is ignored and a section applies 
 
 There is no comment syntax: any line that is not a section header is an entry.
 
-`examples/termina.rvpacker-ignore` is a worked example, covering the unused items, classes, enemies, armors and weapons of Fear & Hunger 2: Termina — filtering that used to be hardcoded in this crate. Note that one of the original rules cannot be expressed here: Termina's actor filter was an *allowlist* (translate these eighteen names, drop every other actor), and an ignore file can only deny. Leaving it out costs nothing but a few extra entries to skip past.
+`examples/.rvpacker-ignore` is a worked example, covering the unused items, classes, enemies, armors and weapons of Fear & Hunger 2: Termina — filtering that used to be hardcoded in this crate. Note that one of the original rules cannot be expressed here: Termina's actor filter was an *allowlist* (translate these eighteen names, drop every other actor), and an ignore file can only deny. Leaving it out costs nothing but a few extra entries to skip past.
 
 ### Serialization/Deserialization
 

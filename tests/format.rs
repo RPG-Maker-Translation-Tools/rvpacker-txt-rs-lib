@@ -4,8 +4,7 @@
 
 use rvpacker_txt_rs_lib::{
     DuplicateMode, EngineType, Error, FileFlags, Mode, RPGMFileType,
-    core::Base,
-    get_ini_title, get_system_title, parse_ignore,
+    core::Base, get_ini_title, get_system_title, parse_ignore,
 };
 use std::str::FromStr;
 
@@ -78,8 +77,11 @@ plugin text
 
     #[test]
     fn a_header_without_an_id_is_accepted() {
-        let map =
-            parse_ignore("<!>Ignore Entry<#>Items\nTorch\n", DuplicateMode::Remove, true);
+        let map = parse_ignore(
+            "<!>Ignore Entry<#>Items\nTorch\n",
+            DuplicateMode::Remove,
+            true,
+        );
 
         assert_eq!(map.len(), 1);
         assert!(
@@ -109,25 +111,31 @@ plugin text
             true,
         );
 
-        let entry = map.get("<!>Ignore Entry<#>Items: 1").expect("section missing");
+        let entry = map
+            .get("<!>Ignore Entry<#>Items: 1")
+            .expect("section missing");
         assert!(entry.contains("Rotten soul"));
         assert!(!entry.contains("Torch"));
     }
 
     #[test]
     fn the_shipped_example_parses() {
-        let content = include_str!("../examples/termina.rvpacker-ignore");
+        let content = include_str!("../examples/.rvpacker-ignore");
         let map = parse_ignore(content, DuplicateMode::Allow, true);
 
         assert_eq!(map.len(), 5);
 
-        let items = map.get("<!>Ignore Entry<#>Items: 1").expect("Items missing");
+        let items = map
+            .get("<!>Ignore Entry<#>Items: 1")
+            .expect("Items missing");
         assert!(items.contains("Torch"));
         assert!(items.contains("The Fellowship of the Dark"));
         assert!(items.contains("Rotten soul"));
         assert!(!items.contains("Bandage"));
 
-        let armors = map.get("<!>Ignore Entry<#>Armors: 1").expect("Armors missing");
+        let armors = map
+            .get("<!>Ignore Entry<#>Armors: 1")
+            .expect("Armors missing");
         assert!(armors.contains("test_armor2"));
     }
 }
@@ -143,12 +151,21 @@ mod filenames {
             RPGMFileType::Events
         );
         assert_eq!(RPGMFileType::from_filename("Map001"), RPGMFileType::Map);
-        assert_eq!(RPGMFileType::from_filename("plugins"), RPGMFileType::Plugins);
-        assert_eq!(RPGMFileType::from_filename("Unknown"), RPGMFileType::Invalid);
+        assert_eq!(
+            RPGMFileType::from_filename("plugins"),
+            RPGMFileType::Plugins
+        );
+        assert_eq!(
+            RPGMFileType::from_filename("Unknown"),
+            RPGMFileType::Invalid
+        );
         // Too short to have a prefix, and a multi-byte character at byte 3 must
         // not panic the way slicing did.
         assert_eq!(RPGMFileType::from_filename("ab"), RPGMFileType::Invalid);
-        assert_eq!(RPGMFileType::from_filename("マップ"), RPGMFileType::Invalid);
+        assert_eq!(
+            RPGMFileType::from_filename("マップ"),
+            RPGMFileType::Invalid
+        );
     }
 
     #[test]
@@ -295,7 +312,8 @@ mod file_flags {
 
     #[test]
     fn other_is_everything_but_maps_system_and_scripts() {
-        let rest = FileFlags::map() | FileFlags::system() | FileFlags::scripts();
+        let rest =
+            FileFlags::map() | FileFlags::system() | FileFlags::scripts();
         assert_eq!(FileFlags::other() | rest, FileFlags::all());
         assert!(!FileFlags::other().intersects(rest));
     }
