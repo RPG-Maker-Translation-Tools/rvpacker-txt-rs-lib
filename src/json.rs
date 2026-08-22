@@ -234,10 +234,6 @@ pub fn write<P: AsRef<Path>>(
 
             for script_line in content.split_inclusive('\n') {
                 if script_line.starts_with(SCRIPT_COMMENT) {
-                    // The header reads `{SCRIPT_COMMENT}{SEPARATOR}{magic
-                    // number}{SEPARATOR}{name}`, so the name is whatever
-                    // follows the second separator - a name holding a comma,
-                    // or a leading space, no longer changes anything.
                     let header = unsafe {
                         script_line
                             .strip_prefix(SCRIPT_COMMENT)

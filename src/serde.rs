@@ -36,10 +36,7 @@ enum Entry {
 ///
 /// A line carrying the comment marker is metadata - an id, a name, a map's
 /// displayed name - and is kept whole; every other line is a
-/// `source<#>translation` row. This used to scan for the `<!-- ... -->` pair the
-/// format had before, which left metadata coming through as translatable rows,
-/// and made any game text containing `<!--` swallow everything up to the next
-/// `-->`.
+/// `source<#>translation` row.
 fn parse_entries(content: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
 

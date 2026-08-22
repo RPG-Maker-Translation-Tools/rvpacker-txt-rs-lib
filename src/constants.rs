@@ -15,11 +15,6 @@ pub(crate) const SYMBOLS: phf::Set<char> = phf_set! {
 pub const NEW_LINE: &str = r"\#";
 pub const SEPARATOR: &str = "<#>";
 
-/// Marks a line as library metadata rather than translatable text.
-///
-/// There is no closing marker. The old `<!-- ... -->` pair had a suffix that
-/// almost nothing checked, and RPG Maker plugin markup does not use HTML-like
-/// tags, so the opening marker alone separates the two.
 pub(crate) const COMMENT_PREFIX: &str = "<!>";
 
 pub(crate) const ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ID");
@@ -37,12 +32,8 @@ pub(crate) const MAP_DISPLAY_NAME_COMMENT_PREFIX: &str =
 pub(crate) const IGNORE_ENTRY_COMMENT: &str =
     formatcp!("{COMMENT_PREFIX}Ignore Entry");
 
-/// Marks a `.rvpacker-ignore` line as a shell-style pattern rather than a literal.
 pub(crate) const GLOB_ENTRY_COMMENT: &str = formatcp!("{COMMENT_PREFIX}Glob");
 
-/// Heads one script in the Ruby file [`crate::json::generate_file`] writes.
-///
-/// The magic number and the script's name follow, each after a separator.
 pub(crate) const SCRIPT_COMMENT: &str = formatcp!("{COMMENT_PREFIX}SCRIPT");
 
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
