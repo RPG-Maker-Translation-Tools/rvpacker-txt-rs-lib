@@ -247,29 +247,38 @@ impl RPGMFileType {
 impl FromStr for RPGMFileType {
     type Err = Infallible;
 
+    /// Matches on the first three bytes lowercased in place. Byte-wise rather than
+    /// `value[0..3].to_lowercase()`, which allocated per call and panicked outright
+    /// if byte 3 was not a character boundary.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(if value.len() >= 3 {
-            let letters: &str = &value[0..3].to_lowercase();
+        let bytes = value.as_bytes();
 
-            match letters {
-                "act" => Self::Actors,
-                "arm" => Self::Armors,
-                "cla" => Self::Classes,
-                "com" => Self::Events,
-                "ene" => Self::Enemies,
-                "ite" => Self::Items,
-                "map" => Self::Map,
-                "ski" => Self::Skills,
-                "sta" => Self::States,
-                "sys" => Self::System,
-                "tro" => Self::Troops,
-                "wea" => Self::Weapons,
-                "scr" => Self::Scripts,
-                "plu" => Self::Plugins,
-                _ => Self::Invalid,
-            }
-        } else {
-            Self::Invalid
+        if bytes.len() < 3 {
+            return Ok(Self::Invalid);
+        }
+
+        let prefix = [
+            bytes[0].to_ascii_lowercase(),
+            bytes[1].to_ascii_lowercase(),
+            bytes[2].to_ascii_lowercase(),
+        ];
+
+        Ok(match &prefix {
+            b"act" => Self::Actors,
+            b"arm" => Self::Armors,
+            b"cla" => Self::Classes,
+            b"com" => Self::Events,
+            b"ene" => Self::Enemies,
+            b"ite" => Self::Items,
+            b"map" => Self::Map,
+            b"ski" => Self::Skills,
+            b"sta" => Self::States,
+            b"sys" => Self::System,
+            b"tro" => Self::Troops,
+            b"wea" => Self::Weapons,
+            b"scr" => Self::Scripts,
+            b"plu" => Self::Plugins,
+            _ => Self::Invalid,
         })
     }
 }
@@ -761,35 +770,31 @@ impl FileFlags {
 impl FromStr for FileFlags {
     type Err = &'static str;
 
+    /// Derived from [`RPGMFileType`] rather than repeating its filename table.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() >= 3 {
-            let letters: &str = &s[0..3].to_lowercase();
+        // SAFETY: `RPGMFileType`'s error type is `Infallible`.
+        let file_type = unsafe { RPGMFileType::from_str(s).unwrap_unchecked() };
 
-            Ok(match letters {
-                "act" => Self::Actors,
-                "arm" => Self::Armors,
-                "cla" => Self::Classes,
-                "com" => Self::CommonEvents,
-                "ene" => Self::Enemies,
-                "ite" => Self::Items,
-                "map" => Self::Map,
-                "ski" => Self::Skills,
-                "sta" => Self::States,
-                "sys" => Self::System,
-                "tro" => Self::Troops,
-                "wea" => Self::Weapons,
-                "scr" | "plu" => Self::Scripts,
-                _ => {
-                    return Err(
-                        "FileFlags require valid RPG Maker data file name to parse from.",
-                    );
-                }
-            })
-        } else {
-            Err(
-                "FileFlags require valid RPG Maker data file name to parse from.",
-            )
-        }
+        Ok(match file_type {
+            RPGMFileType::Actors => Self::Actors,
+            RPGMFileType::Armors => Self::Armors,
+            RPGMFileType::Classes => Self::Classes,
+            RPGMFileType::Events => Self::CommonEvents,
+            RPGMFileType::Enemies => Self::Enemies,
+            RPGMFileType::Items => Self::Items,
+            RPGMFileType::Map => Self::Map,
+            RPGMFileType::Skills => Self::Skills,
+            RPGMFileType::States => Self::States,
+            RPGMFileType::System => Self::System,
+            RPGMFileType::Troops => Self::Troops,
+            RPGMFileType::Weapons => Self::Weapons,
+            RPGMFileType::Scripts | RPGMFileType::Plugins => Self::Scripts,
+            RPGMFileType::Invalid => {
+                return Err(
+                    "FileFlags require valid RPG Maker data file name to parse from.",
+                );
+            }
+        })
     }
 }
 

@@ -2352,26 +2352,19 @@ impl<'a> MapBase<'a> {
     /// - [`u16`] - The parsed map ID.
     ///
     pub fn parse_map_id(filename: &str) -> u16 {
-        let filename_bytes = filename.as_bytes();
-        let mut id: [u8; 4] = [0; 4];
+        let mut id: u16 = 0;
 
-        // We do this because there might be more than 999 maps.
-        for (i, &byte) in filename_bytes[3..].iter().enumerate() {
+        // Accumulated directly rather than copied into a buffer and re-parsed.
+        // Not capped at three digits, because a game may have more than 999 maps.
+        for &byte in &filename.as_bytes()[3..] {
             if !byte.is_ascii_digit() {
                 break;
             }
 
-            id[i] = byte;
+            id = id * 10 + u16::from(byte - b'0');
         }
 
-        let parsed = &id[..id.iter().position(|&c| c == b'\0').unwrap_or(4)];
-
-        // SAFETY: We discarded all files, which don't contain a digit at index 3.
-        unsafe {
-            str::from_utf8_unchecked(parsed)
-                .parse::<u16>()
-                .unwrap_unchecked()
-        }
+        id
     }
 
     /// Determines whether a map is unused based on its existence in `self.mapinfos`.
