@@ -8,7 +8,6 @@
 
 pub mod constants;
 pub mod core;
-pub mod generic;
 pub mod json;
 pub mod processors;
 pub mod serde;
