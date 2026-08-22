@@ -90,6 +90,29 @@ fn main() -> Result<(), Error> {
 }
 ```
 
+### `.rvpacker-ignore`
+
+Lines listed in `.rvpacker-ignore` are skipped when reading. Set `BaseFlags::Ignore` to apply the file, or `BaseFlags::CreateIgnore` on a purge to have untranslated entries collected into one.
+
+The file is a sequence of sections. A section header names the file (and, unless duplicates are removed, the entry id); every following line until the next header is an entry:
+
+```text
+<!-- Ignore Entry --><#>Items: 1
+Torch
+Silver shilling
+<!-- Glob --><#>*soul
+<!-- Ignore Entry --><#>Weapons: 1
+makeshift2
+```
+
+A plain line matches exactly. A line written `<!-- Glob --><#>pattern` matches as a shell-style pattern, where `*` stands for any run of characters and `?` for exactly one; everything else is literal. Globs exist for text that can only be recognised by shape — a shared prefix or suffix — rather than by a fixed string.
+
+With `DuplicateMode::Remove` the `: id` suffix is ignored and a section applies to its whole file, so the id you write is arbitrary. With `DuplicateMode::Allow` it must match the entry.
+
+There is no comment syntax: any line that is not a section header is an entry.
+
+`examples/termina.rvpacker-ignore` is a worked example, covering the unused items, classes, enemies, armors and weapons of Fear & Hunger 2: Termina — filtering that used to be hardcoded in this crate. Note that one of the original rules cannot be expressed here: Termina's actor filter was an *allowlist* (translate these eighteen names, drop every other actor), and an ignore file can only deny. Leaving it out costs nothing but a few extra entries to skip past.
+
 ### Serialization/Deserialization
 
 All public enums and structs in this crate are serializable with `serde`.

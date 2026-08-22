@@ -391,8 +391,7 @@ Girl
     #[test]
     fn literals_and_globs_both_apply() {
         let map = parse_ignore(FILE, DuplicateMode::Remove, true);
-        let items =
-            &map[&format!("{IGNORE_ENTRY_COMMENT}<#>Items")];
+        let items = &map[&format!("{IGNORE_ENTRY_COMMENT}<#>Items")];
 
         assert!(items.contains("Torch"));
         assert!(items.contains("a corrupted soul"));
@@ -414,5 +413,33 @@ Torch
             map[&format!("{IGNORE_ENTRY_COMMENT}<#>Items")].contains("Torch")
         );
     }
-}
 
+    /// The shipped example must keep parsing as the format evolves.
+    #[test]
+    fn shipped_example_parses() {
+        const EXAMPLE: &str =
+            include_str!("../../examples/termina.rvpacker-ignore");
+
+        let map = parse_ignore(EXAMPLE, DuplicateMode::Remove, true);
+
+        let section = |name: &str| {
+            map.get(&format!("{IGNORE_ENTRY_COMMENT}<#>{name}"))
+                .unwrap_or_else(|| panic!("{name} section missing"))
+        };
+
+        let items = section("Items");
+        assert!(items.contains("Torch"));
+        assert!(items.contains("The Tale of the Pocketcat II"));
+        // globs
+        assert!(items.contains("The Fellowship of the Hand"));
+        assert!(items.contains("Grey soul"));
+        assert!(items.contains("Rifle schematics"));
+        // and nothing it should not
+        assert!(!items.contains("Lantern"));
+
+        assert!(section("Armors").contains("test_armor_2"));
+        assert!(section("Classes").contains("Nas'hrah"));
+        assert!(section("Enemies").contains("Spank Tank"));
+        assert!(section("Weapons").contains("makeshift2"));
+    }
+}
