@@ -1348,7 +1348,7 @@ impl<'a> Base {
                 ));
             }
 
-            self.total_length += self.lines.len();
+            self.total_length = self.lines.len();
             return ControlFlow::Break(());
         }
 
