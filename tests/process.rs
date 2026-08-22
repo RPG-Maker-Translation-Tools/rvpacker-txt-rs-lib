@@ -3,9 +3,7 @@
 //! Each needs the matching `*_GAME_PATH` environment variable set to a game
 //! directory; without it the test errors out on the missing variable.
 
-use rvpacker_txt_rs_lib::{
-    EngineType, Mode, Processor, ReadMode, types::FileFlags,
-};
+use rvpacker_txt_rs_lib::{EngineType, Mode, Processor, types::FileFlags};
 use std::{env::var, fs::create_dir_all, path::PathBuf};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -72,6 +70,12 @@ macro_rules! engine_tests {
     };
 }
 
-engine_tests!(read, Mode::Read(ReadMode::Default { force: true }));
+engine_tests!(
+    read,
+    Mode::Read {
+        append: false,
+        force: true
+    }
+);
 engine_tests!(write, Mode::Write);
 engine_tests!(purge, Mode::Purge);

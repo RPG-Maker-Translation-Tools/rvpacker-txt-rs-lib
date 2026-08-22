@@ -19,7 +19,7 @@ impl Base {
     /// # Parameters
     ///
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`ReadMode::Default`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`Mode::Read`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -31,7 +31,7 @@ impl Base {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`ReadMode::Default`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -40,11 +40,11 @@ impl Base {
     /// # Example
     ///
     /// ```no_run
-    /// use rvpacker_txt_rs_lib::{core::Base, Mode, ReadMode, EngineType, Error};
+    /// use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType, Error};
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::Read(ReadMode::Default { force: false }), EngineType::VXAce);
+    ///     let mut base = Base::new(Mode::read(), EngineType::VXAce);
     ///
     ///     let script_file_content = read("C:/Game/Data/Scripts.rvdata2")?;
     ///     base.process_scripts(&script_file_content, None)?;

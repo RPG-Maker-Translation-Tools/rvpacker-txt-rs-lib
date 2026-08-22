@@ -23,11 +23,11 @@ use std::{
 /// # Example
 ///
 /// ```no_run
-/// use rvpacker_txt_rs_lib::{EngineType, FileFlags, Mode, Processor, ReadMode};
+/// use rvpacker_txt_rs_lib::{EngineType, FileFlags, Mode, Processor};
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let mut processor = Processor {
-///         mode: Mode::Read(ReadMode::Default { force: true }),
+///         mode: Mode::Read { append: false, force: true },
 ///         file_flags: FileFlags::Map | FileFlags::other(),
 ///         ..Default::default()
 ///     };
@@ -78,11 +78,11 @@ pub struct Processor {
 
     /// Content hashes keyed by lowercased file stem.
     ///
-    /// Set these from a previous read to let [`ReadMode::Append`](crate::ReadMode::Append)
+    /// Set these from a previous read to let [`Mode::Read`]
     /// skip unchanged files, and read them back afterwards to persist them.
     pub hashes: HashMap<String, u64>,
 
-    /// Map ids to skip. On [`ReadMode::Append`](crate::ReadMode::Append) the
+    /// Map ids to skip. On [`Mode::Read`] the
     /// corresponding maps are written back unchanged.
     pub skip_maps: Vec<u16>,
 
@@ -200,13 +200,13 @@ impl Processor {
         }
 
         let pre_msg = match mode {
-            Mode::Read(_) => "Started reading.",
+            Mode::Read { .. } => "Started reading.",
             Mode::Write => "Started writing.",
             Mode::Purge => "Started purging.",
         };
 
         let post_msg = match mode {
-            Mode::Read(_) => "Successfully read.",
+            Mode::Read { .. } => "Successfully read.",
             Mode::Write => "Successfully written.",
             Mode::Purge => "Successfully purged.",
         };
@@ -252,7 +252,7 @@ impl Processor {
             if unchanged && self.mode.is_append_default() {
                 info!(
                     "{filename} hasn't changed since the last read. Skipping \
-                     it. Use `ReadMode::ForceAppend`, if you want to \
+                     it. Set `force` on the read mode, if you want to \
                      forcefully append data."
                 );
 

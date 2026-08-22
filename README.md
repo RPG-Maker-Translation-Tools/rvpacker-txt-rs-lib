@@ -21,12 +21,12 @@ This crate provides core structs and functions in `core` module, but also export
 #### Example
 
 ```rust no_run
-use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, Mode, Processor, ReadMode};
+use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, Mode, Processor};
 use std::path::Path;
 
 fn main() -> Result<(), Error> {
     let mut processor = Processor {
-        mode: Mode::Read(ReadMode::Default { force: false }),
+        mode: Mode::read(),
         file_flags: FileFlags::Map | FileFlags::other(),
         ..Default::default()
     };
@@ -56,11 +56,11 @@ Maps are the one kind processed as a run rather than one shot, because they all 
 #### Example
 
 ```rust no_run
-use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType, ReadMode};
+use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType};
 use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut base = Base::new(Mode::Read(ReadMode::Default { force: true }), EngineType::VXAce);
+    let mut base = Base::new(Mode::Read { append: false, force: true }, EngineType::VXAce);
     base.begin_maps();
 
     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;

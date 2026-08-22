@@ -4,7 +4,7 @@ use crate::{
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX, SEPARATOR},
     types::{
         DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels,
-        Lines, Mode, RPGMFileType, ReadMode, TranslationEntry, TranslationMap,
+        Lines, Mode, RPGMFileType, TranslationEntry, TranslationMap,
     },
 };
 use gxhash::{HashMap, HashMapExt, HashSet};
@@ -143,7 +143,7 @@ pub struct Base {
 impl Default for Base {
     fn default() -> Self {
         Self {
-            mode: Mode::Read(ReadMode::Default { force: false }),
+            mode: Mode::read(),
             flags: BaseFlags::empty(),
             engine_type: EngineType::New,
             duplicate_mode: DuplicateMode::Remove,

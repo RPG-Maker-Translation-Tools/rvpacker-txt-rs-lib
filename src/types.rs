@@ -112,9 +112,25 @@ pub(crate) struct Labels {
     pub currency_unit: &'static str,
 }
 
-impl Default for Labels {
-    fn default() -> Self {
+impl Labels {
+    /// The sixteen labels that are identical on every engine, plus the six that
+    /// are not.
+    const fn with_varying(
+        display_name: &'static str,
+        armor_types: &'static str,
+        skill_types: &'static str,
+        terms: &'static str,
+        weapon_types: &'static str,
+        game_title: &'static str,
+    ) -> Self {
         Self {
+            display_name,
+            armor_types,
+            skill_types,
+            terms,
+            weapon_types,
+            game_title,
+
             events: "events",
             pages: "pages",
             list: "list",
@@ -128,48 +144,47 @@ impl Default for Labels {
             message3: "message3",
             message4: "message4",
             note: "note",
-
             elements: "elements",
             currency_unit: "currency_unit",
-
-            game_title: "",
-            display_name: "",
-            armor_types: "",
-            skill_types: "",
-            terms: "",
-            weapon_types: "",
-
             equip_types: "equipTypes",
+        }
+    }
+
+    pub const fn new(engine_type: EngineType) -> Self {
+        match engine_type {
+            // MV/MZ name their JSON fields in camelCase.
+            EngineType::New => Self::with_varying(
+                "displayName",
+                "armorTypes",
+                "skillTypes",
+                "terms",
+                "weaponTypes",
+                "gameTitle",
+            ),
+            // XP calls the terms section "words"; VX and VX Ace call it "terms".
+            EngineType::XP => Self::with_varying(
+                "display_name",
+                "armor_types",
+                "skill_types",
+                "words",
+                "weapon_types",
+                "game_title",
+            ),
+            _ => Self::with_varying(
+                "display_name",
+                "armor_types",
+                "skill_types",
+                "terms",
+                "weapon_types",
+                "game_title",
+            ),
         }
     }
 }
 
-impl Labels {
-    pub fn new(engine_type: EngineType) -> Self {
-        match engine_type {
-            EngineType::New => Self {
-                display_name: "displayName",
-                armor_types: "armorTypes",
-                skill_types: "skillTypes",
-                terms: "terms",
-                weapon_types: "weaponTypes",
-                game_title: "gameTitle",
-                ..Default::default()
-            },
-            _ => Self {
-                display_name: "display_name",
-                armor_types: "armor_types",
-                skill_types: "skill_types",
-                terms: if engine_type.is_xp() {
-                    "words"
-                } else {
-                    "terms"
-                },
-                weapon_types: "weapon_types",
-                game_title: "game_title",
-                ..Default::default()
-            },
-        }
+impl Default for Labels {
+    fn default() -> Self {
+        Self::new(EngineType::New)
     }
 }
 
@@ -362,71 +377,94 @@ impl Serialize for Error {
     }
 }
 
+/// What to do with a game's files.
+///
+/// Reading is the only operation with options, so they sit on that variant
+/// rather than in a second enum:
+///
+/// - `append` keeps the translations already in the `.txt` files and adds text
+///   that is new since the last read, for a game that got a content update.
+///   Without it, an existing translation file is left alone.
+/// - `force` overwrites files that already exist and bypasses the hash check
+///   that would otherwise skip unchanged files.
 #[derive(Clone, Copy, Debug, Deserialize, EnumIs, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
 #[repr(u8)]
-/// Defines how to read file.
-///
-/// - [`Mode::Read`] holds a [`ReadMode`] that defines the read mode.
-/// - [`Mode::Write`] is used to write files back.
-/// - [`Mode::Purge`] is used to purge lines with empty translation.
 pub enum Mode {
-    Read(ReadMode),
-    Write = 3,
-    Purge = 4,
+    /// Extract text from the game's files into `.txt` files.
+    Read { append: bool, force: bool },
+    /// Write translated text back into the game's files.
+    Write,
+    /// Drop entries that have no translation.
+    Purge,
 }
 
 impl Mode {
-    /// Checks if [`Mode`] is [`ReadMode::Default`] with any force boolean.
+    /// A plain read: no appending, no forcing.
+    #[must_use]
+    pub const fn read() -> Self {
+        Self::Read {
+            append: false,
+            force: false,
+        }
+    }
+
+    /// Reading without appending, forced or not.
     #[must_use]
     pub const fn is_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: _ }))
+        matches!(self, Self::Read { append: false, .. })
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Append`] with any force boolean.
+    /// Reading with appending, forced or not.
     #[must_use]
     pub const fn is_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: _ }))
+        matches!(self, Self::Read { append: true, .. })
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Default`] without a force boolean.
+    /// Reading without appending and without forcing.
     #[must_use]
     pub const fn is_default_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: false }))
+        matches!(
+            self,
+            Self::Read {
+                append: false,
+                force: false
+            }
+        )
     }
 
-    /// Checks if [`Mode`] is [`ReadMode::Append`] without a force boolean.
+    /// Reading with appending but without forcing.
     #[must_use]
     pub const fn is_append_default(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: false }))
-    }
-
-    /// Checks if [`Mode`] is [`ReadMode::Default`] with a force boolean.
-    #[must_use]
-    pub const fn is_force(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Default { force: true }))
-    }
-
-    /// Checks if [`Mode`] is [`ReadMode::Append`] with a force boolean.
-    #[must_use]
-    pub const fn is_force_append(self) -> bool {
-        matches!(self, Self::Read(ReadMode::Append { force: true }))
+        matches!(
+            self,
+            Self::Read {
+                append: true,
+                force: false
+            }
+        )
     }
 }
 
 impl Default for Mode {
     fn default() -> Self {
-        Self::Read(ReadMode::Default { force: false })
+        Self::read()
     }
 }
 
+/// Reads occupy 0..=3, with bit 0 as `force` and bit 1 as `append`.
+///
+/// The previous encoding gave `Write` the value 3, which a force-append read
+/// also produced, so that combination could not survive a round trip.
 impl From<Mode> for u8 {
-    fn from(val: Mode) -> Self {
-        match val {
-            Mode::Read(m) => m.into(),
-            Mode::Write => 3,
-            Mode::Purge => 4,
+    fn from(value: Mode) -> Self {
+        match value {
+            Mode::Read { append, force } => {
+                u8::from(force) | (u8::from(append) << 1)
+            }
+            Mode::Write => 4,
+            Mode::Purge => 5,
         }
     }
 }
@@ -435,15 +473,43 @@ impl TryFrom<u8> for Mode {
     type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            3 => Ok(Mode::Write),
-            4 => Ok(Mode::Purge),
-            v => {
-                let r: ReadMode =
-                    v.try_into().map_err(|_| "invalid ReadMode value")?;
-                Ok(Mode::Read(r))
+        Ok(match value {
+            0..=3 => Self::Read {
+                append: value & 0b10 != 0,
+                force: value & 0b01 != 0,
+            },
+            4 => Self::Write,
+            5 => Self::Purge,
+            _ => return Err("Expected a number from 0 to 5"),
+        })
+    }
+}
+
+impl FromStr for Mode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "default" => Self::read(),
+            "append" => Self::Read {
+                append: true,
+                force: false,
+            },
+            "force" => Self::Read {
+                append: false,
+                force: true,
+            },
+            "force-append" => Self::Read {
+                append: true,
+                force: true,
+            },
+            "write" => Self::Write,
+            "purge" => Self::Purge,
+            _ => {
+                return Err("Expected `default`, `append`, `force`, \
+                            `force-append`, `write` or `purge` string");
             }
-        }
+        })
     }
 }
 
@@ -481,109 +547,6 @@ impl FromStr for DuplicateMode {
             "remove" => Self::Remove,
             _ => return Err("Expected `allow` or `remove` string"),
         })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, VariantNames)]
-#[serde(into = "u8", try_from = "u8")]
-#[strum(serialize_all = "lowercase")]
-#[repr(u8)]
-/// There's two read modes:
-///
-/// - [`ReadMode::Default`] - parses the text from the RPG Maker files, aborts if translation files already exist. `bool` indicates whether mode is force.
-/// - [`ReadMode::Append`] - appends the new text to the translation files. That's particularly helpful if the game received content update. `bool` indicates whether mode is force.
-///
-/// Each of the modes holds a [`bool`]. It defines whether to read in force mode (overwrite existing files/bypass hashes).
-pub enum ReadMode {
-    Default { force: bool },
-    Append { force: bool },
-}
-
-impl Default for ReadMode {
-    fn default() -> Self {
-        Self::Default { force: false }
-    }
-}
-
-impl From<ReadMode> for u8 {
-    fn from(val: ReadMode) -> Self {
-        match val {
-            ReadMode::Default { force } => u8::from(force),
-            ReadMode::Append { force } => {
-                if force {
-                    3
-                } else {
-                    2
-                }
-            }
-        }
-    }
-}
-
-impl TryFrom<u8> for ReadMode {
-    type Error = &'static str;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(match value {
-            0..=1 => Self::Default { force: value != 0 },
-            2..=3 => Self::Append { force: value != 2 },
-            _ => return Err("Expected a number from 0 to 3"),
-        })
-    }
-}
-
-impl FromStr for ReadMode {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "default" => Self::Default { force: false },
-            "append" => Self::Append { force: false },
-            "force" => Self::Default { force: true },
-            "force-append" => Self::Append { force: true },
-            _ => {
-                return Err("Expected `default`, `append`, `force` or \
-                            `force-append` string");
-            }
-        })
-    }
-}
-
-impl ReadMode {
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with any force boolean.
-    #[must_use]
-    pub const fn is_default(self) -> bool {
-        matches!(self, ReadMode::Default { force: _ })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with any force boolean.
-    #[must_use]
-    pub const fn is_append(self) -> bool {
-        matches!(self, ReadMode::Append { force: _ })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] without a force boolean.
-    #[must_use]
-    pub const fn is_default_default(self) -> bool {
-        matches!(self, ReadMode::Default { force: false })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] without a force boolean.
-    #[must_use]
-    pub const fn is_append_default(self) -> bool {
-        matches!(self, ReadMode::Append { force: false })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Default`] with a force boolean.
-    #[must_use]
-    pub const fn is_force(self) -> bool {
-        matches!(self, ReadMode::Default { force: true })
-    }
-
-    /// Checks if [`ReadMode`] is [`ReadMode::Append`] with a force boolean.
-    #[must_use]
-    pub const fn is_force_append(self) -> bool {
-        matches!(self, ReadMode::Append { force: true })
     }
 }
 
@@ -806,7 +769,7 @@ bitflags! {
         ///
         /// Prior to using this function, you may need to create `.rvpacker-ignore` file by purging with [`BaseFlags::CreateIgnore`] argument.
         ///
-        /// Only used on reads with [`ReadMode::Append`] to bypass entries that were previously purged.
+        /// Only used on reads with [`Mode::Read`] to bypass entries that were previously purged.
         const Ignore = 1 << 2;
 
         /// Create `.rvpacker-ignore` file with ignore entries from purged entries.
@@ -817,7 +780,7 @@ bitflags! {
         /// No effect, for convenience.
         const DisableCustomProcessing = 1 << 4;
 
-        /// Skip obsolete entries that are not in game files anymore on reads with [`ReadMode::Append`].
+        /// Skip obsolete entries that are not in game files anymore on reads with [`Mode::Read`].
         const SkipObsolete = 1 << 5;
     }
 }
@@ -899,5 +862,99 @@ impl CommentPos {
         } else {
             Self::None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mode;
+    use std::str::FromStr;
+
+    /// Every mode must survive the `u8` round trip serde uses.
+    ///
+    /// The previous encoding collided: `Write` and a force-append read both
+    /// mapped to 3, so force-append came back as `Write`.
+    #[test]
+    fn mode_u8_round_trip() {
+        let modes = [
+            Mode::Read {
+                append: false,
+                force: false,
+            },
+            Mode::Read {
+                append: false,
+                force: true,
+            },
+            Mode::Read {
+                append: true,
+                force: false,
+            },
+            Mode::Read {
+                append: true,
+                force: true,
+            },
+            Mode::Write,
+            Mode::Purge,
+        ];
+
+        let mut seen = Vec::new();
+
+        for mode in modes {
+            let byte = u8::from(mode);
+
+            assert!(
+                !seen.contains(&byte),
+                "{mode:?} reuses the byte {byte} of an earlier mode"
+            );
+            seen.push(byte);
+
+            let back = Mode::try_from(byte).expect("byte should be valid");
+            assert_eq!(
+                format!("{mode:?}"),
+                format!("{back:?}"),
+                "{mode:?} did not survive the round trip through {byte}"
+            );
+        }
+
+        assert!(Mode::try_from(6).is_err());
+    }
+
+    #[test]
+    fn mode_from_str() {
+        for (text, expected) in [
+            ("default", Mode::read()),
+            (
+                "append",
+                Mode::Read {
+                    append: true,
+                    force: false,
+                },
+            ),
+            (
+                "force",
+                Mode::Read {
+                    append: false,
+                    force: true,
+                },
+            ),
+            (
+                "force-append",
+                Mode::Read {
+                    append: true,
+                    force: true,
+                },
+            ),
+            ("write", Mode::Write),
+            ("purge", Mode::Purge),
+        ] {
+            let parsed = Mode::from_str(text).expect("should parse");
+            assert_eq!(
+                format!("{parsed:?}"),
+                format!("{expected:?}"),
+                "{text}"
+            );
+        }
+
+        assert!(Mode::from_str("nonsense").is_err());
     }
 }

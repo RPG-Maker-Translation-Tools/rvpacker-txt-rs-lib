@@ -1,10 +1,8 @@
-use rvpacker_txt_rs_lib::{
-    EngineType, Error, FileFlags, Mode, Processor, ReadMode,
-};
+use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, Mode, Processor};
 
 fn main() -> Result<(), Error> {
     let mut processor = Processor {
-        mode: Mode::Read(ReadMode::Default { force: false }),
+        mode: Mode::read(),
         file_flags: FileFlags::Map | FileFlags::other(),
         ..Default::default()
     };
