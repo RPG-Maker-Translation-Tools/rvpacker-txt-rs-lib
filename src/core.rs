@@ -1181,19 +1181,26 @@ impl Base {
             return;
         }
 
-        let mut entry_name: &str =
-            &format!("{file}: {id}", file = self.file_type);
+        // Built in one pass. This previously formatted the name, truncated it at
+        // the ':', then formatted the whole key again - two allocations per map
+        // and per event.
+        let mut key = String::with_capacity(
+            IGNORE_ENTRY_COMMENT.len() + SEPARATOR.len() + 24,
+        );
 
-        if self.flags.contains(BaseFlags::Ignore)
-            && self.duplicate_mode.is_remove()
+        key.push_str(IGNORE_ENTRY_COMMENT);
+        key.push_str(SEPARATOR);
+        let _ = write!(key, "{file}", file = self.file_type);
+
+        // With duplicates removed the whole file shares a single entry, so the id
+        // is left off.
+        if !(self.flags.contains(BaseFlags::Ignore)
+            && self.duplicate_mode.is_remove())
         {
-            entry_name = &entry_name
-                [..unsafe { entry_name.find(':').unwrap_unchecked() }];
+            let _ = write!(key, ": {id}");
         }
 
-        let entry = self
-            .ignore_map
-            .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"));
+        let entry = self.ignore_map.entry(key);
 
         self.ignore_entry_index = entry.index();
         entry.or_default();
