@@ -160,7 +160,13 @@ impl Base {
                     let string = value_string.normalize();
 
                     if self.mode.is_write() {
-                        if let Some(translated) = self.get_key(&string) {
+                        // Parsed keys were denormalized when the translation
+                        // file was read, so the lookup has to be denormalized
+                        // too. Looking up the normalized form left any plugin
+                        // string with a line break in it unwritable.
+                        if let Some(translated) =
+                            self.get_key(&string.denormalize())
+                        {
                             *value = Value::string(translated.as_str());
                         }
                     } else {

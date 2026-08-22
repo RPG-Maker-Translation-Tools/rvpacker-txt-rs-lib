@@ -7,6 +7,7 @@
 
 use rvpacker_txt_rs_lib::{
     BaseFlags, DuplicateMode, EngineType, FileFlags, Mode, Processor,
+    RPGMFileType, get_ini_title,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,26 +22,46 @@ struct Fixture {
     /// The project's data directory, lowercase on MV/MZ and capitalised before.
     data: &'static str,
     engine: EngineType,
+    /// Whether the project ships `js/plugins.js`.
+    ///
+    /// Only MV does. The plugin format did not change for MZ, so one fixture
+    /// covers both.
+    plugins: bool,
+    /// Whether the project ships `Game.ini`, which is where XP, VX and VX Ace
+    /// keep the game title.
+    ini: bool,
 }
 
 impl Fixture {
-    fn source(self) -> PathBuf {
+    fn root(self) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join(self.dir)
-            .join(self.data)
+    }
+
+    fn source(self) -> PathBuf {
+        self.root().join(self.data)
     }
 
     /// Everything the fixture actually contains.
-    ///
-    /// The projects are bare data directories, so MV/MZ carry no
-    /// `js/plugins.js` and plugins are the one file kind left out.
     fn flags(self) -> FileFlags {
-        if self.engine.is_new() {
+        if self.engine.is_new() && !self.plugins {
             FileFlags::all() & !FileFlags::Scripts
         } else {
             FileFlags::all()
         }
+    }
+
+    /// The game title `Game.ini` carries, decoded.
+    ///
+    /// The file is not necessarily UTF-8 - that is the whole reason the title
+    /// is the caller's job - but these fixtures are ASCII.
+    fn ini_title(self) -> String {
+        let content = std::fs::read(self.root().join("Game.ini"))
+            .expect("no Game.ini");
+
+        String::from_utf8(get_ini_title(&content).expect("no title in Game.ini"))
+            .expect("the title is not UTF-8")
     }
 
     /// Translation files every engine produces.
@@ -60,7 +81,11 @@ impl Fixture {
             "weapons.txt",
         ]);
 
-        if !self.engine.is_new() {
+        if self.engine.is_new() {
+            if self.plugins {
+                files.push("plugins.txt");
+            }
+        } else {
             files.push("scripts.txt");
         }
 
@@ -132,6 +157,41 @@ fn append(fixture: Fixture, flags: BaseFlags, translation: &Path) {
     );
 }
 
+/// Runs a processor the caller configured, for the options `run` does not take.
+fn run_with(
+    fixture: Fixture,
+    processor: &mut Processor,
+    translation: &Path,
+    output: Option<&Path>,
+) {
+    let mode = processor.mode;
+
+    if let Err(error) =
+        processor.process(fixture.engine, fixture.source(), translation, output)
+    {
+        panic!("{mode:?} failed for {}: {error}", fixture.dir);
+    }
+}
+
+/// A processor with the fixture's file flags and nothing else set.
+fn processor(fixture: Fixture, mode: Mode) -> Processor {
+    Processor {
+        mode,
+        file_flags: fixture.flags(),
+        ..Default::default()
+    }
+}
+
+const FORCED_READ: Mode = Mode::Read {
+    append: false,
+    force: true,
+};
+
+const FORCED_APPEND: Mode = Mode::Read {
+    append: true,
+    force: true,
+};
+
 /// A read that records event ids, names and positions before each event's text.
 fn read_with_map_events(fixture: Fixture, mode: Mode, translation: &Path) {
     let mut processor = Processor {
@@ -199,6 +259,12 @@ fn slurp(path: &Path) -> String {
 
 fn is_metadata(line: &str) -> bool {
     line.starts_with("<!>")
+}
+
+/// Whether a translation file holds map or "other" text, as opposed to the
+/// system, script and plugin files, which several options leave alone.
+fn is_main_file(name: &str) -> bool {
+    !matches!(name, "system.txt" | "scripts.txt" | "plugins.txt")
 }
 
 /// Every `source<#>translation` pair in a translation file, metadata aside.
@@ -340,6 +406,49 @@ fn copy_dir(from: &Path, to: &Path) {
             copy(&path, to.join(entry.file_name())).expect("copy failed");
         }
     }
+}
+
+/// The lines of one id's section, header included.
+fn block(text: &str, id: u16) -> String {
+    let header = format!("<!>ID<#>{id}");
+    let mut inside = false;
+
+    text.lines()
+        .filter(|line| {
+            if line.starts_with("<!>ID<#>") {
+                inside = *line == header;
+            }
+
+            inside
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The id of the first section in a translation file.
+fn first_id(text: &str) -> u16 {
+    text.lines()
+        .find_map(|line| line.strip_prefix("<!>ID<#>"))
+        .and_then(|id| id.parse().ok())
+        .expect("no sections in the file")
+}
+
+/// Drops the entry line whose source is `source`.
+fn drop_entry(text: &str, source: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+
+    for line in text.lines() {
+        if !is_metadata(line)
+            && line.split_once("<#>").is_some_and(|(s, _)| s == source)
+        {
+            continue;
+        }
+
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    output
 }
 
 /// A file present in every engine's output, with plenty of short entries.
@@ -656,11 +765,6 @@ mod scenarios {
             Some(&output),
         );
 
-        let written = Fixture {
-            dir: fixture.dir,
-            data: fixture.data,
-            engine: fixture.engine,
-        };
         let reread = workspace.join("reread");
 
         let mut processor = Processor {
@@ -668,7 +772,7 @@ mod scenarios {
                 append: false,
                 force: true,
             },
-            file_flags: written.flags(),
+            file_flags: fixture.flags(),
             ..Default::default()
         };
         processor
@@ -703,6 +807,430 @@ mod scenarios {
         }
     }
 
+    /// `js/plugins.js` reads, writes and reads back.
+    ///
+    /// Only MV ships one here; MZ's format is the same, so one fixture covers
+    /// the pair.
+    pub fn plugins_round_trip(fixture: Fixture, tag: &str) {
+        if !fixture.plugins {
+            return;
+        }
+
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+        let output = workspace.join("output");
+
+        let mut reader = Processor {
+            file_flags: FileFlags::Scripts,
+            ..processor(fixture, FORCED_READ)
+        };
+        run_with(fixture, &mut reader, &translation, None);
+
+        let plugins = translation.join("plugins.txt");
+        let text = slurp(&plugins);
+        check_shape(&text, "plugins.txt");
+
+        assert!(!entries(&text).is_empty(), "no plugin text was extracted");
+        assert!(
+            text.contains("<!>NAME<#>"),
+            "plugin sections carry no plugin name"
+        );
+
+        for (source, translation) in entries(&text) {
+            assert!(
+                translation.is_empty(),
+                "plugins.txt: {source} came out of a read already translated"
+            );
+        }
+
+        write(&plugins, translate(&text)).unwrap();
+
+        let mut writer = Processor {
+            file_flags: FileFlags::Scripts,
+            ..processor(fixture, Mode::Write)
+        };
+        run_with(fixture, &mut writer, &translation, Some(&output));
+
+        let written = slurp(&output.join("js/plugins.js"));
+        assert!(
+            written.starts_with("var $plugins ="),
+            "the rewritten plugins.js lost its assignment"
+        );
+
+        // Read the rewritten file back: the translations are now the sources.
+        let reread = workspace.join("reread");
+        let mut rereader = Processor {
+            file_flags: FileFlags::Scripts,
+            ..processor(fixture, FORCED_READ)
+        };
+        rereader
+            .process(
+                fixture.engine,
+                output.join(fixture.data),
+                &reread,
+                None,
+            )
+            .expect("could not read the rewritten plugins back");
+
+        let after_text = slurp(&reread.join("plugins.txt"));
+        let after = sources(&after_text);
+
+        for (source, translation) in translations(&text) {
+            assert!(
+                after.contains(format!("[{source}]").as_str()),
+                "plugins.txt: {source} was translated to {translation}, which \
+                 is not in the rewritten file"
+            );
+        }
+    }
+
+    /// The title from `Game.ini` reaches the translation file, and comes back
+    /// out on a write.
+    ///
+    /// XP keeps no title in its system file at all, so without this the section
+    /// does not exist; VX and VX Ace have one, and the caller's title wins.
+    pub fn ini_title(fixture: Fixture, tag: &str) {
+        if !fixture.ini {
+            return;
+        }
+
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+        let output = workspace.join("output");
+        let title = fixture.ini_title();
+
+        assert!(!title.is_empty(), "Game.ini carries an empty title");
+
+        let mut reader = Processor {
+            game_title: title.clone(),
+            file_flags: FileFlags::System,
+            ..processor(fixture, FORCED_READ)
+        };
+        run_with(fixture, &mut reader, &translation, None);
+
+        let system = translation.join("system.txt");
+        let text = slurp(&system);
+
+        assert!(
+            text.contains("<!>NAME<#>Game Title"),
+            "system.txt has no game title section"
+        );
+        assert!(
+            block(&text, 8).contains(&format!("{title}<#>")),
+            "the game title section does not hold the title from Game.ini"
+        );
+
+        write(&system, translate(&text)).unwrap();
+        copy_dir(&fixture.source(), &output.join(fixture.data));
+
+        let translated_title = format!("[{title}]");
+        let mut writer = Processor {
+            game_title: translated_title.clone(),
+            file_flags: FileFlags::System,
+            ..processor(fixture, Mode::Write)
+        };
+        run_with(fixture, &mut writer, &translation, Some(&output));
+
+        let reread = workspace.join("reread");
+        let mut rereader = Processor {
+            file_flags: FileFlags::System,
+            ..processor(fixture, FORCED_READ)
+        };
+        rereader
+            .process(
+                fixture.engine,
+                output.join(fixture.data),
+                &reread,
+                None,
+            )
+            .expect("could not read the rewritten system file back");
+
+        let after = slurp(&reread.join("system.txt"));
+
+        // XP's system file has no title field of its own - the writer adds
+        // one, which is inert in the game but does come back out on a read.
+        assert!(
+            block(&after, 8).contains(&format!("{translated_title}<#>")),
+            "the translated title did not reach the system file"
+        );
+    }
+
+    /// Trimming applies on the way in and stays consistent on the way back.
+    pub fn trimmed(fixture: Fixture, tag: &str) {
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+        let output = workspace.join("output");
+
+        run(
+            fixture,
+            FORCED_READ,
+            BaseFlags::Trim,
+            DuplicateMode::Allow,
+            &translation,
+            None,
+        );
+
+        for path in txt_files(&translation) {
+            let text = slurp(&path);
+            let name = path.file_name().unwrap().to_string_lossy();
+
+            check_shape(&text, &name);
+
+            // Trimming applies to maps and the "other" files; script and
+            // plugin text is code, and keeps its indentation.
+            if is_main_file(&name) {
+                for (source, _) in entries(&text) {
+                    for part in source.split(r"\#") {
+                        assert_eq!(
+                            part,
+                            part.trim(),
+                            "{name}: {source} kept its padding under Trim"
+                        );
+                    }
+                }
+            }
+
+            write(&path, translate(&text)).unwrap();
+        }
+
+        copy_dir(&fixture.source(), &output.join(fixture.data));
+
+        // The flags have to match the read's, which is what makes the write's
+        // lookup keys line up.
+        run(
+            fixture,
+            Mode::Write,
+            BaseFlags::Trim,
+            DuplicateMode::Allow,
+            &translation,
+            Some(&output),
+        );
+
+        let reread = workspace.join("reread");
+        let mut rereader = Processor {
+            flags: BaseFlags::Trim,
+            ..processor(fixture, FORCED_READ)
+        };
+        rereader
+            .process(
+                fixture.engine,
+                output.join(fixture.data),
+                &reread,
+                None,
+            )
+            .expect("could not read the rewritten project back");
+
+        let before = slurp(&translation.join(SUBJECT));
+        let after_text = slurp(&reread.join(SUBJECT));
+        let after = sources(&after_text);
+
+        for (source, translation) in translations(&before) {
+            assert!(
+                after.contains(translation),
+                "{SUBJECT}: {source} was translated to {translation}, which \
+                 is not in the rewritten project"
+            );
+        }
+    }
+
+    /// `SkipObsolete` drops entries that the game files no longer have.
+    pub fn skip_obsolete(fixture: Fixture, tag: &str) {
+        const OBSOLETE: &str = "A line no game file has<#>[gone]";
+
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+
+        read(fixture, &translation);
+
+        let subject = translation.join(SUBJECT);
+        let text = translate(&slurp(&subject));
+        let id = first_id(&text);
+
+        // Slipped into the first section, so it belongs to a real id.
+        let mut planted = String::with_capacity(text.len() + OBSOLETE.len());
+        for line in text.lines() {
+            planted.push_str(line);
+            planted.push('\n');
+
+            if line == format!("<!>ID<#>{id}") {
+                planted.push_str(OBSOLETE);
+                planted.push('\n');
+            }
+        }
+        write(&subject, &planted).unwrap();
+
+        // A plain append keeps it: an entry the reader cannot see is still the
+        // translator's work.
+        append(fixture, BaseFlags::empty(), &translation);
+
+        let kept = slurp(&subject);
+        check_shape(&kept, SUBJECT);
+        assert!(
+            kept.contains(OBSOLETE),
+            "{SUBJECT}: a plain append dropped an obsolete entry"
+        );
+
+        append(fixture, BaseFlags::SkipObsolete, &translation);
+
+        let pruned = slurp(&subject);
+        check_shape(&pruned, SUBJECT);
+        assert!(
+            !pruned.contains("A line no game file has"),
+            "{SUBJECT}: SkipObsolete kept an obsolete entry"
+        );
+
+        // The entries the game files do have are all still there.
+        for source in sources(&translate(&slurp(&subject))) {
+            assert!(!source.is_empty());
+        }
+        assert_eq!(
+            sources(&pruned).len() + 1,
+            sources(&kept).len(),
+            "{SUBJECT}: SkipObsolete dropped more than the obsolete entry"
+        );
+    }
+
+    /// A skipped entry is passed through from the translation file rather than
+    /// re-read, so an append leaves it exactly as it was.
+    pub fn skipped_entries_pass_through(fixture: Fixture, tag: &str) {
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+
+        read(fixture, &translation);
+
+        let subject = translation.join(SUBJECT);
+        let text = translate(&slurp(&subject));
+        write(&subject, &text).unwrap();
+
+        let id = first_id(&text);
+        let victim = entries(&block(&text, id))
+            .first()
+            .expect("the first section has no entries")
+            .0
+            .to_owned();
+
+        write(&subject, drop_entry(&text, &victim)).unwrap();
+
+        let mut skipping = processor(fixture, FORCED_APPEND);
+        skipping.skip_events =
+            Vec::from([(RPGMFileType::Items, Vec::from([id]))]);
+        run_with(fixture, &mut skipping, &translation, None);
+
+        let skipped = slurp(&subject);
+        check_shape(&skipped, SUBJECT);
+        assert!(
+            !sources(&block(&skipped, id)).contains(victim.as_str()),
+            "{SUBJECT}: a skipped section was re-read anyway"
+        );
+
+        // Without the skip the same append puts it back.
+        append(fixture, BaseFlags::empty(), &translation);
+
+        assert!(
+            sources(&block(&slurp(&subject), id)).contains(victim.as_str()),
+            "{SUBJECT}: the entry did not come back once the skip was gone"
+        );
+    }
+
+    /// The same, for maps - which have their own skip list.
+    pub fn skipped_maps_pass_through(fixture: Fixture, tag: &str) {
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+
+        read(fixture, &translation);
+
+        let maps = translation.join("maps.txt");
+        let text = translate(&slurp(&maps));
+        write(&maps, &text).unwrap();
+
+        let skipped_id = first_id(&text);
+        let victim = entries(&block(&text, skipped_id))
+            .first()
+            .expect("the first map has no entries")
+            .0
+            .to_owned();
+
+        write(&maps, drop_entry(&text, &victim)).unwrap();
+
+        let mut skipping = processor(fixture, FORCED_APPEND);
+        skipping.skip_maps = Vec::from([skipped_id]);
+        run_with(fixture, &mut skipping, &translation, None);
+
+        let after = slurp(&maps);
+        check_shape(&after, "maps.txt");
+
+        assert!(
+            !sources(&block(&after, skipped_id)).contains(victim.as_str()),
+            "maps.txt: a skipped map was re-read anyway"
+        );
+
+        append(fixture, BaseFlags::empty(), &translation);
+
+        assert!(
+            sources(&block(&slurp(&maps), skipped_id))
+                .contains(victim.as_str()),
+            "maps.txt: the entry did not come back once the skip was gone"
+        );
+    }
+
+    /// A file whose contents have not changed since the last read is skipped.
+    pub fn unchanged_files_are_skipped(fixture: Fixture, tag: &str) {
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+
+        let mut first = processor(fixture, FORCED_READ);
+        run_with(fixture, &mut first, &translation, None);
+
+        let subject = translation.join(SUBJECT);
+        let text = translate(&slurp(&subject));
+        let victim = entries(&text)
+            .first()
+            .expect("no entries to drop")
+            .0
+            .to_owned();
+
+        write(&subject, drop_entry(&text, &victim)).unwrap();
+
+        // Appending without forcing, carrying the hashes of the read above:
+        // nothing in the game files changed, so nothing is re-read.
+        let mut hashed = Processor {
+            hashes: std::mem::take(&mut first.hashes),
+            ..processor(
+                fixture,
+                Mode::Read {
+                    append: true,
+                    force: false,
+                },
+            )
+        };
+        run_with(fixture, &mut hashed, &translation, None);
+
+        assert!(
+            !sources(&slurp(&subject)).contains(victim.as_str()),
+            "{SUBJECT}: an unchanged file was re-read"
+        );
+
+        // The same append with no hashes to compare against does re-read it.
+        let mut unhashed = processor(
+            fixture,
+            Mode::Read {
+                append: true,
+                force: false,
+            },
+        );
+        run_with(fixture, &mut unhashed, &translation, None);
+
+        assert!(
+            sources(&slurp(&subject)).contains(victim.as_str()),
+            "{SUBJECT}: the entry did not come back without the hashes"
+        );
+
+        assert!(
+            !unhashed.hashes.is_empty(),
+            "the processor recorded no hashes to reuse"
+        );
+    }
+
     /// Reading and writing with duplicates removed exercises the flattened
     /// lookup instead of the per-entry maps.
     pub fn duplicates_removed(fixture: Fixture, tag: &str) {
@@ -725,9 +1253,10 @@ mod scenarios {
         for path in txt_files(&translation) {
             let text = slurp(&path);
             let name = path.file_name().unwrap().to_string_lossy();
-            // Only maps and the "other" files are deduplicated; the system and
-            // script files are exempt, as `DuplicateMode` documents.
-            if name != "system.txt" && name != "scripts.txt" {
+            // Only maps and the "other" files are deduplicated; the system,
+            // script and plugin files are exempt, as `DuplicateMode`
+            // documents.
+            if is_main_file(&name) {
                 let all: Vec<&str> =
                     entries(&text).into_iter().map(|(s, _)| s).collect();
 
@@ -755,7 +1284,13 @@ mod scenarios {
 }
 
 macro_rules! engines {
-    ($($name:ident => ($dir:literal, $data:literal, $engine:expr)),* $(,)?) => {
+    ($($name:ident => (
+        $dir:literal,
+        $data:literal,
+        $engine:expr,
+        $plugins:literal,
+        $ini:literal
+    )),* $(,)?) => {
         $(
             mod $name {
                 use super::*;
@@ -764,6 +1299,8 @@ macro_rules! engines {
                     dir: $dir,
                     data: $data,
                     engine: $engine,
+                    plugins: $plugins,
+                    ini: $ini,
                 };
 
                 #[test]
@@ -807,6 +1344,62 @@ macro_rules! engines {
                 }
 
                 #[test]
+                fn plugins_round_trip() {
+                    scenarios::plugins_round_trip(
+                        FIXTURE,
+                        concat!($dir, "-plugins"),
+                    );
+                }
+
+                #[test]
+                fn ini_title() {
+                    scenarios::ini_title(
+                        FIXTURE,
+                        concat!($dir, "-ini-title"),
+                    );
+                }
+
+                #[test]
+                fn trimmed() {
+                    scenarios::trimmed(
+                        FIXTURE,
+                        concat!($dir, "-trim"),
+                    );
+                }
+
+                #[test]
+                fn skip_obsolete() {
+                    scenarios::skip_obsolete(
+                        FIXTURE,
+                        concat!($dir, "-skip-obsolete"),
+                    );
+                }
+
+                #[test]
+                fn skipped_entries_pass_through() {
+                    scenarios::skipped_entries_pass_through(
+                        FIXTURE,
+                        concat!($dir, "-skip-events"),
+                    );
+                }
+
+                #[test]
+                fn skipped_maps_pass_through() {
+                    scenarios::skipped_maps_pass_through(
+                        FIXTURE,
+                        concat!($dir, "-skip-maps"),
+                    );
+                }
+
+                #[test]
+                fn unchanged_files_are_skipped() {
+                    scenarios::unchanged_files_are_skipped(
+                        FIXTURE,
+                        concat!($dir, "-hashes"),
+                    );
+                }
+
+                #[test]
                 fn write_then_reread() {
                     scenarios::write_then_reread(
                         FIXTURE,
@@ -827,9 +1420,9 @@ macro_rules! engines {
 }
 
 engines! {
-    mz => ("RMMZ", "data", EngineType::New),
-    mv => ("RMMV", "data", EngineType::New),
-    vxace => ("RMVXACE", "Data", EngineType::VXAce),
-    vx => ("RMVX", "Data", EngineType::VX),
-    xp => ("RMXP", "Data", EngineType::XP),
+    mz => ("RMMZ", "data", EngineType::New, false, false),
+    mv => ("RMMV", "data", EngineType::New, true, false),
+    vxace => ("RMVXACE", "Data", EngineType::VXAce, false, true),
+    vx => ("RMVX", "Data", EngineType::VX, false, true),
+    xp => ("RMXP", "Data", EngineType::XP, false, true),
 }
