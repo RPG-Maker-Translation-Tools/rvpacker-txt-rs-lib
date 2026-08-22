@@ -82,12 +82,6 @@ thread_local! {
     static IS_ONLY_SYMBOLS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
         Regex::new(r#"^[,.()+\-:;\[\]^~%&!№$@`*\/→×？?ｘ％▼|♥♪！：〜『』「」〽。…‥＝゠、，【】［］｛｝（）〔〕｟｠〘〙〈〉《》・\\#<>=_ー※▶ⅠⅰⅡⅱⅢⅲⅣⅳⅤⅴⅥⅵⅦⅶⅧⅷⅨⅸⅩⅹⅪⅺⅫⅻⅬⅼⅭⅽⅮⅾⅯⅿ\s\d"']+$"#).unwrap_unchecked()
     });
-    static LINE_BREAKS_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"\r|\n|\r\n").unwrap_unchecked()
-    });
-    static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"\\#").unwrap_unchecked()
-    });
 }
 
 pub(crate) trait CustomReplace {
@@ -100,11 +94,59 @@ pub(crate) trait CustomReplace {
 
 impl CustomReplace for str {
     fn normalize(&self) -> Cow<'_, str> {
-        LINE_BREAKS_RE.with(|re| re.replace_all(self, NEW_LINE))
+        let bytes = self.as_bytes();
+
+        let Some(first) =
+            bytes.iter().position(|&b| b == b'\r' || b == b'\n')
+        else {
+            return Cow::Borrowed(self);
+        };
+
+        // `\r` and `\n` are replaced independently, so a CRLF pair yields two
+        // separators - matching the leftmost-first `\r|\n|\r\n` regex this replaced.
+        let mut out = Vec::with_capacity(self.len() + 8);
+        out.extend_from_slice(&bytes[..first]);
+        out.extend_from_slice(NEW_LINE.as_bytes());
+
+        let mut chunk_start = first + 1;
+
+        for i in chunk_start..bytes.len() {
+            if bytes[i] == b'\r' || bytes[i] == b'\n' {
+                out.extend_from_slice(&bytes[chunk_start..i]);
+                out.extend_from_slice(NEW_LINE.as_bytes());
+                chunk_start = i + 1;
+            }
+        }
+
+        out.extend_from_slice(&bytes[chunk_start..]);
+
+        // SAFETY: `self` is valid UTF-8, and the only bytes rewritten are ASCII
+        // `\r`/`\n`, which cannot occur inside a multi-byte sequence. The
+        // replacement is ASCII too, so the result is still valid UTF-8.
+        Cow::Owned(unsafe { String::from_utf8_unchecked(out) })
     }
 
     fn denormalize(&self) -> Cow<'_, str> {
-        NEW_LINE_RE.with(|re| re.replace_all(self, "\n"))
+        // The first `find` doubles as the no-match check, so a string without
+        // separators is scanned once and never copied.
+        let Some(first) = self.find(NEW_LINE) else {
+            return Cow::Borrowed(self);
+        };
+
+        let mut out = String::with_capacity(self.len());
+        out.push_str(&self[..first]);
+        out.push('\n');
+
+        let mut rest = &self[first + NEW_LINE.len()..];
+
+        while let Some(i) = rest.find(NEW_LINE) {
+            out.push_str(&rest[..i]);
+            out.push('\n');
+            rest = &rest[i + NEW_LINE.len()..];
+        }
+
+        out.push_str(rest);
+        Cow::Owned(out)
     }
 }
 
@@ -3755,6 +3797,75 @@ impl<'a> PluginBase<'a> {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CustomReplace, NEW_LINE};
+    use regex::Regex;
+    use std::borrow::Cow;
+
+    /// Every case is checked against the regexes these replaced, so the
+    /// hand-rolled scans stay bug-for-bug compatible - including CRLF becoming
+    /// two separators, which falls out of the leftmost-first alternation.
+    const CASES: &[&str] = &[
+        "",
+        "plain",
+        "no breaks at all",
+        "a\nb",
+        "a\r\nb",
+        "a\rb",
+        "\n",
+        "\r\n",
+        "\r\n\r\n",
+        "a\n\nb",
+        "trailing\n",
+        "\nleading",
+        "mix\ra\nb\r\nc",
+        "\u{65E5}\u{672C}\u{8A9E}\n\u{8A9E}",
+        "\r\n\u{65E5}\u{672C}\r",
+        r"already\#done",
+        r"\#\#",
+        "a\\#b\nc",
+        "\\",
+        r"\\#",
+        "#",
+        r"\#",
+    ];
+
+    #[test]
+    fn normalize_matches_regex() {
+        let re = Regex::new(r"\r|\n|\r\n").unwrap();
+
+        for case in CASES {
+            let expected = re.replace_all(case, NEW_LINE);
+            let actual = case.normalize();
+
+            assert_eq!(actual, expected, "normalize({case:?})");
+            assert_eq!(
+                matches!(actual, Cow::Borrowed(_)),
+                matches!(expected, Cow::Borrowed(_)),
+                "normalize({case:?}) borrowed-ness"
+            );
+        }
+    }
+
+    #[test]
+    fn denormalize_matches_regex() {
+        let re = Regex::new(r"\\#").unwrap();
+
+        for case in CASES {
+            let expected = re.replace_all(case, "\n");
+            let actual = case.denormalize();
+
+            assert_eq!(actual, expected, "denormalize({case:?})");
+            assert_eq!(
+                matches!(actual, Cow::Borrowed(_)),
+                matches!(expected, Cow::Borrowed(_)),
+                "denormalize({case:?}) borrowed-ness"
+            );
         }
     }
 }
