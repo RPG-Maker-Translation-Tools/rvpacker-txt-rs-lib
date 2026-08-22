@@ -17,7 +17,7 @@ encoding_rs = "0.8.35"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 gxhash = { version = "3.5.0", features = ["deterministic"] }
 indexmap = "2.14.0"
-log = "0.4.33"
+log = "0.4.34"
 marshal-rs = "2.0.1"
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
