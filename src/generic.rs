@@ -208,24 +208,26 @@ impl GenericBase {
                 continue;
             }
 
-            let (source, translation) =
-                match split_translation_line(line, trim, self.mode.is_write())
-                {
-                    TranslationLine::Split {
-                        source,
-                        translation,
-                    } => (source, translation),
-                    TranslationLine::Untranslated => continue,
-                    TranslationLine::Malformed => {
-                        warn!(
-                            "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n
+            let (source, translation) = match split_translation_line(
+                line,
+                trim,
+                self.mode.is_write(),
+            ) {
+                TranslationLine::Split {
+                    source,
+                    translation,
+                } => (source, translation),
+                TranslationLine::Untranslated => continue,
+                TranslationLine::Malformed => {
+                    warn!(
+                        "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n
                     {IN_FILE_MSG}: {filename}",
-                            i = i + 1,
-                        );
-                        comments.clear();
-                        continue;
-                    }
-                };
+                        i = i + 1,
+                    );
+                    comments.clear();
+                    continue;
+                }
+            };
 
             self.translation_map.insert(
                 source.into(),

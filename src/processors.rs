@@ -236,7 +236,8 @@ impl Processor {
         let already_exists = |p: &Path| {
             if mode.is_default_default() && p.exists() {
                 info!(
-                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                    "{}: File already exists. Use append mode to append text \
+                     or force mode to overwrite.",
                     p.display()
                 );
                 true
@@ -260,7 +261,9 @@ impl Processor {
 
             if unchanged && self.mode.is_append_default() {
                 info!(
-                    "{filename} hasn't changed since the last read. Skipping it. Use `ReadMode::ForceAppend`, if you want to forcefully append data."
+                    "{filename} hasn't changed since the last read. Skipping \
+                     it. Use `ReadMode::ForceAppend`, if you want to \
+                     forcefully append data."
                 );
 
                 return ControlFlow::Break(());

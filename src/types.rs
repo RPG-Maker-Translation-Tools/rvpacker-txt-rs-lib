@@ -344,7 +344,8 @@ pub enum Error {
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
     #[error(
-        "Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file."
+        "Title couldn't be found. Ensure you've passed right `Game.ini` or \
+         `System.json` file."
     )]
     NoTitle,
     #[error(
@@ -569,9 +570,8 @@ impl FromStr for ReadMode {
             "force" => Self::Default { force: true },
             "force-append" => Self::Append { force: true },
             _ => {
-                return Err(
-                    "Expected `default`, `append`, `force` or `force-append` string",
-                );
+                return Err("Expected `default`, `append`, `force` or \
+                            `force-append` string");
             }
         })
     }
@@ -790,9 +790,8 @@ impl FromStr for FileFlags {
             RPGMFileType::Weapons => Self::Weapons,
             RPGMFileType::Scripts | RPGMFileType::Plugins => Self::Scripts,
             RPGMFileType::Invalid => {
-                return Err(
-                    "FileFlags require valid RPG Maker data file name to parse from.",
-                );
+                return Err("FileFlags require valid RPG Maker data file \
+                            name to parse from.");
             }
         })
     }

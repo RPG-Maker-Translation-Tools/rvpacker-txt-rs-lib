@@ -10,7 +10,12 @@ use std::{env::var, fs::create_dir_all, path::PathBuf};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-fn run(env_var: &str, data_dir: &str, engine: EngineType, mode: Mode) -> TestResult {
+fn run(
+    env_var: &str,
+    data_dir: &str,
+    engine: EngineType,
+    mode: Mode,
+) -> TestResult {
     let game_path = PathBuf::from(var(env_var)?);
     let source_path = game_path.join(data_dir);
     let translation_path = game_path.join("translation");
