@@ -3,9 +3,8 @@ use crate::{
     BaseFlags, Comments, IndexSetExt, ProcessedData,
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX, SEPARATOR},
     types::{
-        DuplicateMode, EngineType, GameType, IgnoreMap, IndexMapExt,
-        IndexMapGx, Labels, Lines, Mode, RPGMFileType, ReadMode,
-        TranslationEntry, TranslationMap,
+        DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels,
+        Lines, Mode, RPGMFileType, ReadMode, TranslationEntry, TranslationMap,
     },
 };
 use gxhash::{HashMap, HashMapExt, HashSet};
@@ -117,7 +116,6 @@ pub struct Ignore {
 pub struct Base {
     pub mode: Mode,
     pub flags: BaseFlags,
-    pub game_type: GameType,
     pub engine_type: EngineType,
     pub duplicate_mode: DuplicateMode,
 
@@ -147,7 +145,6 @@ impl Default for Base {
         Self {
             mode: Mode::Read(ReadMode::Default { force: false }),
             flags: BaseFlags::empty(),
-            game_type: GameType::None,
             engine_type: EngineType::New,
             duplicate_mode: DuplicateMode::Remove,
 
@@ -408,22 +405,5 @@ impl Base {
         } else {
             self.finish_translation()
         }
-    }
-
-    /// Returns some additional data, that needs to be inserted at the start of the output translation data.
-    ///
-    /// Right now, this function returns the slice of source entries that need to be inserted on read. This may change at any moment.
-    ///
-    /// # Returns
-    ///
-    /// - [`&[&str]`] - slice of source entries.
-    ///
-    #[must_use]
-    pub(super) fn get_additional_data(&self) -> &[&str] {
-        if self.mode.is_write() {
-            return &[];
-        }
-
-        game::additional_data(self.game_type, self.file_type)
     }
 }

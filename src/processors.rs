@@ -2,9 +2,7 @@ use crate::{
     ProcessedData, RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
     core::{Base, filter_maps, filter_other, parse_ignore},
-    types::{
-        BaseFlags, DuplicateMode, EngineType, Error, FileFlags, GameType, Mode,
-    },
+    types::{BaseFlags, DuplicateMode, EngineType, Error, FileFlags, Mode},
 };
 use gxhash::{HashMap, HashSet, gxhash64};
 use log::{debug, info};
@@ -70,9 +68,6 @@ pub struct Processor {
     ///
     /// Must match the mode used on read when writing or purging.
     pub duplicate_mode: DuplicateMode,
-
-    /// Game-specific custom processing. See [`GameType`].
-    pub game_type: GameType,
 
     /// Overrides the game title extracted from the system file.
     ///
@@ -151,7 +146,6 @@ impl Processor {
         let mut base = Base::new(self.mode, engine_type);
         base.flags = self.flags;
         base.duplicate_mode = self.duplicate_mode;
-        base.game_type = self.game_type;
         base.skip_events = take(&mut self.skip_events)
             .into_iter()
             .map(|(id, vec)| (id, HashSet::from_iter(vec)))
@@ -159,7 +153,6 @@ impl Processor {
 
         let mode = base.mode;
         let flags = base.flags;
-        let game_type = base.game_type;
 
         let mut ignore_file_path = PathBuf::new();
 
@@ -365,9 +358,7 @@ impl Processor {
         }
 
         if self.file_flags.intersects(FileFlags::other()) {
-            for entry in
-                filter_other(entries.iter(), engine_extension, game_type)
-            {
+            for entry in filter_other(entries.iter(), engine_extension) {
                 let path = entry.path();
                 let filename =
                     path.file_name().and_then(|p| p.to_str()).unwrap();

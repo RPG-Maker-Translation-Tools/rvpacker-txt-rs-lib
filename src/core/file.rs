@@ -1,10 +1,7 @@
 use super::IgnoreEntry;
-use super::game;
 use crate::{
     constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX},
-    types::{
-        DuplicateMode, EngineType, Error, GameType, IgnoreMap, RPGMFileType,
-    },
+    types::{DuplicateMode, EngineType, Error, IgnoreMap, RPGMFileType},
 };
 use marshal_rs::{Value, load_binary, load_utf8};
 use serde_json::{Value as SerdeValue, from_str};
@@ -114,7 +111,6 @@ pub fn filter_maps<'a>(
 ///
 /// - `entries` - Entries read with [`std::fs::read_dir`].
 /// - `engine_extension` - [`&str`] corresponding to the extension of read entries.
-/// - `game_type` - [`GameType`] of entries.
 ///
 /// # Returns
 ///
@@ -123,7 +119,6 @@ pub fn filter_maps<'a>(
 pub fn filter_other<'a>(
     entries: impl Iterator<Item = &'a DirEntry>,
     engine_extension: &'a str,
-    game_type: GameType,
 ) -> impl Iterator<Item = &'a DirEntry> {
     let mut result: Vec<&'a DirEntry> = entries
         .filter_map(move |entry| {
@@ -138,9 +133,6 @@ pub fn filter_other<'a>(
             let extension = filename_path.extension()?;
             let file_type = RPGMFileType::from_filename(basename);
             if extension == engine_extension && file_type.is_other() {
-                if game::skips_file(game_type, file_type) {
-                    return None;
-                }
                 return Some(entry);
             }
             None

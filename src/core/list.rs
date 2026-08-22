@@ -18,10 +18,6 @@ impl Base {
             SmallVec::with_capacity(4);
         let mut shop_prefix: Option<&str> = None;
 
-        if game::drops_parameter(self.game_type, code, parameter) {
-            return None;
-        }
-
         // Advanced Text System is a VX Ace plugin; its prefixes are recognised
         // by their own markup, so no game identifier is involved.
         if code.is_any_dialogue()

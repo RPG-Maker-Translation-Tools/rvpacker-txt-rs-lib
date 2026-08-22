@@ -484,33 +484,6 @@ impl FromStr for DuplicateMode {
     }
 }
 
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    EnumIs,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
-)]
-#[serde(into = "u8", try_from = "u8")]
-#[repr(u8)]
-/// Game type for custom processing.
-///
-/// Right now, custom processing is implement for Fear & Hunger 2: Termina ([`GameType::Termina`]), and `LisaRPG` series games ([`GameType::LisaRPG`]).
-///
-/// There's no single definition for "custom processing", but the current implementations filter out unnecessary text and improve the readability of output `.txt` files.
-///
-/// For example, in `LisaRPG` games, `\nbt` prefix is used in dialogues to mark the tile, above which textbox should appear. When `game_type` is set to [`GameType::LisaRPG`], this prefix is not included to the output `.txt` files.
-pub enum GameType {
-    #[default]
-    None,
-    Termina,
-    LisaRPG,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]

@@ -15,7 +15,6 @@
 
 mod base;
 mod file;
-mod game;
 mod ignore;
 mod list;
 mod map;

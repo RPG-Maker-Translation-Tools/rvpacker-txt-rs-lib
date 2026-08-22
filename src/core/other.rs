@@ -120,7 +120,6 @@ impl Base {
     fn process_variable(
         &self,
         variable_text: &str,
-        note_text: Option<&str>,
         variable_type: Variable,
     ) -> Option<String> {
         if string_is_only_symbols(variable_text) {
@@ -142,20 +141,6 @@ impl Base {
             variable_text = Cow::Owned(variable_text.replace("\r\n", "\n"));
         }
 
-        match game::process_variable(
-            self.game_type,
-            variable_text,
-            variable_type,
-            note_text,
-            self.mode,
-            self.file_type,
-            self.translation.maps.get(&u16::MAX),
-        ) {
-            game::VariableOutcome::Drop => return None,
-            game::VariableOutcome::Done(text) => return Some(text),
-            game::VariableOutcome::Continue(text) => variable_text = text,
-        }
-
         if self.mode.is_read() {
             return Some(variable_text.into_owned());
         }
@@ -168,17 +153,6 @@ impl Base {
             {
                 result = String::from(' ') + &result;
             }
-
-            if game::variable_needs_leading_newline(
-                self.game_type,
-                variable_type,
-            ) && !result.is_empty()
-                && !result.starts_with('\n')
-            {
-                result.insert(0, '\n');
-            }
-
-            result += game::variable_suffix(self.game_type, variable_type);
 
             result
         });
@@ -244,17 +218,7 @@ impl Base {
                 );
             }
 
-            let note_text = if game::description_absorbs_note(
-                self.game_type,
-                variable_type,
-            ) {
-                array[self.labels.note].as_str()
-            } else {
-                None
-            };
-
-            let Some(parsed) =
-                self.process_variable(&string, note_text, variable_type)
+            let Some(parsed) = self.process_variable(&string, variable_type)
             else {
                 continue;
             };

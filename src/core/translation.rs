@@ -81,34 +81,7 @@ impl Base {
         };
 
         let mut scratch = TranslationMap::default();
-        let mut translation_lines = translation.lines().enumerate();
-
-        // Some games reserve the leading lines of a file for entries that belong
-        // to no section; those are keyed under `u16::MAX`.
-        let reserved =
-            game::reserved_leading_lines(self.game_type, self.file_type);
-
-        if reserved != 0 {
-            for _ in 0..reserved {
-                let (_, line) =
-                    unsafe { translation_lines.next().unwrap_unchecked() };
-
-                let Some((source, translation)) = line.split_once(SEPARATOR)
-                else {
-                    panic!(
-                        "{file}.txt should start with {reserved} reserved \
-                         entries for this game type.",
-                        file = self.file_type.to_string().to_lowercase()
-                    );
-                };
-
-                scratch.insert(source.into(), translation.into());
-            }
-
-            self.translation
-                .maps
-                .insert(u16::MAX, scratch.drain(..).collect());
-        }
+        let translation_lines = translation.lines().enumerate();
 
         let mut top_level_comments: Vec<String> = Vec::new();
         let mut comments: Comments = smallvec![String::new(); 3];
@@ -296,8 +269,7 @@ impl Base {
     ///
     /// Entries are moved rather than cloned, so this costs no extra memory: with
     /// [`DuplicateMode::Remove`] the per-id maps are only consulted for presence on
-    /// write, never for content. `u16::MAX` is left alone - it holds the Termina item
-    /// category map, which is looked up by id directly.
+    /// write, never for content.
     pub(super) fn build_write_lookup(&mut self) {
         if !self.mode.is_write() || !self.duplicate_mode.is_remove() {
             return;
@@ -306,18 +278,13 @@ impl Base {
         let total: usize = self
             .translation
             .maps
-            .iter()
-            .filter(|(id, _)| **id != u16::MAX)
-            .map(|(_, map)| map.len())
+            .values()
+            .map(TranslationMap::len)
             .sum();
 
         self.translation.write_lookup = TranslationMap::with_capacity(total);
 
-        for (id, map) in &mut self.translation.maps {
-            if *id == u16::MAX {
-                continue;
-            }
-
+        for map in self.translation.maps.values_mut() {
             // `or_insert` keeps the first occurrence, matching the order the
             // previous linear scan resolved duplicates in.
             for (source, translation) in map.drain(..) {
@@ -431,24 +398,9 @@ impl Base {
             self.duplicate_mode.is_allow() || self.file_type.is_misc();
         let skip_events_entry = self.skip_events.get(&self.file_type);
 
-        let additional_data = self.get_additional_data();
-
         // Allocate 4 MB. It makes no sense to circlejerk `accumulated_translation` to get the precise count, so we'll just take the biggest reasonable amount.
         let output_size = 4096 * 1024;
         let mut output = Vec::with_capacity(output_size);
-
-        for &data in additional_data {
-            output.extend_from_slice(data.as_bytes());
-            output.extend_from_slice(SEPARATOR.as_bytes());
-
-            if let Some(additional) = self.translation.maps.get(&u16::MAX) {
-                if let Some(translation) = additional.get(data) {
-                    output.extend_from_slice(translation.as_bytes());
-                }
-            }
-
-            output.push(b'\n');
-        }
 
         let mut accumulated_map: indexmap::IndexMap<
             String,
