@@ -2,7 +2,7 @@ use crate::{
     RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
     core::{
-        self, Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
+        Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
         filter_maps, filter_other, parse_ignore,
     },
     types::{

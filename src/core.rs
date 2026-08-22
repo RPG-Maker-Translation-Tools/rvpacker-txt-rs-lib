@@ -1567,7 +1567,7 @@ impl<'a> Base {
     /// - [`ProcessedData::TranslationData`] otherwise.
     ///
     fn finish(&mut self, value: Value) -> ProcessedData {
-        let output_content = if self.mode.is_write() {
+        if self.mode.is_write() {
             ProcessedData::RPGMData(if self.file_type.is_plugins() {
                 let plugins_bytes = unsafe {
                     to_vec(&SerdeValue::from(value)).unwrap_unchecked()
@@ -1588,9 +1588,7 @@ impl<'a> Base {
             })
         } else {
             self.finish_translation()
-        };
-
-        output_content
+        }
     }
 
     fn get_metadata(&mut self, id: u16) -> Comments {
@@ -2673,9 +2671,6 @@ impl<'a> OtherBase<'a> {
             variable_text = Cow::Owned(variable_text.replace("\r\n", "\n"));
         }
 
-        let remaining_strings: SmallVec<[(String, bool); 4]> =
-            SmallVec::with_capacity(4);
-
         match self.base.game_type {
             GameType::Termina => {
                 if let Some(text) = self.process_variable_termina(
@@ -2705,14 +2700,6 @@ impl<'a> OtherBase<'a> {
 
         let translated = self.base.get_key(&variable_text).map(|translated| {
             let mut result = translated.to_string();
-
-            for (string, position) in remaining_strings {
-                if position {
-                    result += &string;
-                } else {
-                    result = string + &result;
-                }
-            }
 
             if variable_type.is_any_message()
                 && !(variable_type.is_message_2()
@@ -3254,7 +3241,7 @@ impl<'a> ScriptBase<'a> {
                     script[2] = Value::bytes(&buf);
                 }
             } else {
-                for mut extracted in extracted_strings
+                for extracted in extracted_strings
                     .into_iter()
                     .filter(|s| !s.trim().is_empty())
                 {
@@ -3268,10 +3255,6 @@ impl<'a> ScriptBase<'a> {
                     {
                         continue;
                     }
-
-                    let old_extracted = take(&mut extracted);
-
-                    extracted = old_extracted;
 
                     self.base.insert_string(Cow::Owned(extracted));
                 }
