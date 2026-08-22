@@ -21,12 +21,13 @@ impl Base {
     ///
     /// # Note
     ///
-    /// This function is no-op if mode is not [`Mode::Read`].
+    /// On [`Mode::Read`] the title becomes an entry in the translation file; on
+    /// [`Mode::Write`] it is written into the system file as-is. It used to be
+    /// dropped on write, which left [`Base::process_system`]'s write branch
+    /// unreachable and silently ignored the title callers passed.
     ///
     pub fn set_game_title(&mut self, title: &str) {
-        if self.mode.is_read() {
-            self.game_title = title.to_string();
-        }
+        self.game_title = title.to_string();
     }
 
     /// Processes the RPG Maker system file content.
@@ -189,10 +190,8 @@ impl Base {
     }
 
     fn process_currency_unit(&mut self, system_value: &mut Value) {
-        if !self.engine_type.is_new() {
-            let label = self.labels.currency_unit;
-            self.process_value(&mut system_value[label]);
-        }
+        let label = self.labels.currency_unit;
+        self.process_value(&mut system_value[label]);
     }
 
     fn process_game_title(&mut self, system_value: &mut Value) {

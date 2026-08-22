@@ -113,8 +113,8 @@ pub(crate) struct Labels {
 }
 
 impl Labels {
-    /// The sixteen labels that are identical on every engine, plus the six that
-    /// are not.
+    /// The fifteen labels that are identical on every engine, plus the seven
+    /// that are not.
     const fn with_varying(
         display_name: &'static str,
         armor_types: &'static str,
@@ -122,6 +122,7 @@ impl Labels {
         terms: &'static str,
         weapon_types: &'static str,
         game_title: &'static str,
+        currency_unit: &'static str,
     ) -> Self {
         Self {
             display_name,
@@ -130,6 +131,7 @@ impl Labels {
             terms,
             weapon_types,
             game_title,
+            currency_unit,
 
             events: "events",
             pages: "pages",
@@ -145,7 +147,6 @@ impl Labels {
             message4: "message4",
             note: "note",
             elements: "elements",
-            currency_unit: "currency_unit",
             equip_types: "equipTypes",
         }
     }
@@ -160,6 +161,7 @@ impl Labels {
                 "terms",
                 "weaponTypes",
                 "gameTitle",
+                "currencyUnit",
             ),
             // XP calls the terms section "words"; VX and VX Ace call it "terms".
             EngineType::XP => Self::with_varying(
@@ -169,6 +171,7 @@ impl Labels {
                 "words",
                 "weapon_types",
                 "game_title",
+                "currency_unit",
             ),
             _ => Self::with_varying(
                 "display_name",
@@ -177,6 +180,7 @@ impl Labels {
                 "terms",
                 "weapon_types",
                 "game_title",
+                "currency_unit",
             ),
         }
     }
