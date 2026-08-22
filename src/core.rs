@@ -598,7 +598,11 @@ pub struct Base {
     pub map_events: bool,
 
     pub ignore_map: IgnoreMap,
-    ignore_entry: &'static mut IgnoreEntry,
+
+    /// Index of the currently selected entry in `ignore_map`, or `usize::MAX` when
+    /// none is selected. Only set when the ignore flags are on; an index rather than
+    /// a reference because the entry is owned by this same struct.
+    ignore_entry_index: usize,
 
     translation_initialized: bool,
 
@@ -608,7 +612,12 @@ pub struct Base {
     metadata: HashMap<u16, Comments>,
 
     translation_maps: IndexMapGx<u16, TranslationMap>,
-    translation_map: &'static mut TranslationMap,
+
+    /// Index of the currently selected map in `translation_maps`, or `usize::MAX`
+    /// when none is selected. An index rather than a reference because the map it
+    /// points at is owned by this same struct; `translation_maps` is only ever
+    /// appended to while a selection is live, so indices stay valid.
+    translation_map_index: usize,
 
     /// Flattened `translation_maps`, built once on write with [`DuplicateMode::Remove`].
     /// See [`Base::build_write_lookup`].
@@ -632,7 +641,7 @@ impl Default for Base {
             duplicate_mode: DuplicateMode::Remove,
 
             ignore_map: IgnoreMap::default(),
-            ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
+            ignore_entry_index: usize::MAX,
 
             translation_initialized: false,
 
@@ -641,7 +650,7 @@ impl Default for Base {
 
             metadata: HashMap::default(),
 
-            translation_map: unsafe { &mut *(16 as *mut TranslationMap) },
+            translation_map_index: usize::MAX,
             translation_maps: IndexMapGx::default(),
             write_lookup: TranslationMap::default(),
 
@@ -675,14 +684,7 @@ impl<'a> Base {
             lines: Lines::with_capacity(512),
 
             metadata: HashMap::with_capacity(1024),
-            translation_map: Box::leak(Box::new(
-                TranslationMap::with_capacity(512),
-            )),
             translation_maps: IndexMapGx::with_capacity(1024),
-
-            // SAFETY: If `flags` contain neither `BaseFlags::Ignore` or `BaseFlags::CreateIgnore`, this entry is simply unused.
-            // Also we're dereferncing from 16 because Rust fucking prevents null dereferencing in debug mode (who asked for this?)
-            ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
 
             ..Default::default()
         }
@@ -847,7 +849,9 @@ impl<'a> Base {
     fn insert_string(&mut self, string: Cow<'_, str>) {
         if self.mode.is_write()
             || (self.flags.contains(BaseFlags::Ignore)
-                && self.ignore_entry.contains(string.as_ref()))
+                && self
+                    .ignore_entry()
+                    .is_some_and(|entry| entry.contains(string.as_ref())))
         {
             return;
         }
@@ -1052,17 +1056,22 @@ impl<'a> Base {
                 [..unsafe { entry_name.find(':').unwrap_unchecked() }];
         }
 
-        // SAFETY: We're bypassing lifetime and ownership rules here, converting `&'a IgnoreEntry` to `&'static IgnoreEntry`
-        // Because compiler doesn't understand that the access to `self.ignore_entry` is optional based on `self.flags`.
-        let static_entry = mutable!(
-            self.ignore_map
-                .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"))
-                .or_default(),
-            IgnoreEntry
-        );
+        let entry = self
+            .ignore_map
+            .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{entry_name}"));
 
-        self.ignore_entry = static_entry;
+        self.ignore_entry_index = entry.index();
+        entry.or_default();
     }
+
+    /// The currently selected ignore entry, or [`None`] if the ignore flags are off
+    /// and no entry was ever selected.
+    fn ignore_entry(&self) -> Option<&IgnoreEntry> {
+        self.ignore_map
+            .get_index(self.ignore_entry_index)
+            .map(|(_, entry)| entry)
+    }
+
 
     /// Initializes translation by filling `self.translation_maps` with parsed maps from `translation`.
     ///
@@ -1090,7 +1099,7 @@ impl<'a> Base {
             false
         };
 
-        self.translation_map = Box::leak(Box::new(TranslationMap::default()));
+        let mut scratch = TranslationMap::default();
         let mut translation_lines = translation.lines().enumerate();
 
         if self.game_type.is_termina() && self.file_type.is_items() {
@@ -1105,8 +1114,7 @@ impl<'a> Base {
                             .unwrap_unchecked()
                     };
 
-                    self.translation_map
-                        .insert(source.into(), translation.into());
+                    scratch.insert(source.into(), translation.into());
                 } else {
                     panic!(
                         "items.txt in Fear & Hunger 2: Termina should start \
@@ -1116,7 +1124,7 @@ impl<'a> Base {
             }
 
             self.translation_maps
-                .insert(u16::MAX, self.translation_map.drain(..).collect());
+                .insert(u16::MAX, scratch.drain(..).collect());
         }
 
         let mut top_level_comments: Vec<String> = Vec::new();
@@ -1127,7 +1135,7 @@ impl<'a> Base {
         for (i, line) in translation_lines {
             if line.starts_with(ID_COMMENT) {
                 if id != 0 {
-                    if self.translation_map.is_empty() {
+                    if scratch.is_empty() {
                         let metadata_entry = self.metadata.entry(id).or_insert(
                             replace(&mut comments, smallvec![String::new(); 3]),
                         );
@@ -1147,7 +1155,7 @@ impl<'a> Base {
                     }
 
                     self.translation_maps
-                        .insert(id, self.translation_map.drain(..).collect());
+                        .insert(id, scratch.drain(..).collect());
                 }
 
                 id = line
@@ -1250,7 +1258,7 @@ impl<'a> Base {
                 first = false;
             }
 
-            self.translation_map.insert(
+            scratch.insert(
                 source.into(),
                 TranslationEntry {
                     comments: replace(
@@ -1269,7 +1277,7 @@ impl<'a> Base {
         if id != 0 {
             let mut skip_entry = false;
 
-            if self.translation_map.is_empty() {
+            if scratch.is_empty() {
                 let metadata_entry = self.metadata.entry(id).or_insert(
                     replace(&mut comments, smallvec![String::new(); 3]),
                 );
@@ -1290,12 +1298,8 @@ impl<'a> Base {
 
             if !skip_entry {
                 self.translation_maps
-                    .insert(id, self.translation_map.drain(..).collect());
+                    .insert(id, scratch.drain(..).collect());
             }
-        }
-
-        unsafe {
-            let _ = Box::from_raw(std::ptr::from_mut(self.translation_map));
         }
 
         self.build_write_lookup();
@@ -1341,6 +1345,24 @@ impl<'a> Base {
         }
     }
 
+    /// The currently selected translation map.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no map is selected, i.e. if called before [`Base::get_translation_map`].
+    fn translation_map(&self) -> &TranslationMap {
+        &self.translation_maps[self.translation_map_index]
+    }
+
+    /// Mutable counterpart of [`Base::translation_map`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if no map is selected, i.e. if called before [`Base::get_translation_map`].
+    fn translation_map_mut(&mut self) -> &mut TranslationMap {
+        &mut self.translation_maps[self.translation_map_index]
+    }
+
     /// Sets `self.translation_map` to the entry from `self.translation_maps`.
     ///
     /// If `self.mode` is [`Mode::Purge`], it will push entries from `self.translation_map` to `self.accumulated_translation` and break.
@@ -1361,21 +1383,21 @@ impl<'a> Base {
     ///
     fn get_translation_map(&mut self, id: u16) -> ControlFlow<()> {
         let entry = self.translation_maps.entry(id);
+        let index = entry.index();
 
-        // Move a map from `translation_maps` to `translation_map`.
-        self.translation_map = mutable!(
-            match entry {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    if self.mode.is_write() {
-                        return ControlFlow::Break(());
-                    }
-
-                    entry.insert(TranslationMap::with_capacity(512))
+        // Select the map for `id`, creating it if we're not writing.
+        match entry {
+            Entry::Occupied(_) => {}
+            Entry::Vacant(entry) => {
+                if self.mode.is_write() {
+                    return ControlFlow::Break(());
                 }
-            },
-            TranslationMap
-        );
+
+                entry.insert(TranslationMap::with_capacity(512));
+            }
+        }
+
+        self.translation_map_index = index;
 
         if self
             .skip_events
@@ -1386,11 +1408,12 @@ impl<'a> Base {
             if self.mode.is_append() || self.mode.is_purge() {
                 let metadata = self.get_metadata(id);
 
+                let map = take(self.translation_map_mut());
                 self.accumulated_translation.push((
                     id,
                     metadata,
                     Vec::new(),
-                    take(self.translation_map),
+                    map,
                 ));
             }
 
@@ -1549,7 +1572,7 @@ impl<'a> Base {
     ///
     fn get_key(&self, key: &str) -> Option<&TranslationEntry> {
         if self.duplicate_mode.is_allow() {
-            self.translation_map.get(key)
+            self.translation_map().get(key)
         } else {
             self.write_lookup.get(key)
         }
@@ -1624,6 +1647,7 @@ impl<'a> Base {
         let allow_dup =
             self.duplicate_mode.is_allow() || self.file_type.is_misc();
         let skip_events_entry = self.skip_events.get(&self.file_type);
+        let ignore_index = self.ignore_entry_index;
 
         let additional_data = self.get_additional_data();
 
@@ -1712,7 +1736,14 @@ impl<'a> Base {
                         if self.flags.contains(BaseFlags::CreateIgnore)
                             && !moved.is_empty()
                         {
-                            self.ignore_entry.insert(moved);
+                            // Field access rather than `ignore_entry_mut`, so
+                            // that `skip_events_entry`'s borrow of the disjoint
+                            // `skip_events` field stays live.
+                            if let Some((_, entry)) =
+                                self.ignore_map.get_index_mut(ignore_index)
+                            {
+                                entry.insert(moved);
+                            }
                         }
                     }
 
@@ -1807,16 +1838,17 @@ impl<'a> Base {
         let metadata = self.get_metadata(id);
 
         if self.mode.is_purge() {
-            if !self.translation_map.is_empty()
+            if !self.translation_map().is_empty()
                 || metadata
                     .get(DISPLAY_NAME_POS)
                     .is_some_and(|x| !x.is_empty())
             {
+                let map = take(self.translation_map_mut());
                 self.accumulated_translation.push((
                     id,
                     metadata,
                     Vec::new(),
-                    take(self.translation_map),
+                    map,
                 ));
             }
         } else if self.duplicate_mode.is_allow() || self.file_type.is_misc() {
@@ -1827,16 +1859,17 @@ impl<'a> Base {
                 || (self.file_type.is_map() && self.skip_maps.contains(&id))
             {
                 self.lines.clear();
-                self.translation_map.clear();
+                self.translation_map_mut().clear();
             } else {
                 let lines =
                     self.lines.drain(..).map(Cow::Owned).collect::<Vec<_>>();
 
+                let map = take(self.translation_map_mut());
                 self.accumulated_translation.push((
                     id,
                     metadata,
                     lines,
-                    take(self.translation_map),
+                    map,
                 ));
             }
         } else {
@@ -3052,7 +3085,7 @@ impl<'a> SystemBase<'a> {
             }
         } else {
             self.base
-                .translation_map
+                .translation_map_mut()
                 .insert(extracted.into(), TranslationEntry::default());
         }
     }

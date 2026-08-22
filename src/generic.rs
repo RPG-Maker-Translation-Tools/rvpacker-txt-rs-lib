@@ -2,7 +2,8 @@ use crate::{
     BaseFlags, Comments, Error, IgnoreEntry, IgnoreMap, Lines, Mode,
     ProcessedData, ReadMode, SEPARATOR, TranslationEntry, TranslationMap,
     constants::{
-        AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG,
+        AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG,
+        IGNORE_ENTRY_COMMENT, IN_FILE_MSG,
     },
     core::{CustomReplace, push_entries},
 };
@@ -17,7 +18,10 @@ pub struct GenericBase {
     pub flags: BaseFlags,
 
     pub ignore_map: IgnoreMap,
-    ignore_entry: &'static mut IgnoreEntry,
+
+    /// Index of this file's entry in `ignore_map`, or `usize::MAX` before
+    /// [`GenericBase::select_ignore_entry`] has run.
+    ignore_entry_index: usize,
 
     lines: Lines,
     translation_map: TranslationMap,
@@ -30,7 +34,7 @@ impl Default for GenericBase {
             flags: BaseFlags::empty(),
 
             ignore_map: IgnoreMap::default(),
-            ignore_entry: unsafe { &mut *(16 as *mut IgnoreEntry) },
+            ignore_entry_index: usize::MAX,
 
             lines: Lines::default(),
             translation_map: TranslationMap::default(),
@@ -47,6 +51,33 @@ impl GenericBase {
         }
     }
 
+    /// This file's ignore entry, or [`None`] if none was selected.
+    fn ignore_entry(&self) -> Option<&IgnoreEntry> {
+        self.ignore_map
+            .get_index(self.ignore_entry_index)
+            .map(|(_, entry)| entry)
+    }
+
+    /// Selects (creating if needed) the ignore entry for `filename`.
+    ///
+    /// A generic file has no id sections, so it gets exactly one entry, keyed by
+    /// its name.
+    fn select_ignore_entry(&mut self, filename: &str) {
+        if !self
+            .flags
+            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
+        {
+            return;
+        }
+
+        let entry = self
+            .ignore_map
+            .entry(format!("{IGNORE_ENTRY_COMMENT}{SEPARATOR}{filename}"));
+
+        self.ignore_entry_index = entry.index();
+        entry.or_default();
+    }
+
     fn process_string(&mut self, str: &mut String) {
         match self.mode {
             Mode::Read(_) => {
@@ -58,7 +89,9 @@ impl GenericBase {
                     });
 
                 if self.flags.contains(BaseFlags::Ignore)
-                    && self.ignore_entry.contains(str.as_ref())
+                    && self
+                        .ignore_entry()
+                        .is_some_and(|entry| entry.contains(str.as_ref()))
                 {
                     return;
                 }
@@ -124,6 +157,7 @@ impl GenericBase {
     }
 
     fn purge(&mut self) -> ProcessedData {
+        let ignore_index = self.ignore_entry_index;
         let output_size = 4096 * 1024;
         let mut output = Vec::with_capacity(output_size);
 
@@ -133,8 +167,10 @@ impl GenericBase {
 
                 if self.flags.contains(BaseFlags::CreateIgnore)
                     && !moved.is_empty()
+                    && let Some((_, entry)) =
+                        self.ignore_map.get_index_mut(ignore_index)
                 {
-                    self.ignore_entry.insert(moved);
+                    entry.insert(moved);
                 }
             }
 
@@ -257,6 +293,7 @@ impl GenericBase {
         filename: &str,
         translation: Option<&str>,
     ) -> Result<ProcessedData, Error> {
+        self.select_ignore_entry(filename);
         self.initialize_translation(translation, filename)?;
 
         if self.mode.is_purge() {
@@ -279,6 +316,7 @@ impl GenericBase {
         filename: &str,
         translation: Option<&str>,
     ) -> Result<ProcessedData, Error> {
+        self.select_ignore_entry(filename);
         self.initialize_translation(translation, filename)?;
 
         if self.mode.is_purge() {
