@@ -691,7 +691,7 @@ impl Default for Base {
     }
 }
 
-impl<'a> Base {
+impl Base {
     /// Creates new base from mode and engine type.
     ///
     /// # Parameters
@@ -3133,20 +3133,17 @@ impl<'a> SystemBase<'a> {
         };
 
         if base.mode.is_read() {
-            let extracted = extracted.to_owned();
-            base.insert_string(Cow::Owned(extracted));
+            base.insert_string(Cow::Borrowed(extracted));
         } else if base.mode.is_write() {
-            let translated = base
-                .get_key(extracted)
-                .map(|t| Base::make_string_value(t, base.engine_type.is_new()));
-
-            if let Some(translated) = translated {
-                *value = translated;
+            if let Some(translated) = base.get_key(extracted) {
+                *value = Base::make_string_value(
+                    translated,
+                    base.engine_type.is_new(),
+                );
             }
         } else {
-            let extracted = extracted.to_owned();
             base.translation_map_mut()
-                .insert(extracted, TranslationEntry::default());
+                .insert(extracted.into(), TranslationEntry::default());
         }
     }
 
