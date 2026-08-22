@@ -161,54 +161,56 @@ pub fn parse_ignore(
     duplicate_mode: DuplicateMode,
     read: bool,
 ) -> IgnoreMap {
-    let mut ignore_map = IgnoreMap::default();
-    let mut ignore_file_lines = ignore_file_content.lines();
+    /// Canonical key for a section header.
+    ///
+    /// With duplicates removed every section of a file shares one entry, so the
+    /// `: id` suffix is dropped and the whole file keys on its name. This has to
+    /// produce exactly what `Base::get_ignore_entry` builds, including the
+    /// comment prefix - previously the first header in a file kept its prefix
+    /// while every later one lost it, so only the first section ever matched.
+    fn section_key(
+        line: &str,
+        duplicate_mode: DuplicateMode,
+        read: bool,
+    ) -> String {
+        let Some(rest) = line.strip_prefix(IGNORE_ENTRY_COMMENT) else {
+            return line.to_owned();
+        };
 
-    let Some(mut first_entry_comment) = ignore_file_lines.next() else {
-        return ignore_map;
-    };
+        // These three are single-section files; there is nothing to collapse.
+        let collapse = read
+            && duplicate_mode.is_remove()
+            && !(rest.starts_with("<#>System")
+                || rest.starts_with("<#>Scripts")
+                || rest.starts_with("<#>Plugins"));
 
-    if read
-        && duplicate_mode.is_remove()
-        && !(first_entry_comment.contains("<#>System")
-            || first_entry_comment.contains("<#>Scripts")
-            || first_entry_comment.contains("<#>Plugins"))
-    {
-        // If duplicates are removed, we should group all ignore entries
-        // that correspond to a single file into one ignore entry.
-        first_entry_comment = &first_entry_comment
-            [..unsafe { first_entry_comment.find(':').unwrap_unchecked() }];
+        if !collapse {
+            return line.to_owned();
+        }
+
+        // A hand-written file may leave the id off entirely.
+        let name = rest.split_once(':').map_or(rest, |(name, _)| name);
+        format!("{IGNORE_ENTRY_COMMENT}{name}")
     }
 
+    let mut ignore_map = IgnoreMap::default();
     ignore_map.reserve_exact(256);
-    ignore_map.insert(
-        first_entry_comment.to_string(),
-        IgnoreEntry::with_capacity(128),
-    );
 
-    let mut ignore_entry =
-        unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
+    let mut current: Option<usize> = None;
 
-    for mut line in ignore_file_lines.filter(|line| !line.is_empty()) {
-        if let Some(mid) = line.strip_prefix(IGNORE_ENTRY_COMMENT) {
-            // If duplicates are allowed, we should group all ignore entries
-            // that correspond to a single file into one ignore entry.
-            if read
-                && duplicate_mode.is_remove()
-                && !(mid.starts_with("<#>System")
-                    || mid.starts_with("<#>Scripts")
-                    || mid.starts_with("<#>Plugins"))
-            {
-                line = &mid[..unsafe { mid.find(':').unwrap_unchecked() }];
+    for line in ignore_file_content.lines().filter(|line| !line.is_empty()) {
+        if line.starts_with(IGNORE_ENTRY_COMMENT) {
+            let entry =
+                ignore_map.entry(section_key(line, duplicate_mode, read));
+
+            current = Some(entry.index());
+            entry.or_insert_with(|| IgnoreEntry::with_capacity(128));
+        } else if let Some(index) = current {
+            // Lines before the first header belong to no section, so they are
+            // dropped rather than inventing one.
+            if let Some((_, entry)) = ignore_map.get_index_mut(index) {
+                entry.insert_line(line);
             }
-
-            ignore_map
-                .entry(line.into())
-                .or_insert(IgnoreEntry::with_capacity(128));
-            ignore_entry =
-                unsafe { ignore_map.last_mut().unwrap_unchecked().1 };
-        } else {
-            ignore_entry.insert_line(line);
         }
     }
 
@@ -344,3 +346,73 @@ pub fn get_system_title(
         .map(Into::into)
         .ok_or(Error::NoTitle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ignore;
+    use crate::{constants::IGNORE_ENTRY_COMMENT, types::DuplicateMode};
+
+    const FILE: &str = "<!-- Ignore Entry --><#>Items: 1
+Torch
+<!-- Glob --><#>*soul
+<!-- Ignore Entry --><#>Weapons: 1
+makeshift2
+<!-- Ignore Entry --><#>Classes: 3
+Girl
+";
+
+    /// Every section must key on what `Base::get_ignore_entry` builds, not just
+    /// the first one - and a header may legitimately carry no `: id`.
+    #[test]
+    fn every_section_is_reachable() {
+        for (mode, keys) in [
+            (
+                DuplicateMode::Remove,
+                vec!["<#>Items", "<#>Weapons", "<#>Classes"],
+            ),
+            (
+                DuplicateMode::Allow,
+                vec!["<#>Items: 1", "<#>Weapons: 1", "<#>Classes: 3"],
+            ),
+        ] {
+            let map = parse_ignore(FILE, mode, true);
+
+            for suffix in keys {
+                let key = format!("{IGNORE_ENTRY_COMMENT}{suffix}");
+                assert!(
+                    map.contains_key(&key),
+                    "{mode:?}: {key:?} missing, got {:?}",
+                    map.keys().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literals_and_globs_both_apply() {
+        let map = parse_ignore(FILE, DuplicateMode::Remove, true);
+        let items =
+            &map[&format!("{IGNORE_ENTRY_COMMENT}<#>Items")];
+
+        assert!(items.contains("Torch"));
+        assert!(items.contains("a corrupted soul"));
+        assert!(!items.contains("Lantern"));
+    }
+
+    /// A header with no `: id` used to reach `find(':').unwrap_unchecked()`.
+    #[test]
+    fn header_without_id_is_accepted() {
+        let map = parse_ignore(
+            "<!-- Ignore Entry --><#>Items
+Torch
+",
+            DuplicateMode::Remove,
+            true,
+        );
+
+        assert!(
+            map[&format!("{IGNORE_ENTRY_COMMENT}<#>Items")].contains("Torch")
+        );
+    }
+}
+
