@@ -1,5 +1,5 @@
 use crate::{
-    RPGMFileType,
+    ProcessedData, RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
     core::{
         Base, MapBase, OtherBase, PluginBase, ScriptBase, SystemBase,
@@ -60,12 +60,13 @@ impl Processor {
             .map(|(id, vec)| (id, HashSet::from_iter(vec)))
             .collect();
 
+        let mode = base.mode;
+        let flags = base.flags;
+        let game_type = base.game_type;
+
         let mut ignore_file_path = PathBuf::new();
 
-        if base
-            .flags
-            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
-        {
+        if flags.intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore) {
             ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
             let ignore_file_content = read_to_string(&ignore_file_path)
@@ -75,12 +76,12 @@ impl Processor {
                 Ok(content) => {
                     base.ignore_map = parse_ignore(
                         &content,
-                        base.duplicate_mode,
-                        base.mode.is_read(),
+                        self.duplicate_mode,
+                        mode.is_read(),
                     );
                 }
 
-                Err(err) if base.flags.contains(BaseFlags::Ignore) => {
+                Err(err) if flags.contains(BaseFlags::Ignore) => {
                     return Err(err);
                 }
 
@@ -88,7 +89,7 @@ impl Processor {
             }
         }
 
-        let output_dir = if base.mode.is_read() {
+        let output_dir = if mode.is_read() {
             translation_path
         } else {
             output_path
@@ -103,26 +104,25 @@ impl Processor {
             "Data"
         });
 
-        if base.mode.is_write() {
+        if mode.is_write() {
             create_dir_all(&data_output_path)
                 .map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
 
-        let pre_msg = match base.mode {
+        let pre_msg = match mode {
             Mode::Read(_) => "Started reading.",
             Mode::Write => "Started writing.",
             Mode::Purge => "Started purging.",
         };
 
-        let post_msg = match base.mode {
+        let post_msg = match mode {
             Mode::Read(_) => "Successfully read.",
             Mode::Write => "Successfully written.",
             Mode::Purge => "Successfully purged.",
         };
 
-        let base_ref = unsafe { &mut *(&raw mut base) };
         let load_translation = |p: &Path| -> Result<Option<String>, Error> {
-            if base_ref.mode.is_default() {
+            if mode.is_default() {
                 return Ok(None);
             }
 
@@ -131,7 +131,19 @@ impl Processor {
                 .map(Some)
         };
 
-        let base_ref = unsafe { &mut *(&raw mut base) };
+        // `true` when a translation file is already there and the caller asked us
+        // not to clobber it, i.e. plain default read mode without force.
+        let already_exists = |p: &Path| {
+            if mode.is_default_default() && p.exists() {
+                info!(
+                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                    p.display()
+                );
+                true
+            } else {
+                false
+            }
+        };
 
         let mut hash = |content: &[u8], filename: &str| {
             let filename = &filename
@@ -157,6 +169,24 @@ impl Processor {
             ControlFlow::Continue(())
         };
 
+        // Writes land next to the source data, everything else lands in the `.txt`.
+        let emit = |data: Option<ProcessedData>,
+                    rpgm_output_path: PathBuf,
+                    translation_file_path: PathBuf|
+         -> Result<(), Error> {
+            let Some(data) = data else {
+                return Ok(());
+            };
+
+            let path = if mode.is_write() {
+                rpgm_output_path
+            } else {
+                translation_file_path
+            };
+
+            write(&path, data).map_err(|e| Error::Io(path, e))
+        };
+
         let entries: Vec<DirEntry> = read_dir(source_path)
             .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
             .flatten()
@@ -165,28 +195,21 @@ impl Processor {
         let engine_extension = engine_type.extension();
 
         if self.file_flags.contains(FileFlags::Map) {
-            let mut map_base = MapBase::new(base_ref);
-
-            let mapinfos_path =
-                source_path.join(format!("MapInfos.{engine_extension}"));
-            let mapinfos = read(&mapinfos_path)
-                .map_err(|e| Error::Io(mapinfos_path, e))?;
-
             let translation_file_path = translation_path.join("maps.txt");
 
-            if base.mode.is_default_default() && translation_file_path.exists()
-            {
-                info!(
-                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                    translation_file_path.display()
-                );
-            } else {
+            if !already_exists(&translation_file_path) {
+                let mapinfos_path =
+                    source_path.join(format!("MapInfos.{engine_extension}"));
+                let mapinfos = read(&mapinfos_path)
+                    .map_err(|e| Error::Io(mapinfos_path, e))?;
+
                 let translation = load_translation(&translation_file_path)?;
-                let mut contents = Vec::new();
 
                 base.map_events = self.map_events;
                 base.skip_maps =
                     take(&mut self.skip_maps).into_iter().collect();
+
+                let mut map_base = MapBase::new(&mut base);
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
@@ -203,7 +226,7 @@ impl Processor {
                     let mut skipped = false;
 
                     if hash(&content, filename).is_break() {
-                        base.skip_maps.insert(id);
+                        map_base.base.skip_maps.insert(id);
                         skipped = true;
                     }
 
@@ -214,7 +237,7 @@ impl Processor {
                         translation.as_deref(),
                     )?;
 
-                    if base.mode.is_write() {
+                    if mode.is_write() {
                         if let Some(result) = result {
                             let output_path = data_output_path.join(filename);
                             write(&output_path, result)
@@ -222,18 +245,18 @@ impl Processor {
                         }
                     }
 
-                    if !skipped {
-                        info!("{filename}: {post_msg}");
-                    } else {
+                    if skipped {
                         info!("{filename}: Skipped.");
+                    } else {
+                        info!("{filename}: {post_msg}");
                     }
                 }
 
-                if !base.mode.is_write() {
-                    contents.extend(match map_base.translation() {
-                        crate::ProcessedData::TranslationData(t) => t,
-                        crate::ProcessedData::RPGMData(_) => unreachable!(),
-                    });
+                if !mode.is_write() {
+                    let contents = match map_base.translation() {
+                        ProcessedData::TranslationData(t) => t,
+                        ProcessedData::RPGMData(_) => unreachable!(),
+                    };
 
                     write(&translation_file_path, contents)
                         .map_err(|e| Error::Io(translation_file_path, e))?;
@@ -242,10 +265,10 @@ impl Processor {
         }
 
         if self.file_flags.intersects(FileFlags::other()) {
-            let mut other_base = OtherBase::new(base_ref);
+            let mut other_base = OtherBase::new(&mut base);
 
             for entry in
-                filter_other(entries.iter(), engine_extension, base.game_type)
+                filter_other(entries.iter(), engine_extension, game_type)
             {
                 let path = entry.path();
                 let filename =
@@ -264,58 +287,39 @@ impl Processor {
                         .with_extension("txt"),
                 );
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
-                    let translation = load_translation(&translation_file_path)?;
-
-                    let content =
-                        read(&path).map_err(|e| Error::Io(path.clone(), e))?;
-
-                    if hash(&content, filename).is_break() {
-                        continue;
-                    }
-
-                    let data = other_base.process(
-                        filename,
-                        &content,
-                        translation.as_deref(),
-                    )?;
-
-                    let output_file_path = if base.mode.is_write() {
-                        data_output_path.join(filename)
-                    } else {
-                        translation_file_path
-                    };
-
-                    if let Some(data) = data {
-                        write(&output_file_path, data)
-                            .map_err(|e| Error::Io(output_file_path, e))?;
-                    }
-
-                    info!("{filename}: {post_msg}");
+                if already_exists(&translation_file_path) {
+                    continue;
                 }
+
+                let translation = load_translation(&translation_file_path)?;
+
+                let content =
+                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+
+                if hash(&content, filename).is_break() {
+                    continue;
+                }
+
+                let data = other_base.process(
+                    filename,
+                    &content,
+                    translation.as_deref(),
+                )?;
+
+                emit(
+                    data,
+                    data_output_path.join(filename),
+                    translation_file_path,
+                )?;
+
+                info!("{filename}: {post_msg}");
             }
         }
 
         if self.file_flags.contains(FileFlags::System) {
-            let mut system_base = SystemBase::new(base_ref);
             let translation_file_path = translation_path.join("system.txt");
 
-            if base.mode.is_default_default() && translation_file_path.exists()
-            {
-                info!(
-                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                    translation_file_path.display()
-                );
-            } else {
-                system_base.set_game_title(&self.game_title);
-
+            if !already_exists(&translation_file_path) {
                 let translation = load_translation(&translation_file_path)?;
                 let filename = format!("System.{engine_extension}");
 
@@ -326,19 +330,17 @@ impl Processor {
                     .map_err(|e| Error::Io(system_file_path, e))?;
 
                 if !hash(&content, &filename).is_break() {
+                    let mut system_base = SystemBase::new(&mut base);
+                    system_base.set_game_title(&self.game_title);
+
                     let data = system_base
                         .process(&content, translation.as_deref())?;
 
-                    let output_path = if base.mode.is_write() {
-                        data_output_path.join(&filename)
-                    } else {
-                        translation_file_path
-                    };
-
-                    if let Some(data) = data {
-                        write(&output_path, data)
-                            .map_err(|e| Error::Io(output_path, e))?;
-                    }
+                    emit(
+                        data,
+                        data_output_path.join(&filename),
+                        translation_file_path,
+                    )?;
 
                     info!("{filename}: {post_msg}");
                 }
@@ -347,19 +349,10 @@ impl Processor {
 
         if self.file_flags.contains(FileFlags::Scripts) {
             if engine_type.is_new() {
-                let plugin_base = PluginBase::new(base_ref);
-
                 let translation_file_path =
                     translation_path.join("plugins.txt");
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
+                if !already_exists(&translation_file_path) {
                     debug!("plugins.txt: {pre_msg}");
 
                     let translation = load_translation(&translation_file_path)?;
@@ -370,41 +363,31 @@ impl Processor {
                         .map_err(|e| Error::Io(plugins_file_path, e))?;
 
                     if !hash(&content, "plugins.js").is_break() {
-                        let data = plugin_base
+                        let data = PluginBase::new(&mut base)
                             .process(&content, translation.as_deref())?;
 
-                        let output_path = if base.mode.is_write() {
+                        if mode.is_write() {
                             let js_output_path = output_path.join("js");
                             create_dir_all(&js_output_path)
                                 .map_err(|e| Error::Io(js_output_path, e))?;
-                            output_path.join("js/plugins.js")
-                        } else {
-                            translation_file_path
-                        };
-
-                        if let Some(data) = data {
-                            write(&output_path, data)
-                                .map_err(|e| Error::Io(output_path, e))?;
                         }
+
+                        emit(
+                            data,
+                            output_path.join("js/plugins.js"),
+                            translation_file_path,
+                        )?;
 
                         info!("plugins.js: {post_msg}");
                     }
                 }
             } else {
-                let script_base = ScriptBase::new(base_ref);
-
                 let translation_file_path =
                     translation_path.join("scripts.txt");
 
-                if base.mode.is_default_default()
-                    && translation_file_path.exists()
-                {
-                    info!(
-                        "{}: File already exists. Use append mode to append text or force mode to overwrite.",
-                        translation_file_path.display()
-                    );
-                } else {
+                if !already_exists(&translation_file_path) {
                     debug!("scripts.txt: {pre_msg}");
+
                     let translation = load_translation(&translation_file_path)?;
 
                     let filename = format!("Scripts.{engine_extension}");
@@ -413,19 +396,14 @@ impl Processor {
                         .map_err(|e| Error::Io(scripts_file_path, e))?;
 
                     if !hash(&content, &filename).is_break() {
-                        let data = script_base
+                        let data = ScriptBase::new(&mut base)
                             .process(&content, translation.as_deref())?;
 
-                        let output_path = if base.mode.is_write() {
-                            data_output_path.join(&filename)
-                        } else {
-                            translation_file_path
-                        };
-
-                        if let Some(data) = data {
-                            write(&output_path, data)
-                                .map_err(|e| Error::Io(output_path, e))?;
-                        }
+                        emit(
+                            data,
+                            data_output_path.join(&filename),
+                            translation_file_path,
+                        )?;
 
                         info!("{filename}: {post_msg}");
                     }
@@ -433,7 +411,7 @@ impl Processor {
             }
         }
 
-        if base.flags.contains(BaseFlags::CreateIgnore) {
+        if flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
             let contents: String = take(&mut base.ignore_map).into_iter().fold(

@@ -14,7 +14,10 @@ use quick_xml::{
 use rust_xlsxwriter::{Format, Workbook};
 
 use serde::{Deserialize, Serialize};
-use std::{error::Error, io::Cursor};
+use std::error::Error;
+
+#[cfg(any(feature = "serde-xlsx", feature = "serde-xml"))]
+use std::io::Cursor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
