@@ -20,7 +20,7 @@ pub const SEPARATOR: &str = "<#>";
 /// There is no closing marker. The old `<!-- ... -->` pair had a suffix that
 /// almost nothing checked, and RPG Maker plugin markup does not use HTML-like
 /// tags, so the opening marker alone separates the two.
-pub(crate) const COMMENT_PREFIX: &str = "<!> ";
+pub(crate) const COMMENT_PREFIX: &str = "<!>";
 
 pub(crate) const ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ID");
 pub(crate) const NAME_COMMENT: &str = formatcp!("{COMMENT_PREFIX}NAME");

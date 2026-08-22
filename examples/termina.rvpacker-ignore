@@ -1,4 +1,4 @@
-<!> Ignore Entry<#>Items: 1
+<!>Ignore Entry<#>Items: 1
 Torch
 Flashlight
 Stick
@@ -24,15 +24,15 @@ Stone
 Codex #1
 The Tale of the Pocketcat I
 The Tale of the Pocketcat II
-<!> Glob<#>The Fellowship*
-<!> Glob<#>Studies of*
-<!> Glob<#>Blueish*
-<!> Glob<#>Skeletal*
-<!> Glob<#>*soul
-<!> Glob<#>*schematics
-<!> Ignore Entry<#>Armors: 1
-<!> Glob<#>test_armor*
-<!> Ignore Entry<#>Classes: 1
+<!>Glob<#>The Fellowship*
+<!>Glob<#>Studies of*
+<!>Glob<#>Blueish*
+<!>Glob<#>Skeletal*
+<!>Glob<#>*soul
+<!>Glob<#>*schematics
+<!>Ignore Entry<#>Armors: 1
+<!>Glob<#>test_armor*
+<!>Ignore Entry<#>Classes: 1
 Girl
 Kid demon
 Captain
@@ -42,9 +42,9 @@ Baby demon
 Buckman
 Nas'hrah
 Skeleton
-<!> Ignore Entry<#>Enemies: 1
+<!>Ignore Entry<#>Enemies: 1
 Spank Tank
 giant
 test
-<!> Ignore Entry<#>Weapons: 1
+<!>Ignore Entry<#>Weapons: 1
 makeshift2
