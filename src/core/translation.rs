@@ -218,7 +218,7 @@ impl Base {
         }
 
         // Flush the last parsed section at EOF.
-        // Without this, the final `<!-- ID --><#>...` block is dropped if there
+        // Without this, the final `<!>ID<#>...` block is dropped if there
         // is no following ID marker to trigger the regular section flush path.
         if id != 0 {
             let mut skip_entry = false;

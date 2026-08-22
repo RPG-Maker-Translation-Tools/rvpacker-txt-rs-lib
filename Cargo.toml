@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "14.0.1"
+version = "15.0.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.87.0"
@@ -18,7 +18,7 @@ flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 gxhash = { version = "3.5.0", features = ["deterministic"] }
 indexmap = "2.14.0"
 log = "0.4.34"
-marshal-rs = "2.0.1"
+marshal-rs = { version = "2.0.1", path = "../marshal-rs" }
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
 regex = "1.13.1"

@@ -67,7 +67,7 @@ impl Glob {
 /// Lines to skip for one file or section.
 ///
 /// Plain lines are matched exactly, which is the common case and stays a hash
-/// lookup. Lines written as `<!-- Glob --><#>pattern` are matched as [`Glob`]s,
+/// lookup. Lines written as `<!>Glob<#>pattern` are matched as [`Glob`]s,
 /// for text that can only be recognised by shape - a shared prefix or suffix
 /// rather than a fixed string.
 #[derive(Default)]

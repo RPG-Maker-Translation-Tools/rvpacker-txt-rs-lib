@@ -1,5 +1,5 @@
 use crate::{
-    constants::INSTANCE_VAR_PREFIX,
+    constants::{INSTANCE_VAR_PREFIX, SCRIPT_COMMENT, SEPARATOR},
     core::Base,
     types::{EngineType, Error, Scripts},
 };
@@ -50,7 +50,7 @@ pub fn generate_file(
             .fold(String::new(), |mut result, ((a, b), c)| {
                 let _ = write!(
                     result,
-                    "<!-- SCRIPT: {a}, {b} -->\n{c}{end}",
+                    "{SCRIPT_COMMENT}{SEPARATOR}{a}{SEPARATOR}{b}\n{c}{end}",
                     c = c.replace("\r\n", "\n"),
                     end = if c.ends_with('\n') { "" } else { "\n" }
                 );
@@ -233,26 +233,23 @@ pub fn write<P: AsRef<Path>>(
             let mut read = 0;
 
             for script_line in content.split_inclusive('\n') {
-                if script_line.starts_with("<!-- SCRIPT") {
-                    let without_prefix_and_suffix = unsafe {
+                if script_line.starts_with(SCRIPT_COMMENT) {
+                    // The header reads `{SCRIPT_COMMENT}{SEPARATOR}{magic
+                    // number}{SEPARATOR}{name}`, so the name is whatever
+                    // follows the second separator - a name holding a comma,
+                    // or a leading space, no longer changes anything.
+                    let header = unsafe {
                         script_line
-                            .strip_prefix("<!-- SCRIPT: ")
+                            .strip_prefix(SCRIPT_COMMENT)
                             .unwrap_unchecked()
-                            .strip_suffix(" -->\n")
+                            .strip_prefix(SEPARATOR)
                             .unwrap_unchecked()
+                            .trim_end_matches('\n')
                     };
 
                     let (magic_number, name) = unsafe {
-                        without_prefix_and_suffix
-                            .split_once(',')
-                            .unwrap_unchecked()
+                        header.split_once(SEPARATOR).unwrap_unchecked()
                     };
-
-                    // `generate_file` puts ", " between the two, so the name
-                    // arrives with a leading space. Keeping it meant every
-                    // round trip through JSON indented the script name by one
-                    // more space.
-                    let name = name.strip_prefix(' ').unwrap_or(name);
 
                     scripts.numbers.push(unsafe {
                         magic_number.parse::<i32>().unwrap_unchecked()

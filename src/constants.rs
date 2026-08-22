@@ -40,6 +40,11 @@ pub(crate) const IGNORE_ENTRY_COMMENT: &str =
 /// Marks a `.rvpacker-ignore` line as a shell-style pattern rather than a literal.
 pub(crate) const GLOB_ENTRY_COMMENT: &str = formatcp!("{COMMENT_PREFIX}Glob");
 
+/// Heads one script in the Ruby file [`crate::json::generate_file`] writes.
+///
+/// The magic number and the script's name follow, each after a separator.
+pub(crate) const SCRIPT_COMMENT: &str = formatcp!("{COMMENT_PREFIX}SCRIPT");
+
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
 pub const RVPACKER_METADATA_FILE: &str = ".rvpacker-metadata";
 

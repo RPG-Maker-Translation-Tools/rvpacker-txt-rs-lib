@@ -116,7 +116,7 @@ mod scenarios {
                     .unwrap_or_else(|e| panic!("{name} is not valid JSON: {e}"));
             } else {
                 assert!(
-                    content.starts_with("<!-- SCRIPT: "),
+                    content.starts_with("<!>SCRIPT<#>"),
                     "{name} has no script header"
                 );
             }
@@ -193,7 +193,7 @@ mod scenarios {
         let ruby = read_to_string(json.join("Scripts.rb")).unwrap();
         let headers = ruby
             .lines()
-            .filter(|line| line.starts_with("<!-- SCRIPT: "))
+            .filter(|line| line.starts_with("<!>SCRIPT<#>"))
             .count();
         assert!(headers > 0, "Scripts.rb has no script headers");
         assert!(
@@ -210,7 +210,7 @@ mod scenarios {
             generate_file(&written, &name).expect("generate_file failed");
 
         assert_eq!(
-            ruby_again.lines().filter(|l| l.starts_with("<!-- SCRIPT: ")).count(),
+            ruby_again.lines().filter(|l| l.starts_with("<!>SCRIPT<#>")).count(),
             headers,
             "a script was lost across the round trip"
         );
