@@ -717,6 +717,7 @@ impl<'a> Base {
 
         let mut extra_strings: SmallVec<[(&str, bool); 4]> =
             SmallVec::with_capacity(4);
+        let mut shop_prefix: Option<&str> = None;
 
         match self.game_type {
             GameType::Termina => {
@@ -771,8 +772,9 @@ impl<'a> Base {
                 }
 
                 // SAFETY: At this point, shop parameter should always contain '='.
-                let (_, mut actual_string) =
+                let (left, mut actual_string) =
                     unsafe { parameter.split_once('=').unwrap_unchecked() };
+                shop_prefix = Some(left);
                 actual_string = actual_string.trim();
 
                 if actual_string.len() < 2 {
@@ -807,6 +809,13 @@ impl<'a> Base {
                     }
                 }
 
+                // Put the `shop_talk_xxx=` prefix back on, so that the result is
+                // self-contained and the caller needn't keep the source string
+                // borrowed while it writes to the value it came from.
+                if let Some(prefix) = shop_prefix {
+                    translation = format!("{prefix}=\"{translation}\"");
+                }
+
                 translation
             })
         } else {
@@ -814,23 +823,9 @@ impl<'a> Base {
         }
     }
 
-    fn process_param(
-        &mut self,
-        value: &mut Value,
-        code: Code,
-        parameter: &str,
-    ) {
-        let Some(mut parsed) = self.process_parameter(code, parameter) else {
-            return;
-        };
-
+    /// Applies an already-processed parameter, produced by [`Base::process_parameter`].
+    fn process_param(&mut self, value: &mut Value, parsed: String) {
         if self.mode.is_write() {
-            if code.is_shop() {
-                if let Some((left, _)) = parameter.split_once('=') {
-                    parsed = format!("{left}=\"{parsed}\"");
-                }
-            }
-
             *value =
                 Self::make_string_value(&parsed, self.engine_type.is_new());
         } else {
@@ -905,8 +900,10 @@ impl<'a> Base {
                     *dialogue_line_indices.last().unwrap_unchecked()
                 }][self.labels.parameters][0] = Value::string(remaining);
             }
-        } else {
-            self.process_param(&mut Value::default(), Code::Dialogue, &joined);
+        } else if let Some(parsed) =
+            self.process_parameter(Code::Dialogue, &joined)
+        {
+            self.process_param(&mut Value::default(), parsed);
         }
     }
 
@@ -922,9 +919,11 @@ impl<'a> Base {
         let mut dialogue_lines = SmallVec::with_capacity(4);
         let mut dialogue_line_indices = SmallVec::with_capacity(4);
 
-        for (item_idx, item) in
-            mutable!(list, Vec<Value>).iter_mut().enumerate()
-        {
+        // Indexed rather than iterated, because `join_dialogue_lines` needs `list`
+        // itself while we're partway through it.
+        for item_idx in 0..list.len() {
+            let item = &mut list[item_idx];
+
             // SAFETY: Each item must contain code.
             let code = Code::from(unsafe {
                 item[self.labels.code].as_int().unwrap_unchecked()
@@ -978,7 +977,7 @@ impl<'a> Base {
 
             // SAFETY: Each item must contain parameters.
             let parameters = unsafe {
-                item[self.labels.parameters]
+                list[item_idx][self.labels.parameters]
                     .as_array_mut()
                     .unwrap_unchecked()
             };
@@ -990,23 +989,35 @@ impl<'a> Base {
             let value_index =
                 usize::from(code.is_any_misc() || code.is_choice());
 
-            let value = &mut parameters[value_index];
-
             if code.is_choice_array() {
                 // SAFETY: We have just checked - it's an array.
-                for value in unsafe { value.as_array_mut().unwrap_unchecked() }
-                {
-                    let Some(string) = mutable!(self, Self)
-                        .extract_string(mutable!(value, Value), true)
-                    else {
-                        continue;
+                let choices = unsafe {
+                    parameters[value_index].as_array_mut().unwrap_unchecked()
+                };
+
+                for choice_idx in 0..choices.len() {
+                    // Scoped so that the borrow of `choices[choice_idx]` ends
+                    // before we write back into it; `process_parameter` returns
+                    // owned data, so nothing outlives the scope.
+                    let parsed = {
+                        let Some(string) =
+                            self.extract_string(&choices[choice_idx], true)
+                        else {
+                            continue;
+                        };
+
+                        self.process_parameter(code, string)
                     };
 
-                    self.process_param(value, code, string);
+                    if let Some(parsed) = parsed {
+                        self.process_param(&mut choices[choice_idx], parsed);
+                    }
                 }
             } else {
-                let Some(parameter_string) = mutable!(self, Self)
-                    .extract_string(mutable!(value, Value), false)
+                let value = &mut parameters[value_index];
+
+                let Some(parameter_string) =
+                    self.extract_string(&*value, false)
                 else {
                     continue;
                 };
@@ -1023,8 +1034,10 @@ impl<'a> Base {
                     }
 
                     in_sequence = true;
-                } else {
-                    self.process_param(value, code, parameter_string);
+                } else if let Some(parsed) =
+                    self.process_parameter(code, parameter_string)
+                {
+                    self.process_param(value, parsed);
                 }
             }
         }
@@ -1533,11 +1546,13 @@ impl<'a> Base {
     /// - Nothing if [`Value`] is not of [`ValueType::String`] or [`ValueType::Bytes`], or `fail_if_empty` is set and `string` is empty.
     /// - [`&str`] - Parsed string.
     ///
-    fn extract_string(
-        &'a self,
-        value: &'a Value,
+    /// The returned string borrows `value`, not `self` - keeping the lifetimes
+    /// separate lets the caller drop the `&self` borrow immediately.
+    fn extract_string<'v>(
+        &self,
+        value: &'v Value,
         fail_if_empty: bool,
-    ) -> Option<&'a str> {
+    ) -> Option<&'v str> {
         let string = value.as_str().or_else(|| {
             std::str::from_utf8(value.as_byte_vec().unwrap_or_default()).ok()
         })?;
