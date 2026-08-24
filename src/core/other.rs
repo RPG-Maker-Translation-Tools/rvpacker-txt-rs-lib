@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
-    BaseFlags, CommentPos, ProcessedData,
-    constants::NEW_LINE,
+    CommentPos, ProcessedData, get_line_break,
     types::{Error, RPGMFileType, Variable},
 };
 use marshal_rs::{Get, Value};
@@ -68,12 +67,10 @@ impl Base {
         self.reset();
         self.initialize_translation(translation)?;
 
-        let mut entry_value =
-            parse_rpgm_file(content, self.engine_type, self.file_type)?;
+        let mut entry_value = parse_rpgm_file(content, self.engine_type, self.file_type)?;
 
         // SAFETY: All "other" entries are always arrays.
-        let object_array =
-            unsafe { entry_value.as_array_mut().unwrap_unchecked() };
+        let object_array = unsafe { entry_value.as_array_mut().unwrap_unchecked() };
 
         let mut processed = false;
 
@@ -92,13 +89,9 @@ impl Base {
 
             processed = true;
 
-            let event_name =
-                unsafe { object[self.labels.name].as_str().unwrap_unchecked() };
+            let event_name = unsafe { object[self.labels.name].as_str().unwrap_unchecked() };
 
-            self.update_metadata(
-                id,
-                Vec::from([(CommentPos::Name, event_name)]),
-            );
+            self.update_metadata(id, Vec::from([(CommentPos::Name, event_name)]));
 
             if self.file_type.is_events() || self.file_type.is_troops() {
                 self.process_object(object);
@@ -117,23 +110,18 @@ impl Base {
     }
 
     #[allow(clippy::collapsible_match, clippy::single_match)]
-    fn process_variable(
-        &self,
-        variable_text: &str,
-        variable_type: Variable,
-    ) -> Option<String> {
+    fn process_variable(&self, variable_text: &str, variable_type: Variable) -> Option<String> {
         if string_is_only_symbols(variable_text) {
             return None;
         }
 
         let mut variable_text = Cow::Borrowed(variable_text);
 
-        if !self.engine_type.is_new() {
-            if variable_text.lines().all(|line| {
-                line.is_empty()
-                    || IS_INVALID_MULTILINE_VARIABLE_RE
-                        .with(|r| r.is_match(line))
-            }) || IS_INVALID_VARIABLE_RE.with(|r| r.is_match(&variable_text))
+        if !self.engine_type.is_mvmz() {
+            if variable_text
+                .lines()
+                .all(|line| line.is_empty() || IS_INVALID_MULTILINE_VARIABLE_RE.with(|r| r.is_match(line)))
+                || IS_INVALID_VARIABLE_RE.with(|r| r.is_match(&variable_text))
             {
                 return None;
             }
@@ -148,9 +136,7 @@ impl Base {
         let translated = self.get_key(&variable_text).map(|translated| {
             let mut result = translated.to_string();
 
-            if variable_type.is_any_message()
-                && !(variable_type.is_message_2() && self.file_type.is_skills())
-            {
+            if variable_type.is_any_message() && !(variable_type.is_message_2() && self.file_type.is_skills()) {
                 result = String::from(' ') + &result;
             }
 
@@ -164,21 +150,16 @@ impl Base {
     fn process_object(&mut self, object: &mut Value) {
         if self.file_type.is_troops() {
             // SAFETY: Troops always include pages.
-            let pages = unsafe {
-                object[self.labels.pages].as_array_mut().unwrap_unchecked()
-            };
+            let pages = unsafe { object[self.labels.pages].as_array_mut().unwrap_unchecked() };
 
             for page in pages {
-                if let Some(list_array) = page[self.labels.list].as_array_mut()
-                {
+                if let Some(list_array) = page[self.labels.list].as_array_mut() {
                     self.process_list(list_array);
                 }
             }
         } else {
             // SAFETY: CommonEvents always include list.
-            let list = unsafe {
-                object[self.labels.list].as_array_mut().unwrap_unchecked()
-            };
+            let list = unsafe { object[self.labels.list].as_array_mut().unwrap_unchecked() };
 
             self.process_list(list);
         }
@@ -208,50 +189,32 @@ impl Base {
 
             let mut string = Cow::Borrowed(string);
 
-            // The read side only trims messages, or everything under
-            // `BaseFlags::Trim`. Trimming unconditionally here built a lookup
-            // key the read never stored, so any field with trailing whitespace
-            // on a line silently failed to write back.
-            if self.mode.is_write()
-                && (variable_type.is_any_message()
-                    || self.flags.contains(BaseFlags::Trim))
-            {
-                string = Cow::Owned(
-                    string
-                        .lines()
-                        .map(str::trim)
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
+            if self.mode.is_write() && variable_type.is_any_message() {
+                string = Cow::Owned(string.lines().map(str::trim).collect::<Vec<_>>().join("\n"));
             }
 
-            let Some(parsed) = self.process_variable(&string, variable_type)
-            else {
+            let Some(parsed) = self.process_variable(&string, variable_type) else {
                 continue;
             };
 
             if self.mode.is_write() {
                 array[variable_label] = Value::string(parsed);
             } else {
-                let folded = parsed.lines().fold(
-                    String::with_capacity(parsed.len() * 2),
-                    |mut output, line| {
-                        let trimmed = if variable_type.is_any_message()
-                            || self.flags.contains(BaseFlags::Trim)
-                        {
+                let folded = parsed
+                    .lines()
+                    .fold(String::with_capacity(parsed.len() * 2), |mut output, line| {
+                        let trimmed = if variable_type.is_any_message() {
                             line.trim()
                         } else {
                             line
                         };
 
-                        let _ = write!(output, "{trimmed}{NEW_LINE}");
+                        let _ = write!(output, "{trimmed}{brk}", brk = get_line_break());
 
                         output
-                    },
-                );
+                    });
 
-                let replaced =
-                    unsafe { folded.strip_suffix(NEW_LINE).unwrap_unchecked() };
+                let replaced = unsafe { folded.strip_suffix(get_line_break()).unwrap_unchecked() };
 
                 self.insert_string(Cow::Borrowed(replaced));
             }

@@ -13,30 +13,25 @@ use quick_xml::{
 #[cfg(feature = "serde-xlsx")]
 use rust_xlsxwriter::{Format, Workbook};
 
-use crate::constants::{COMMENT_PREFIX, SEPARATOR};
+use crate::{get_comment_prefix, get_line_separator};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
 #[cfg(any(feature = "serde-xlsx", feature = "serde-xml"))]
 use std::io::Cursor;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Entry {
-    Comment {
-        text: String,
-    },
-    Translation {
-        source: String,
-        translations: Vec<String>,
-    },
+    Comment { text: String },
+    Translation { source: String, translations: Vec<String> },
 }
 
 /// Splits a translation file into entries.
 ///
 /// A line carrying the comment marker is metadata - an id, a name, a map's
 /// displayed name - and is kept whole; every other line is a
-/// `source<#>translation` row.
+/// `source{SEP}translation` row.
 fn parse_entries(content: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
 
@@ -47,21 +42,16 @@ fn parse_entries(content: &str) -> Vec<Entry> {
             continue;
         }
 
-        if line.starts_with(COMMENT_PREFIX) {
-            entries.push(Entry::Comment {
-                text: line.to_string(),
-            });
+        if line.starts_with(get_comment_prefix()) {
+            entries.push(Entry::Comment { text: line.to_string() });
             continue;
         }
 
-        let mut parts = line.split(SEPARATOR);
+        let mut parts = line.split(get_line_separator());
         let source = parts.next().unwrap_or("").to_string();
         let translations: Vec<String> = parts.map(|s| s.to_string()).collect();
 
-        entries.push(Entry::Translation {
-            source,
-            translations,
-        });
+        entries.push(Entry::Translation { source, translations });
     }
 
     entries
@@ -72,13 +62,10 @@ fn entries_to_content(entries: &[Entry]) -> String {
         .iter()
         .map(|e| match e {
             Entry::Comment { text } => text.clone(),
-            Entry::Translation {
-                source,
-                translations,
-            } => {
+            Entry::Translation { source, translations } => {
                 let mut parts = vec![source.clone()];
                 parts.extend(translations.iter().cloned());
-                parts.join(SEPARATOR)
+                parts.join(get_line_separator())
             }
         })
         .collect::<Vec<_>>()
@@ -126,10 +113,7 @@ pub fn export_csv(content: &str) -> Result<String, Box<dyn Error>> {
                 record.push(text.clone());
                 record.push("0".to_string());
             }
-            Entry::Translation {
-                source,
-                translations,
-            } => {
+            Entry::Translation { source, translations } => {
                 record.push("translation".to_string());
                 record.push(source.clone());
                 record.push(translations.len().to_string());
@@ -155,9 +139,7 @@ pub fn import_csv(csv_content: &str) -> Result<String, Box<dyn Error>> {
         let count: usize = record.get(2).unwrap_or("0").parse().unwrap_or(0);
 
         if type_field == "comment" {
-            entries.push(Entry::Comment {
-                text: source_or_text,
-            });
+            entries.push(Entry::Comment { text: source_or_text });
         } else {
             let translations = (0..count)
                 .map(|i| record.get(3 + i).unwrap_or("").to_string())
@@ -187,12 +169,7 @@ pub fn export_xlsx(content: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     worksheet.write_string_with_format(0, 1, "source", &bold)?;
     worksheet.write_string_with_format(0, 2, "translation_count", &bold)?;
     for i in 0..max_t {
-        worksheet.write_string_with_format(
-            0,
-            (3 + i) as u16,
-            format!("translation_{}", i + 1),
-            &bold,
-        )?;
+        worksheet.write_string_with_format(0, (3 + i) as u16, format!("translation_{}", i + 1), &bold)?;
     }
 
     for (row_idx, entry) in entries.iter().enumerate() {
@@ -203,17 +180,10 @@ pub fn export_xlsx(content: &str) -> Result<Vec<u8>, Box<dyn Error>> {
                 worksheet.write_string(row, 1, text)?;
                 worksheet.write_string(row, 2, "0")?;
             }
-            Entry::Translation {
-                source,
-                translations,
-            } => {
+            Entry::Translation { source, translations } => {
                 worksheet.write_string(row, 0, "translation")?;
                 worksheet.write_string(row, 1, source)?;
-                worksheet.write_string(
-                    row,
-                    2,
-                    translations.len().to_string(),
-                )?;
+                worksheet.write_string(row, 2, translations.len().to_string())?;
                 for (i, t) in translations.iter().enumerate() {
                     worksheet.write_string(row, (3 + i) as u16, t)?;
                 }
@@ -229,11 +199,7 @@ pub fn import_xlsx(xlsx_bytes: &[u8]) -> Result<String, Box<dyn Error>> {
     let cursor = Cursor::new(xlsx_bytes.to_vec());
     let mut workbook: Xlsx<_> = open_workbook_from_rs(cursor)?;
 
-    let sheet_name = workbook
-        .sheet_names()
-        .get(0)
-        .cloned()
-        .ok_or("no worksheet found")?;
+    let sheet_name = workbook.sheet_names().get(0).cloned().ok_or("no worksheet found")?;
     let range = workbook.worksheet_range(&sheet_name)?;
 
     let mut entries = Vec::new();
@@ -242,8 +208,7 @@ pub fn import_xlsx(xlsx_bytes: &[u8]) -> Result<String, Box<dyn Error>> {
             continue;
         }
         let type_field = row[0].to_string();
-        let source_or_text =
-            row.get(1).map(|c| c.to_string()).unwrap_or_default();
+        let source_or_text = row.get(1).map(|c| c.to_string()).unwrap_or_default();
         let count: usize = row
             .get(2)
             .map(|c| c.to_string())
@@ -252,14 +217,10 @@ pub fn import_xlsx(xlsx_bytes: &[u8]) -> Result<String, Box<dyn Error>> {
             .unwrap_or(0);
 
         if type_field == "comment" {
-            entries.push(Entry::Comment {
-                text: source_or_text,
-            });
+            entries.push(Entry::Comment { text: source_or_text });
         } else {
             let translations = (0..count)
-                .map(|i| {
-                    row.get(3 + i).map(|c| c.to_string()).unwrap_or_default()
-                })
+                .map(|i| row.get(3 + i).map(|c| c.to_string()).unwrap_or_default())
                 .collect();
             entries.push(Entry::Translation {
                 source: source_or_text,
@@ -286,8 +247,7 @@ pub fn import_xlsx(xlsx_bytes: &[u8]) -> Result<String, Box<dyn Error>> {
 #[cfg(feature = "serde-xml")]
 pub fn export_xml(content: &str) -> Result<String, Box<dyn Error>> {
     let entries = parse_entries(content);
-    let mut writer =
-        XmlWriter::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+    let mut writer = XmlWriter::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
 
     writer.write_event(Event::Start(BytesStart::new("entries")))?;
 
@@ -295,35 +255,23 @@ pub fn export_xml(content: &str) -> Result<String, Box<dyn Error>> {
         match entry {
             Entry::Comment { text } => {
                 writer.write_event(Event::Start(BytesStart::new("comment")))?;
-                writer.write_event(Event::CData(BytesCData::new(
-                    text.as_str(),
-                )))?;
+                writer.write_event(Event::CData(BytesCData::new(text.as_str())))?;
                 writer.write_event(Event::End(BytesEnd::new("comment")))?;
             }
-            Entry::Translation {
-                source,
-                translations,
-            } => {
+            Entry::Translation { source, translations } => {
                 writer.write_event(Event::Start(BytesStart::new("entry")))?;
 
                 writer.write_event(Event::Start(BytesStart::new("source")))?;
                 writer.write_event(Event::Text(BytesText::new(source)))?;
                 writer.write_event(Event::End(BytesEnd::new("source")))?;
 
-                writer.write_event(Event::Start(BytesStart::new(
-                    "translations",
-                )))?;
+                writer.write_event(Event::Start(BytesStart::new("translations")))?;
                 for t in translations {
-                    writer.write_event(Event::Start(BytesStart::new(
-                        "translation",
-                    )))?;
+                    writer.write_event(Event::Start(BytesStart::new("translation")))?;
                     writer.write_event(Event::Text(BytesText::new(t)))?;
-                    writer.write_event(Event::End(BytesEnd::new(
-                        "translation",
-                    )))?;
+                    writer.write_event(Event::End(BytesEnd::new("translation")))?;
                 }
-                writer
-                    .write_event(Event::End(BytesEnd::new("translations")))?;
+                writer.write_event(Event::End(BytesEnd::new("translations")))?;
 
                 writer.write_event(Event::End(BytesEnd::new("entry")))?;
             }
@@ -394,9 +342,7 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
             Event::Empty(e) => match e.name().as_ref() {
                 "source" => current_source = Some(String::new()),
                 "translation" => current_translations.push(String::new()),
-                "comment" => entries.push(Entry::Comment {
-                    text: String::new(),
-                }),
+                "comment" => entries.push(Entry::Comment { text: String::new() }),
                 _ => {}
             },
             // The reader splits a run of text at every entity reference, so
@@ -415,8 +361,7 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
             Event::GeneralRef(reference) => {
                 let resolved = match reference.resolve_char_ref()? {
                     Some(char) => char.to_string(),
-                    None => unescape(&format!("&{name};", name = &*reference))?
-                        .into_owned(),
+                    None => unescape(&format!("&{name};", name = &*reference))?.into_owned(),
                 };
 
                 push_text(
@@ -445,9 +390,7 @@ pub fn import_xml(xml_content: &str) -> Result<String, Box<dyn Error>> {
                     if let Some(source) = current_source.take() {
                         entries.push(Entry::Translation {
                             source,
-                            translations: std::mem::take(
-                                &mut current_translations,
-                            ),
+                            translations: std::mem::take(&mut current_translations),
                         });
                     }
                 }

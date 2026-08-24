@@ -28,9 +28,7 @@ impl Fixture {
 }
 
 fn workspace(tag: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/json")
-        .join(tag);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/json").join(tag);
 
     let _ = remove_dir_all(&path);
     create_dir_all(&path).expect("could not create the workspace");
@@ -62,8 +60,7 @@ fn without_ids(json: &str) -> serde_json::Value {
         }
     }
 
-    let mut value: serde_json::Value =
-        serde_json::from_str(json).expect("not valid JSON");
+    let mut value: serde_json::Value = serde_json::from_str(json).expect("not valid JSON");
     strip(&mut value);
     value
 }
@@ -88,8 +85,7 @@ mod scenarios {
         let workspace = workspace(tag);
         let json = workspace.join("json");
 
-        generate(fixture.source().as_path(), json.as_path(), true)
-            .expect("generate failed");
+        generate(fixture.source().as_path(), json.as_path(), true).expect("generate failed");
 
         let extension = fixture.engine.extension();
         let expected: Vec<String> = names(&fixture.source())
@@ -115,10 +111,7 @@ mod scenarios {
                 serde_json::from_str::<serde_json::Value>(&content)
                     .unwrap_or_else(|e| panic!("{name} is not valid JSON: {e}"));
             } else {
-                assert!(
-                    content.starts_with("<!>SCRIPT<#>"),
-                    "{name} has no script header"
-                );
+                assert!(content.starts_with("<!>SCRIPT<#>"), "{name} has no script header");
             }
         }
     }
@@ -136,15 +129,12 @@ mod scenarios {
         let output = workspace.join("output");
         let json_again = workspace.join("json-again");
 
-        generate(fixture.source().as_path(), json.as_path(), true)
-            .expect("generate failed");
-        write(json.as_path(), output.as_path(), fixture.engine)
-            .expect("write failed");
+        generate(fixture.source().as_path(), json.as_path(), true).expect("generate failed");
+        write(json.as_path(), output.as_path(), fixture.engine).expect("write failed");
 
         assert_eq!(names(&output), names(&fixture.source()));
 
-        generate(output.as_path(), json_again.as_path(), true)
-            .expect("the written files could not be read back");
+        generate(output.as_path(), json_again.as_path(), true).expect("the written files could not be read back");
 
         assert_eq!(names(&json_again), names(&json));
 
@@ -172,8 +162,7 @@ mod scenarios {
 
         let json = generate_file(&before, &name).expect("generate_file failed");
         let written = write_file(&json).expect("write_file failed");
-        let json_again =
-            generate_file(&written, &name).expect("generate_file failed");
+        let json_again = generate_file(&written, &name).expect("generate_file failed");
 
         assert!(
             without_ids(&json) == without_ids(&json_again),
@@ -187,27 +176,18 @@ mod scenarios {
         let json = workspace.join("json");
         let output = workspace.join("output");
 
-        generate(fixture.source().as_path(), json.as_path(), true)
-            .expect("generate failed");
+        generate(fixture.source().as_path(), json.as_path(), true).expect("generate failed");
 
         let ruby = read_to_string(json.join("Scripts.rb")).unwrap();
-        let headers = ruby
-            .lines()
-            .filter(|line| line.starts_with("<!>SCRIPT<#>"))
-            .count();
+        let headers = ruby.lines().filter(|line| line.starts_with("<!>SCRIPT<#>")).count();
         assert!(headers > 0, "Scripts.rb has no script headers");
-        assert!(
-            ruby.contains("class "),
-            "Scripts.rb carries no Ruby source"
-        );
+        assert!(ruby.contains("class "), "Scripts.rb carries no Ruby source");
 
-        write(json.as_path(), output.as_path(), fixture.engine)
-            .expect("write failed");
+        write(json.as_path(), output.as_path(), fixture.engine).expect("write failed");
 
         let name = format!("Scripts.{}", fixture.engine.extension());
         let written = read(output.join(&name)).unwrap();
-        let ruby_again =
-            generate_file(&written, &name).expect("generate_file failed");
+        let ruby_again = generate_file(&written, &name).expect("generate_file failed");
 
         assert_eq!(
             ruby_again.lines().filter(|l| l.starts_with("<!>SCRIPT<#>")).count(),
@@ -222,18 +202,15 @@ mod scenarios {
         let workspace = workspace(tag);
         let json = workspace.join("json");
 
-        generate(fixture.source().as_path(), json.as_path(), true)
-            .expect("generate failed");
+        generate(fixture.source().as_path(), json.as_path(), true).expect("generate failed");
 
         let subject = json.join("Actors.json");
         write_file_to(&subject, "edited by hand").unwrap();
 
-        generate(fixture.source().as_path(), json.as_path(), false)
-            .expect("generate failed");
+        generate(fixture.source().as_path(), json.as_path(), false).expect("generate failed");
         assert_eq!(read_to_string(&subject).unwrap(), "edited by hand");
 
-        generate(fixture.source().as_path(), json.as_path(), true)
-            .expect("generate failed");
+        generate(fixture.source().as_path(), json.as_path(), true).expect("generate failed");
         assert_ne!(read_to_string(&subject).unwrap(), "edited by hand");
     }
 }
@@ -313,8 +290,7 @@ fn negative_integers_survive_a_round_trip() {
         // one integer.
         let json = format!(r#"{{"__id": 1, "__type": 9, "__value": [{value}]}}"#);
         let dumped = write_file(&json).expect("write_file failed");
-        let loaded =
-            generate_file(&dumped, "Numbers.rvdata2").expect("generate failed");
+        let loaded = generate_file(&dumped, "Numbers.rvdata2").expect("generate failed");
 
         let back: i64 = loaded
             .lines()

@@ -1,16 +1,11 @@
-use crate::constants::{
-    MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT, NAME_COMMENT,
-};
+use crate::{get_map_display_name_comment_prefix, get_map_order_comment, get_name_comment};
 use bitflags::bitflags;
 use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
-use std::{
-    convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf,
-    str::FromStr,
-};
+use std::{convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf, str::FromStr};
 use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
 
@@ -79,10 +74,7 @@ pub(crate) enum Variable {
 
 impl Variable {
     pub const fn is_any_message(self) -> bool {
-        matches!(
-            self,
-            Self::Message1 | Self::Message2 | Self::Message3 | Self::Message4
-        )
+        matches!(self, Self::Message1 | Self::Message2 | Self::Message3 | Self::Message4)
     }
 }
 
@@ -154,7 +146,7 @@ impl Labels {
     pub const fn new(engine_type: EngineType) -> Self {
         match engine_type {
             // MV/MZ name their JSON fields in camelCase.
-            EngineType::New => Self::with_varying(
+            EngineType::MVMZ => Self::with_varying(
                 "displayName",
                 "armorTypes",
                 "skillTypes",
@@ -188,7 +180,7 @@ impl Labels {
 
 impl Default for Labels {
     fn default() -> Self {
-        Self::new(EngineType::New)
+        Self::new(EngineType::MVMZ)
     }
 }
 
@@ -361,14 +353,9 @@ pub enum Error {
     MarshalLoad(#[from] marshal_rs::LoadError),
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
-    #[error(
-        "Title couldn't be found. Ensure you've passed right `Game.ini` or \
-         `System.json` file."
-    )]
+    #[error("Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file.")]
     NoTitle,
-    #[error(
-        "Processing mode is not default read, but no translation was supplied."
-    )]
+    #[error("Processing mode is not default read, but no translation was supplied.")]
     NoTranslation,
 }
 
@@ -464,9 +451,7 @@ impl Default for Mode {
 impl From<Mode> for u8 {
     fn from(value: Mode) -> Self {
         match value {
-            Mode::Read { append, force } => {
-                u8::from(force) | (u8::from(append) << 1)
-            }
+            Mode::Read { append, force } => u8::from(force) | (u8::from(append) << 1),
             Mode::Write => 4,
             Mode::Purge => 5,
         }
@@ -510,24 +495,14 @@ impl FromStr for Mode {
             "write" => Self::Write,
             "purge" => Self::Purge,
             _ => {
-                return Err("Expected `default`, `append`, `force`, \
-                            `force-append`, `write` or `purge` string");
+                return Err("Expected `default`, `append`, `force`, `force-append`, `write` or `purge` string");
             }
         })
     }
 }
 
 #[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    EnumIs,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
-    VariantNames,
+    Debug, Default, Clone, Copy, EnumIs, TryFromPrimitive, IntoPrimitive, Deserialize, Serialize, VariantNames,
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
@@ -555,28 +530,18 @@ impl FromStr for DuplicateMode {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    EnumIs,
-    Default,
-    TryFromPrimitive,
-    IntoPrimitive,
-    Deserialize,
-    Serialize,
+    Debug, Clone, Copy, PartialEq, Eq, EnumIs, Default, TryFromPrimitive, IntoPrimitive, Deserialize, Serialize,
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
 /// Defines engine type of the processed game.
 ///
-/// - [`EngineType::New`] - used for MV/MZ.
+/// - [`EngineType::MVMZ`] - used for MV/MZ.
 /// - [`EngineType::VXAce`], [`EngineType::VX`] and [`EngineType::XP`] are self-explanatory.
 pub enum EngineType {
     #[default]
     /// MV/MZ
-    New,
+    MVMZ,
     VXAce,
     VX,
     XP,
@@ -585,7 +550,7 @@ pub enum EngineType {
 impl EngineType {
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension {
-            "json" => Some(EngineType::New),
+            "json" => Some(EngineType::MVMZ),
             "rxdata" => Some(EngineType::XP),
             "rvdata" => Some(EngineType::VX),
             "rvdata2" => Some(EngineType::VXAce),
@@ -595,7 +560,7 @@ impl EngineType {
 
     pub fn to_str(self) -> &'static str {
         match self {
-            EngineType::New => "MV/MZ",
+            EngineType::MVMZ => "MV/MZ",
             EngineType::VX => "VX",
             EngineType::VXAce => "VX Ace",
             EngineType::XP => "XP",
@@ -604,7 +569,7 @@ impl EngineType {
 
     pub fn extension(self) -> &'static str {
         match self {
-            EngineType::New => "json",
+            EngineType::MVMZ => "json",
             EngineType::VXAce => "rvdata2",
             EngineType::VX => "rvdata",
             EngineType::XP => "rxdata",
@@ -619,7 +584,7 @@ impl std::fmt::Display for EngineType {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
     #[repr(transparent)]
     /// There's four [`FileFlags`] variants:
@@ -762,8 +727,7 @@ impl FromStr for FileFlags {
             RPGMFileType::Weapons => Self::Weapons,
             RPGMFileType::Scripts | RPGMFileType::Plugins => Self::Scripts,
             RPGMFileType::Invalid => {
-                return Err("FileFlags require valid RPG Maker data file \
-                            name to parse from.");
+                return Err("FileFlags require valid RPG Maker data file name to parse from.");
             }
         })
     }
@@ -790,35 +754,27 @@ impl Default for FileFlags {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
     #[serde(into = "u8", try_from = "u8")]
     #[repr(transparent)]
     /// Indicates different modes of processing the text.
     ///
     /// Check each flag to see what it does.
     pub struct BaseFlags: u8 {
-        /// Trim leading and trailing whitespace from all encountered text.
-        ///
-        /// This flag **must be set on write or purge** if it was set on read.
-        const Trim = 1 << 1;
-
         /// Use ignore entries from `.rvpacker-ignore` file.
         ///
         /// Prior to using this function, you may need to create `.rvpacker-ignore` file by purging with [`BaseFlags::CreateIgnore`] argument.
         ///
         /// Only used on reads with [`Mode::Read`] to bypass entries that were previously purged.
-        const Ignore = 1 << 2;
+        const Ignore = 1 << 0;
 
         /// Create `.rvpacker-ignore` file with ignore entries from purged entries.
         ///
         /// Only used on purge.
-        const CreateIgnore = 1 << 3;
-
-        /// No effect, for convenience.
-        const DisableCustomProcessing = 1 << 4;
+        const CreateIgnore = 1 << 1;
 
         /// Skip obsolete entries that are not in game files anymore on reads with [`Mode::Read`].
-        const SkipObsolete = 1 << 5;
+        const SkipObsolete = 1 << 2;
     }
 }
 
@@ -867,11 +823,7 @@ pub struct Scripts {
 
 impl Scripts {
     #[must_use]
-    pub fn new(
-        numbers: Vec<i32>,
-        contents: Vec<String>,
-        names: Vec<String>,
-    ) -> Self {
+    pub fn new(numbers: Vec<i32>, contents: Vec<String>, names: Vec<String>) -> Self {
         Self {
             numbers,
             contents,
@@ -890,11 +842,11 @@ pub(crate) enum CommentPos {
 
 impl CommentPos {
     pub fn from_str(str: &str) -> Self {
-        if str.starts_with(NAME_COMMENT) {
+        if str.starts_with(get_name_comment()) {
             Self::Name
-        } else if str.starts_with(MAP_ORDER_COMMENT) {
+        } else if str.starts_with(get_map_order_comment()) {
             Self::Order
-        } else if str.starts_with(MAP_DISPLAY_NAME_COMMENT_PREFIX) {
+        } else if str.starts_with(get_map_display_name_comment_prefix()) {
             Self::DisplayName
         } else {
             Self::None

@@ -23,7 +23,7 @@ const MAP001: &str = r#"{"displayName":"Riverside","events":[null,
 
 /// Reads a file into its translation text.
 fn read_other(filename: &str, content: &str) -> String {
-    let mut base = Base::new(Mode::read(), EngineType::New);
+    let mut base = Base::new(Mode::read(), EngineType::MVMZ);
     let data = base
         .process_other(filename, content.as_bytes(), None)
         .expect("read failed")
@@ -34,7 +34,7 @@ fn read_other(filename: &str, content: &str) -> String {
 
 /// Writes a filled-in translation back into the file, returning the new JSON.
 fn write_other(filename: &str, content: &str, translation: &str) -> Json {
-    let mut base = Base::new(Mode::Write, EngineType::New);
+    let mut base = Base::new(Mode::Write, EngineType::MVMZ);
     let data = base
         .process_other(filename, content.as_bytes(), Some(translation))
         .expect("write failed")
@@ -121,7 +121,7 @@ mod other_files {
     fn a_wholly_untranslated_file_writes_nothing() {
         // Every entry is unused, so there is nothing to rewrite.
         let text = read_other("Actors.json", ACTORS);
-        let mut base = Base::new(Mode::Write, EngineType::New);
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
 
         let data = base
             .process_other("Actors.json", ACTORS.as_bytes(), Some(&text))
@@ -151,7 +151,7 @@ mod other_files {
 
     #[test]
     fn writing_without_a_translation_is_an_error() {
-        let mut base = Base::new(Mode::Write, EngineType::New);
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
         assert!(matches!(
             base.process_other("Actors.json", ACTORS.as_bytes(), None),
             Err(Error::NoTranslation)
@@ -174,13 +174,12 @@ mod purging {
             }
         });
 
-        let mut base = Base::new(Mode::Purge, EngineType::New);
+        let mut base = Base::new(Mode::Purge, EngineType::MVMZ);
         let data = base
             .process_other("Actors.json", ACTORS.as_bytes(), Some(&translated))
             .expect("purge failed")
             .expect("nothing was processed");
-        let purged =
-            String::from_utf8(data.as_ref().to_vec()).expect("not UTF-8");
+        let purged = String::from_utf8(data.as_ref().to_vec()).expect("not UTF-8");
 
         assert!(purged.contains("Alice<#>Алиса"));
         assert!(!purged.contains("the Brave"));
@@ -192,17 +191,12 @@ mod maps {
     use super::*;
 
     fn read_maps() -> String {
-        let mut base = Base::new(Mode::read(), EngineType::New);
+        let mut base = Base::new(Mode::read(), EngineType::MVMZ);
         // Event ids, names and positions are only emitted on request.
         base.map_events = true;
         base.begin_maps();
-        base.process_map(
-            "Map001.json",
-            MAP001.as_bytes(),
-            MAPINFOS.as_bytes(),
-            None,
-        )
-        .expect("map read failed");
+        base.process_map("Map001.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), None)
+            .expect("map read failed");
 
         let data = base.finish_maps();
         String::from_utf8(data.as_ref().to_vec()).expect("not UTF-8")
@@ -226,15 +220,10 @@ mod maps {
         let text = read_maps();
         let translated = translate_all(&text, |source| format!("[{source}]"));
 
-        let mut base = Base::new(Mode::Write, EngineType::New);
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
         base.begin_maps();
         let data = base
-            .process_map(
-                "Map001.json",
-                MAP001.as_bytes(),
-                MAPINFOS.as_bytes(),
-                Some(&translated),
-            )
+            .process_map("Map001.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), Some(&translated))
             .expect("map write failed")
             .expect("nothing was processed");
 
@@ -248,16 +237,11 @@ mod maps {
 
     #[test]
     fn a_map_missing_from_mapinfos_is_skipped() {
-        let mut base = Base::new(Mode::read(), EngineType::New);
+        let mut base = Base::new(Mode::read(), EngineType::MVMZ);
         base.begin_maps();
 
         let data = base
-            .process_map(
-                "Map009.json",
-                MAP001.as_bytes(),
-                MAPINFOS.as_bytes(),
-                None,
-            )
+            .process_map("Map009.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), None)
             .expect("map read failed");
 
         assert!(data.is_none());
@@ -278,7 +262,7 @@ mod system_file {
 "params":["Max HP","Attack"],"messages":{"actionFailure":"There was no effect!"}}}"#;
 
     fn read_system() -> String {
-        let mut base = Base::new(Mode::read(), EngineType::New);
+        let mut base = Base::new(Mode::read(), EngineType::MVMZ);
         let data = base
             .process_system(SYSTEM.as_bytes(), None)
             .expect("read failed")
@@ -301,10 +285,7 @@ mod system_file {
             "Currency Unit",
             "Game Title",
         ] {
-            assert!(
-                text.contains(&format!("<!>NAME<#>{name}")),
-                "{name} section missing"
-            );
+            assert!(text.contains(&format!("<!>NAME<#>{name}")), "{name} section missing");
         }
 
         assert!(text.contains("Magic Armor<#>"));
@@ -319,7 +300,7 @@ mod system_file {
         let text = read_system();
         let translated = translate_all(&text, |source| format!("[{source}]"));
 
-        let mut base = Base::new(Mode::Write, EngineType::New);
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
         let data = base
             .process_system(SYSTEM.as_bytes(), Some(&translated))
             .expect("write failed")
@@ -341,7 +322,7 @@ mod system_file {
         let text = read_system();
         let translated = translate_all(&text, |source| format!("[{source}]"));
 
-        let mut base = Base::new(Mode::Write, EngineType::New);
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
         base.set_game_title("Какая-то игра");
 
         let data = base

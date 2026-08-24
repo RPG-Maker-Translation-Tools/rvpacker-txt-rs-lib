@@ -1,10 +1,8 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData,
-    constants::{
-        COULD_NOT_SPLIT_LINE_MSG, EVENT_ID_COMMENT, EVENT_NAME_COMMENT,
-        EVENT_POS_COMMENT, IN_FILE_MSG, SEPARATOR,
-    },
+    constants::{COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG},
+    get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_line_separator,
     types::{Error, RPGMFileType, TranslationEntry, TranslationMap},
 };
 use marshal_rs::{Get, Value};
@@ -121,8 +119,7 @@ impl Base {
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
         if self.mapinfos.is_null() {
-            self.mapinfos =
-                parse_rpgm_file(mapinfos, self.engine_type, self.file_type)?;
+            self.mapinfos = parse_rpgm_file(mapinfos, self.engine_type, self.file_type)?;
         }
 
         self.initialize_translation(translation)?;
@@ -136,20 +133,18 @@ impl Base {
             return Ok(None);
         }
 
-        let mut map_object =
-            parse_rpgm_file(content, self.engine_type, self.file_type)?;
+        let mut map_object = parse_rpgm_file(content, self.engine_type, self.file_type)?;
         let display_name = self.get_display_name(&map_object);
 
         if self.mode.is_read() {
             let map_order = self.get_map_order(id).to_string();
-            let engine_is_new = self.engine_type.is_new();
+            let engine_is_new = self.engine_type.is_mvmz();
 
             // Owned, so the borrow of `self.mapinfos` ends before
             // `update_metadata` takes `&mut self`. One short allocation per map.
-            let replaced_map_name =
-                Self::get_map_name(&self.mapinfos, engine_is_new, id)
-                    .normalize()
-                    .into_owned();
+            let replaced_map_name = Self::get_map_name(&self.mapinfos, engine_is_new, id)
+                .normalize()
+                .into_owned();
 
             self.update_metadata(
                 id,
@@ -162,35 +157,27 @@ impl Base {
         } else if !display_name.is_empty() {
             let display_name_comment_line = &self.translation.metadata[&id][2];
 
-            let split: Vec<&str> =
-                display_name_comment_line.split(SEPARATOR).collect();
+            let split: Vec<&str> = display_name_comment_line.split(get_line_separator()).collect();
 
             if split.len() >= 2 {
-                let mut translation = split
-                    .into_iter()
-                    .skip(1)
-                    .rfind(|x| !x.is_empty())
-                    .unwrap_or_default();
+                let mut translation = split.into_iter().skip(1).rfind(|x| !x.is_empty()).unwrap_or_default();
 
                 let translation_replaced = translation.denormalize();
                 translation = &translation_replaced;
 
-                map_object[self.labels.display_name] =
-                    Value::string(translation);
+                map_object[self.labels.display_name] = Value::string(translation);
             } else {
                 log::warn!(
-                    "{COULD_NOT_SPLIT_LINE_MSG} \
-                     {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
+                    "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
                     file = self.file_type.to_string().to_lowercase()
                 );
             }
         }
 
-        let events = if self.engine_type.is_new() {
+        let events = if self.engine_type.is_mvmz() {
             // Previously, this line was using `unwrap_unchecked`, because it assumed, that events are always an array in MV/MZ.
             // This is not the case. This array can also contain just `bool`. Now, it returns, if encounters something else than an array.
-            let Some(array) = map_object[self.labels.events].as_array_mut()
-            else {
+            let Some(array) = map_object[self.labels.events].as_array_mut() else {
                 return Ok(None);
             };
 
@@ -226,31 +213,42 @@ impl Base {
                 continue;
             };
 
-            if let Some((event_id, event_name, event_x, event_y)) =
-                event_metadata
-            {
+            if let Some((event_id, event_name, event_x, event_y)) = event_metadata {
                 self.flush_translation(id);
 
                 self.output.accumulated.push((
-                        id,
-                        SmallVec::default(),
-                        FlushedLines::EMPTY,
-                        TranslationMap::from_iter([(String::new(), TranslationEntry {
-                            comments: vec![format!(
-                                "{EVENT_ID_COMMENT}{SEPARATOR}{event_id}"
-                            ),
-                            format!("{EVENT_NAME_COMMENT}{SEPARATOR}{event_name}"),
-                            format!("{EVENT_POS_COMMENT}{SEPARATOR}{event_x},{event_y}")],
+                    id,
+                    SmallVec::default(),
+                    FlushedLines::EMPTY,
+                    TranslationMap::from_iter([(
+                        String::new(),
+                        TranslationEntry {
+                            comments: vec![
+                                format!(
+                                    "{comment}{sep}{event_id}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_id_comment()
+                                ),
+                                format!(
+                                    "{comment}{sep}{event_name}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_name_comment()
+                                ),
+                                format!(
+                                    "{comment}{sep}{event_x},{event_y}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_pos_comment()
+                                ),
+                            ],
                             translation: String::new(),
-                        })])
-                    ));
+                        },
+                    )]),
+                ));
             }
 
             for page in pages {
                 // SAFETY: List is always in map files.
-                let list = unsafe {
-                    page[self.labels.list].as_array_mut().unwrap_unchecked()
-                };
+                let list = unsafe { page[self.labels.list].as_array_mut().unwrap_unchecked() };
 
                 self.process_list(list);
             }
@@ -302,7 +300,7 @@ impl Base {
     ///
     fn is_map_unused(&self, id: u16) -> bool {
         // If map ID can't be found in mapinfos, then it is unused in game.
-        if self.engine_type.is_new() {
+        if self.engine_type.is_mvmz() {
             self.mapinfos.get_index(id as usize).is_none()
         } else {
             self.mapinfos.get(&Value::int(i32::from(id))).is_none()
@@ -322,7 +320,7 @@ impl Base {
     fn get_map_order(&self, id: u16) -> i32 {
         // SAFETY: "order" always exists in mapinfos and is always an integer.
         unsafe {
-            if self.engine_type.is_new() {
+            if self.engine_type.is_mvmz() {
                 &self.mapinfos[id as usize]["order"]
             } else {
                 &self.mapinfos[Value::int(i32::from(id))]["order"]

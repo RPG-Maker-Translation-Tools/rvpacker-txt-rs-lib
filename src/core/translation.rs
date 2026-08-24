@@ -2,13 +2,13 @@ use super::base::{Ignore, Output};
 use super::*;
 use crate::{
     BaseFlags, CommentPos, Comments, ProcessedData,
-    constants::{
-        AT_POSITION_MSG, COMMENT_PREFIX, COULD_NOT_SPLIT_LINE_MSG,
-        EVENT_ID_COMMENT, EVENT_NAME_COMMENT, EVENT_POS_COMMENT, ID_COMMENT,
-        IN_FILE_MSG, MAP_DISPLAY_NAME_COMMENT_PREFIX, MAP_ORDER_COMMENT,
-        NAME_COMMENT, SEPARATOR,
-    },
+    constants::{AT_POSITION_MSG, COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG},
+    get_line_separator,
     types::{Error, IndexMapExt, Lines, TranslationEntry, TranslationMap},
+};
+use crate::{
+    get_comment_prefix, get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_id_comment,
+    get_map_display_name_comment_prefix, get_map_order_comment, get_name_comment,
 };
 use gxhash::GxBuildHasher;
 use indexmap::map::Entry;
@@ -59,10 +59,7 @@ impl Base {
     ///
     /// - `translation` - translation file content to parse.
     ///
-    pub(super) fn initialize_translation(
-        &mut self,
-        translation: Option<&str>,
-    ) -> Result<(), Error> {
+    pub(super) fn initialize_translation(&mut self, translation: Option<&str>) -> Result<(), Error> {
         if self.mode.is_default() || self.translation.initialized {
             return Ok(());
         }
@@ -73,12 +70,6 @@ impl Base {
 
         self.translation.initialized = true;
 
-        let trim = if self.file_type.is_main() {
-            self.flags.contains(BaseFlags::Trim)
-        } else {
-            false
-        };
-
         let mut scratch = TranslationMap::default();
         let translation_lines = translation.lines().enumerate();
 
@@ -88,22 +79,19 @@ impl Base {
         let mut first = true;
 
         for (i, line) in translation_lines {
-            if line.starts_with(ID_COMMENT) {
+            if line.starts_with(get_id_comment()) {
                 if id != 0 {
                     if scratch.is_empty() {
-                        let metadata_entry =
-                            self.translation.metadata.entry(id).or_insert(
-                                replace(
-                                    &mut comments,
-                                    smallvec![String::new(); 3],
-                                ),
-                            );
+                        let metadata_entry = self
+                            .translation
+                            .metadata
+                            .entry(id)
+                            .or_insert(replace(&mut comments, smallvec![String::new(); 3]));
 
                         let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
                         if self.mode.is_write()
-                            && (display_name.is_empty()
-                                || display_name.ends_with(SEPARATOR))
+                            && (display_name.is_empty() || display_name.ends_with(get_line_separator()))
                         {
                             continue;
                         }
@@ -114,14 +102,12 @@ impl Base {
                             .or_insert(TranslationMap::with_capacity(512));
                     }
 
-                    self.translation
-                        .maps
-                        .insert(id, scratch.drain(..).collect());
+                    self.translation.maps.insert(id, scratch.drain(..).collect());
                 }
 
                 id = line
-                    .strip_prefix(ID_COMMENT)
-                    .and_then(|n| n.strip_prefix(SEPARATOR))
+                    .strip_prefix(get_id_comment())
+                    .and_then(|n| n.strip_prefix(get_line_separator()))
                     .and_then(|n| n.trim_end().parse::<u16>().ok())
                     .unwrap();
                 first = true;
@@ -131,10 +117,14 @@ impl Base {
                 continue;
             }
 
-            if line.starts_with(COMMENT_PREFIX) {
-                if [EVENT_ID_COMMENT, EVENT_NAME_COMMENT, EVENT_POS_COMMENT]
-                    .into_iter()
-                    .any(|c| line.starts_with(c))
+            if line.starts_with(get_comment_prefix()) {
+                if [
+                    get_event_id_comment(),
+                    get_event_name_comment(),
+                    get_event_pos_comment(),
+                ]
+                .into_iter()
+                .any(|c| line.starts_with(c))
                 {
                     continue;
                 }
@@ -149,13 +139,10 @@ impl Base {
 
                     if pos == CommentPos::DisplayName {
                         // With no closing marker the line past its prefix is
-                        // already the stored form, `{source}<#>{translation}`.
-                        comments[pos as usize] = line
-                            [MAP_DISPLAY_NAME_COMMENT_PREFIX.len()..]
-                            .to_string();
+                        // already the stored form, `{source}{SEP}{translation}`.
+                        comments[pos as usize] = line[get_map_display_name_comment_prefix().len()..].to_string();
                     } else {
-                        comments[pos as usize] =
-                            line.split_once(SEPARATOR).unwrap().1.to_string();
+                        comments[pos as usize] = line.split_once(get_line_separator()).unwrap().1.to_string();
                     }
                 } else {
                     comments.push(line.to_string());
@@ -164,20 +151,12 @@ impl Base {
                 continue;
             }
 
-            let (source, translation) = match split_translation_line(
-                line,
-                trim,
-                self.mode.is_write(),
-            ) {
-                TranslationLine::Split {
-                    source,
-                    translation,
-                } => (source, translation),
+            let (source, translation) = match split_translation_line(line, self.mode.is_write()) {
+                TranslationLine::Split { source, translation } => (source, translation),
                 TranslationLine::Untranslated => continue,
                 TranslationLine::Malformed => {
                     warn!(
-                        "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: \
-                         {i}\n{IN_FILE_MSG}: {file}.txt",
+                        "{COULD_NOT_SPLIT_LINE_MSG}\n{AT_POSITION_MSG}: {i}\n{IN_FILE_MSG}: {file}.txt",
                         i = i + 1,
                         file = self.file_type.to_string().to_lowercase()
                     );
@@ -190,9 +169,7 @@ impl Base {
                 self.translation
                     .top_level_comments
                     .insert(id, top_level_comments.drain(..).collect());
-                self.translation
-                    .metadata
-                    .insert(id, comments.drain(..).collect());
+                self.translation.metadata.insert(id, comments.drain(..).collect());
                 first = false;
             }
 
@@ -205,37 +182,31 @@ impl Base {
                     // every other entry they are empty placeholders that
                     // `push_entries` would skip anyway, so dropping them here
                     // avoids allocating a Vec of empty strings per entry.
-                    comments: replace(
-                        &mut comments,
-                        smallvec![String::new(); 3],
-                    )
-                    .into_iter()
-                    .filter(|comment| !comment.is_empty())
-                    .collect(),
+                    comments: replace(&mut comments, smallvec![String::new(); 3])
+                        .into_iter()
+                        .filter(|comment| !comment.is_empty())
+                        .collect(),
                     translation: translation.into(),
                 },
             );
         }
 
         // Flush the last parsed section at EOF.
-        // Without this, the final `<!>ID<#>...` block is dropped if there
+        // Without this, the final `{COMMENT_PREFIX}ID{SEP}...` block is dropped if there
         // is no following ID marker to trigger the regular section flush path.
         if id != 0 {
             let mut skip_entry = false;
 
             if scratch.is_empty() {
-                let metadata_entry =
-                    self.translation.metadata.entry(id).or_insert(replace(
-                        &mut comments,
-                        smallvec![String::new(); 3],
-                    ));
+                let metadata_entry = self
+                    .translation
+                    .metadata
+                    .entry(id)
+                    .or_insert(replace(&mut comments, smallvec![String::new(); 3]));
 
                 let display_name = &metadata_entry[DISPLAY_NAME_POS];
 
-                if self.mode.is_write()
-                    && (display_name.is_empty()
-                        || display_name.ends_with(SEPARATOR))
-                {
+                if self.mode.is_write() && (display_name.is_empty() || display_name.ends_with(get_line_separator())) {
                     skip_entry = true;
                 } else {
                     self.translation
@@ -246,9 +217,7 @@ impl Base {
             }
 
             if !skip_entry {
-                self.translation
-                    .maps
-                    .insert(id, scratch.drain(..).collect());
+                self.translation.maps.insert(id, scratch.drain(..).collect());
             }
         }
 
@@ -272,12 +241,7 @@ impl Base {
             return;
         }
 
-        let total: usize = self
-            .translation
-            .maps
-            .values()
-            .map(TranslationMap::len)
-            .sum();
+        let total: usize = self.translation.maps.values().map(TranslationMap::len).sum();
 
         self.translation.write_lookup = TranslationMap::with_capacity(total);
 
@@ -285,10 +249,7 @@ impl Base {
             // `or_insert` keeps the first occurrence, matching the order the
             // previous linear scan resolved duplicates in.
             for (source, translation) in map.drain(..) {
-                self.translation
-                    .write_lookup
-                    .entry(source)
-                    .or_insert(translation);
+                self.translation.write_lookup.entry(source).or_insert(translation);
             }
         }
     }
@@ -329,22 +290,14 @@ impl Base {
 
         self.translation.map_index = index;
 
-        if self
-            .skip_events
-            .get(&self.file_type)
-            .is_some_and(|x| x.contains(&id))
+        if self.skip_events.get(&self.file_type).is_some_and(|x| x.contains(&id))
             || (self.file_type.is_map() && self.skip_maps.contains(&id))
         {
             if self.mode.is_append() || self.mode.is_purge() {
                 let metadata = self.get_metadata(id);
 
                 let map = take(self.translation_map_mut());
-                self.output.accumulated.push((
-                    id,
-                    metadata,
-                    FlushedLines::EMPTY,
-                    map,
-                ));
+                self.output.accumulated.push((id, metadata, FlushedLines::EMPTY, map));
             }
 
             self.output.total_length = self.output.lines.len();
@@ -375,15 +328,23 @@ impl Base {
 
                 *x = match pos {
                     CommentPos::Name => {
-                        format!("{NAME_COMMENT}{SEPARATOR}{x}")
+                        format!(
+                            "{comment}{sep}{x}",
+                            comment = get_name_comment(),
+                            sep = get_line_separator()
+                        )
                     }
 
                     CommentPos::Order => {
-                        format!("{MAP_ORDER_COMMENT}{SEPARATOR}{x}")
+                        format!(
+                            "{comment}{sep}{x}",
+                            comment = get_map_order_comment(),
+                            sep = get_line_separator()
+                        )
                     }
 
                     CommentPos::DisplayName => {
-                        format!("{MAP_DISPLAY_NAME_COMMENT_PREFIX}{x}")
+                        format!("{comment}{x}", comment = get_map_display_name_comment_prefix())
                     }
 
                     CommentPos::None => unreachable!(),
@@ -394,48 +355,38 @@ impl Base {
     }
 
     pub(super) fn finish_translation(&mut self) -> ProcessedData {
-        let allow_dup =
-            self.duplicate_mode.is_allow() || self.file_type.is_misc();
+        let allow_dup = self.duplicate_mode.is_allow() || self.file_type.is_misc();
         let skip_events_entry = self.skip_events.get(&self.file_type);
 
         // Allocate 4 MB. It makes no sense to circlejerk `accumulated_translation` to get the precise count, so we'll just take the biggest reasonable amount.
         let output_size = 4096 * 1024;
         let mut output = Vec::with_capacity(output_size);
 
-        let mut accumulated_map: indexmap::IndexMap<
-            String,
-            (u16, TranslationEntry),
-            gxhash::GxBuildHasher,
-        > = if allow_dup {
-            indexmap::IndexMap::default()
-        } else {
-            let len = self.translation.maps.values().fold(0, |mut acc, map| {
-                acc += map.len();
-                acc
-            });
-
-            self.translation.maps.drain(..).fold(
-                indexmap::IndexMap::with_capacity_and_hasher(
-                    len,
-                    GxBuildHasher::default(),
-                ),
-                |mut acc, (k, v)| {
-                    for (key, value) in v {
-                        acc.insert(key, (k, value));
-                    }
+        let mut accumulated_map: indexmap::IndexMap<String, (u16, TranslationEntry), gxhash::GxBuildHasher> =
+            if allow_dup {
+                indexmap::IndexMap::default()
+            } else {
+                let len = self.translation.maps.values().fold(0, |mut acc, map| {
+                    acc += map.len();
                     acc
-                },
-            )
-        };
+                });
+
+                self.translation.maps.drain(..).fold(
+                    indexmap::IndexMap::with_capacity_and_hasher(len, GxBuildHasher::default()),
+                    |mut acc, (k, v)| {
+                        for (key, value) in v {
+                            acc.insert(key, (k, value));
+                        }
+                        acc
+                    },
+                )
+            };
 
         // `output` is consumed here while the rest of `self` is only read, so
         // destructuring makes the two borrows disjoint. `lines` backs every
         // `FlushedLines::Range`.
         let Base {
-            output:
-                Output {
-                    accumulated, lines, ..
-                },
+            output: Output { accumulated, lines, .. },
             ignore,
             ..
         } = self;
@@ -468,9 +419,7 @@ impl Base {
 
             let skip = skip_events_entry.is_some_and(|e| e.contains(id))
                 || (self.file_type.is_map() && self.skip_maps.contains(id))
-                || (self.mode.is_purge()
-                    && self.file_type.is_system()
-                    && *id == 8);
+                || (self.mode.is_purge() && self.file_type.is_system() && *id == 8);
 
             if skip {
                 if self.mode.is_append() || self.mode.is_purge() {
@@ -484,8 +433,7 @@ impl Base {
                 continue;
             }
 
-            if let Some(comments) = self.translation.top_level_comments.get(id)
-            {
+            if let Some(comments) = self.translation.top_level_comments.get(id) {
                 for comment in comments {
                     output.extend_from_slice(comment.as_bytes());
                     output.push(b'\n');
@@ -499,20 +447,13 @@ impl Base {
                     if translation.is_empty() {
                         let moved = take(&mut source);
 
-                        if self.flags.contains(BaseFlags::CreateIgnore)
-                            && !moved.is_empty()
-                        {
+                        if self.flags.contains(BaseFlags::CreateIgnore) && !moved.is_empty() {
                             // Keyed on the id being written, not on whichever
                             // one was selected last - every purged line used to
                             // land in the final section, so nothing matched on
                             // the next read.
                             ignore
-                                .entry_for(Ignore::key(
-                                    self.file_type,
-                                    *id,
-                                    self.flags,
-                                    self.duplicate_mode,
-                                ))
+                                .entry_for(Ignore::key(self.file_type, *id, self.flags, self.duplicate_mode))
                                 .insert(moved);
                         }
                     }
@@ -524,17 +465,15 @@ impl Base {
             }
 
             if *id != prev_id {
-                let has_display_name =
-                    meta.get(DISPLAY_NAME_POS).is_some_and(|c| !c.is_empty());
+                let has_display_name = meta.get(DISPLAY_NAME_POS).is_some_and(|c| !c.is_empty());
 
                 let same_id_has_lines = !flushed.is_empty()
-                    || rest.iter().any(|(next_id, _, next_lines, _)| {
-                        *next_id == *id && !next_lines.is_empty()
-                    });
+                    || rest
+                        .iter()
+                        .any(|(next_id, _, next_lines, _)| *next_id == *id && !next_lines.is_empty());
 
-                let should_push_map = self.file_type.is_map()
-                    && self.map_events
-                    && (same_id_has_lines || has_display_name);
+                let should_push_map =
+                    self.file_type.is_map() && self.map_events && (same_id_has_lines || has_display_name);
 
                 let should_push_other = !flushed.is_empty() || has_display_name;
 
@@ -553,9 +492,7 @@ impl Base {
             // whatever entry happened to be first, so an append emitted a real
             // translation with no source beside it.
             if let Some(entry) = map.shift_remove("") {
-                let next_lines_empty = rest
-                    .first()
-                    .is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
+                let next_lines_empty = rest.first().is_some_and(|(_, _, next_lines, _)| next_lines.is_empty());
 
                 if !next_lines_empty {
                     push_entries(&mut output, "", &entry);
@@ -568,8 +505,7 @@ impl Base {
 
             // Leftovers belong at the end of the id's run, not after each of
             // its blocks.
-            let last_of_id =
-                rest.first().is_none_or(|(next_id, ..)| *next_id != *id);
+            let last_of_id = rest.first().is_none_or(|(next_id, ..)| *next_id != *id);
 
             let empty = TranslationEntry::default();
 
@@ -579,20 +515,14 @@ impl Base {
 
                 let translation = match (allow_dup, self.mode.is_append()) {
                     (true, true) => {
-                        if let Some((key, entry)) =
-                            carried.swap_remove_entry(source)
-                        {
+                        if let Some((key, entry)) = carried.swap_remove_entry(source) {
                             consumed.insert(key, entry);
                         }
 
                         consumed.get(source).unwrap_or(&empty)
                     }
                     (false, true) => {
-                        deduplicated = accumulated_map
-                            .swap_remove(source)
-                            .unzip()
-                            .1
-                            .unwrap_or_default();
+                        deduplicated = accumulated_map.swap_remove(source).unzip().1.unwrap_or_default();
 
                         &deduplicated
                     }
@@ -637,31 +567,18 @@ impl Base {
         let metadata = self.get_metadata(id);
 
         if self.mode.is_purge() {
-            if !self.translation_map().is_empty()
-                || metadata
-                    .get(DISPLAY_NAME_POS)
-                    .is_some_and(|x| !x.is_empty())
-            {
+            if !self.translation_map().is_empty() || metadata.get(DISPLAY_NAME_POS).is_some_and(|x| !x.is_empty()) {
                 let map = take(self.translation_map_mut());
-                self.output.accumulated.push((
-                    id,
-                    metadata,
-                    FlushedLines::EMPTY,
-                    map,
-                ));
+                self.output.accumulated.push((id, metadata, FlushedLines::EMPTY, map));
             }
         } else if self.duplicate_mode.is_allow() || self.file_type.is_misc() {
-            if self
-                .skip_events
-                .get(&self.file_type)
-                .is_some_and(|e| e.contains(&id))
+            if self.skip_events.get(&self.file_type).is_some_and(|e| e.contains(&id))
                 || (self.file_type.is_map() && self.skip_maps.contains(&id))
             {
                 self.output.lines.clear();
                 self.translation_map_mut().clear();
             } else {
-                let lines =
-                    FlushedLines::Owned(self.output.lines.drain(..).collect());
+                let lines = FlushedLines::Owned(self.output.lines.drain(..).collect());
 
                 let map = take(self.translation_map_mut());
                 self.output.accumulated.push((id, metadata, lines, map));
@@ -671,26 +588,17 @@ impl Base {
             let current_length = self.output.lines.len() - total_length;
 
             // Left in `self.output.lines`; only the range is recorded, so nothing is copied.
-            let lines = FlushedLines::Range(
-                total_length..total_length + current_length,
-            );
+            let lines = FlushedLines::Range(total_length..total_length + current_length);
 
-            self.output.accumulated.push((
-                id,
-                metadata,
-                lines,
-                TranslationMap::default(),
-            ));
+            self.output
+                .accumulated
+                .push((id, metadata, lines, TranslationMap::default()));
 
             self.output.total_length += current_length;
         }
     }
 
-    pub(super) fn update_metadata(
-        &mut self,
-        id: u16,
-        metadata_vec: Vec<(CommentPos, &str)>,
-    ) {
+    pub(super) fn update_metadata(&mut self, id: u16, metadata_vec: Vec<(CommentPos, &str)>) {
         let metadata = self
             .translation
             .metadata
@@ -701,16 +609,12 @@ impl Base {
             metadata.resize(3, String::new());
         }
 
-        for (entry_id, entry) in
-            metadata_vec.into_iter().filter(|(_, x)| !x.is_empty())
-        {
+        for (entry_id, entry) in metadata_vec.into_iter().filter(|(_, x)| !x.is_empty()) {
             if entry_id == CommentPos::DisplayName {
                 if self.mode.is_append() {
-                    let Some((source, mut translation)) =
-                        metadata[entry_id as usize].split_once(SEPARATOR)
+                    let Some((source, mut translation)) = metadata[entry_id as usize].split_once(get_line_separator())
                     else {
-                        metadata[entry_id as usize] =
-                            format!("{entry}{SEPARATOR}");
+                        metadata[entry_id as usize] = format!("{entry}{sep}", sep = get_line_separator());
                         continue;
                     };
 
@@ -718,10 +622,9 @@ impl Base {
                         translation = "";
                     }
 
-                    metadata[entry_id as usize] =
-                        format!("{entry}{SEPARATOR}{translation}");
+                    metadata[entry_id as usize] = format!("{entry}{sep}{translation}", sep = get_line_separator());
                 } else {
-                    metadata[entry_id as usize] = format!("{entry}{SEPARATOR}");
+                    metadata[entry_id as usize] = format!("{entry}{sep}", sep = get_line_separator());
                 }
 
                 continue;

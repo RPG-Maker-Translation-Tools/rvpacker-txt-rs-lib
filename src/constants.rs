@@ -1,8 +1,6 @@
-use const_format::formatcp;
 use phf::phf_set;
 
-pub(crate) const COULD_NOT_SPLIT_LINE_MSG: &str =
-    "Couldn't split line to source and translation parts.";
+pub(crate) const COULD_NOT_SPLIT_LINE_MSG: &str = "Couldn't split line to source and translation parts.";
 pub(crate) const AT_POSITION_MSG: &str = "At position";
 pub(crate) const IN_FILE_MSG: &str = "In file";
 
@@ -12,29 +10,9 @@ pub(crate) const SYMBOLS: phf::Set<char> = phf_set! {
     ',', '.', '(', ')', '+', '-', ':', ';', '[', ']', '^', '~', '%', '&', '!', '№', '$', '@', '`', '*', '/', '→', '×', '？', '?', 'ｘ', '％', '▼', '|', '♥', '♪', '！', '：', '〜', '『', '』', '「', '」', '〽', '。', '…', '‥', '＝', '゠', '、', '，', '【', '】', '［', '］', '｛', '｝', '（', '）', '〔', '〕', '｟', '｠', '〘', '〙', '〈', '〉', '《', '》', '・', '\\', '#', '<', '>', '=', '_', 'ー', '※', '▶', 'Ⅰ', 'ⅰ', 'Ⅱ', 'ⅱ', 'Ⅲ', 'ⅲ', 'Ⅳ', 'ⅳ', 'Ⅴ', 'ⅴ', 'Ⅵ', 'ⅵ', 'Ⅶ', 'ⅶ', 'Ⅷ', 'ⅷ', 'Ⅸ', 'ⅸ', 'Ⅹ', 'ⅹ', 'Ⅺ', 'ⅺ', 'Ⅻ', 'ⅻ', 'Ⅼ', 'ⅼ', 'Ⅽ', 'ⅽ', 'Ⅾ', 'ⅾ', 'Ⅿ', 'ⅿ', ' ', '\t', '\r', '\n'
 };
 
-pub const NEW_LINE: &str = r"\#";
-pub const SEPARATOR: &str = "<#>";
-
-pub(crate) const COMMENT_PREFIX: &str = "<!>";
-
-pub(crate) const ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ID");
-pub(crate) const NAME_COMMENT: &str = formatcp!("{COMMENT_PREFIX}NAME");
-
-pub(crate) const EVENT_ID_COMMENT: &str = formatcp!("{COMMENT_PREFIX}EVENT ID");
-pub(crate) const EVENT_NAME_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT NAME");
-pub(crate) const EVENT_POS_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}EVENT POS");
-
-pub(crate) const MAP_ORDER_COMMENT: &str = formatcp!("{COMMENT_PREFIX}ORDER");
-pub(crate) const MAP_DISPLAY_NAME_COMMENT_PREFIX: &str =
-    formatcp!("{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: ");
-pub(crate) const IGNORE_ENTRY_COMMENT: &str =
-    formatcp!("{COMMENT_PREFIX}Ignore Entry");
-
-pub(crate) const GLOB_ENTRY_COMMENT: &str = formatcp!("{COMMENT_PREFIX}Glob");
-
-pub(crate) const SCRIPT_COMMENT: &str = formatcp!("{COMMENT_PREFIX}SCRIPT");
+pub const DEFAULT_COMMENT_PREFIX: &str = "<!>";
+pub const DEFAULT_LINE_BREAK: &str = r"\#";
+pub const DEFAULT_LINE_SEPARATOR: &str = "<#>";
 
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
 pub const RVPACKER_METADATA_FILE: &str = ".rvpacker-metadata";

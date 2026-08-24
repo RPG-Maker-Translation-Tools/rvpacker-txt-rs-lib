@@ -59,7 +59,7 @@ impl Base {
     /// use std::fs::read;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut base = Base::new(Mode::read(), EngineType::New);
+    ///     let mut base = Base::new(Mode::read(), EngineType::MVMZ);
     ///
     ///     let plugins_file_content = read("plugins.js")?;
     ///     base.process_plugins(&plugins_file_content, None)?;
@@ -106,13 +106,9 @@ impl Base {
 
             processed = true;
             // SAFETY: Each plugin always contains name.
-            let plugin_name =
-                unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
+            let plugin_name = unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
 
-            self.update_metadata(
-                id,
-                Vec::from([(CommentPos::Name, plugin_name)]),
-            );
+            self.update_metadata(id, Vec::from([(CommentPos::Name, plugin_name)]));
             self.parse_plugin(None, plugin_object);
             self.flush_translation(id);
         }
@@ -133,8 +129,7 @@ impl Base {
             if key_string.starts_with("LATIN") {
                 false
             } else {
-                PLUGINS_REGEXPS
-                    .with(|r| r.iter().any(|re| re.is_match(key_string)))
+                PLUGINS_REGEXPS.with(|r| r.iter().any(|re| re.is_match(key_string)))
             }
         };
 
@@ -146,13 +141,9 @@ impl Base {
 
                 if !(value_string.trim().is_empty()
                     || IS_ONLY_SYMBOLS_RE.with(|r| r.is_match(value_string))
-                    || ["true", "false", "none", "time", "off"]
-                        .contains(&value_string.as_str())
+                    || ["true", "false", "none", "time", "off"].contains(&value_string.as_str())
                     || value_string.starts_with("this.")
-                        && value_string
-                            .chars()
-                            .nth(5)
-                            .is_some_and(char::is_alphabetic)
+                        && value_string.chars().nth(5).is_some_and(char::is_alphabetic)
                         && value_string.ends_with(')')
                     || value_string.starts_with("rgba"))
                     || key.is_some_and(|x| x.starts_with("LATIN"))
@@ -164,9 +155,7 @@ impl Base {
                         // file was read, so the lookup has to be denormalized
                         // too. Looking up the normalized form left any plugin
                         // string with a line break in it unwritable.
-                        if let Some(translated) =
-                            self.get_key(&string.denormalize())
-                        {
+                        if let Some(translated) = self.get_key(&string.denormalize()) {
                             *value = Value::string(translated.as_str());
                         }
                     } else {

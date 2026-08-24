@@ -78,8 +78,7 @@ impl Base {
 
         // Per-call state, kept out of `Base` so that borrowing it stays disjoint
         // from the `&mut self` the per-value helpers need.
-        let mut system_value =
-            parse_rpgm_file(content, self.engine_type, self.file_type)?;
+        let mut system_value = parse_rpgm_file(content, self.engine_type, self.file_type)?;
         let mut processed = false;
 
         for (entry_id, entry_name) in [
@@ -107,10 +106,7 @@ impl Base {
 
             processed = true;
 
-            self.update_metadata(
-                id,
-                Vec::from([(CommentPos::Name, entry_name)]),
-            );
+            self.update_metadata(id, Vec::from([(CommentPos::Name, entry_name)]));
 
             if id <= 5 {
                 let label = [
@@ -147,8 +143,7 @@ impl Base {
     }
 
     fn process_terms(&mut self, system_value: &mut Value) {
-        let Some(terms) = system_value[self.labels.terms].as_object_mut()
-        else {
+        let Some(terms) = system_value[self.labels.terms].as_object_mut() else {
             return;
         };
 
@@ -178,10 +173,7 @@ impl Base {
             self.insert_string(Cow::Borrowed(extracted));
         } else if self.mode.is_write() {
             if let Some(translated) = self.get_key(extracted) {
-                *value = Base::make_string_value(
-                    translated,
-                    self.engine_type.is_new(),
-                );
+                *value = Base::make_string_value(translated, self.engine_type.is_mvmz());
             }
         } else {
             self.translation_map_mut()
@@ -197,8 +189,7 @@ impl Base {
     fn process_game_title(&mut self, system_value: &mut Value) {
         if self.mode.is_write() {
             if !self.game_title.is_empty() {
-                system_value[self.labels.game_title] =
-                    Value::string(self.game_title.as_str());
+                system_value[self.labels.game_title] = Value::string(self.game_title.as_str());
             }
         } else {
             // User previously set the game title through set_game_title
@@ -208,12 +199,8 @@ impl Base {
                 return;
             }
 
-            if let Some(game_title_value) =
-                system_value.get(self.labels.game_title)
-            {
-                let Some(game_title) =
-                    self.extract_string(game_title_value, true)
-                else {
+            if let Some(game_title_value) = system_value.get(self.labels.game_title) {
+                let Some(game_title) = self.extract_string(game_title_value, true) else {
                     return;
                 };
 

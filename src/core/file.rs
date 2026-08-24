@@ -1,6 +1,7 @@
 use super::IgnoreEntry;
 use crate::{
-    constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX},
+    constants::INSTANCE_VAR_PREFIX,
+    get_ignore_entry_comment, get_line_separator,
     types::{DuplicateMode, EngineType, Error, IgnoreMap, RPGMFileType},
 };
 use marshal_rs::{Value, load_binary, load_utf8};
@@ -28,21 +29,15 @@ const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
 /// - [`Error::JsonParse`] - if unable to parse the JSON data.
 ///
-pub fn parse_rpgm_file(
-    mut content: &[u8],
-    engine_type: EngineType,
-    file_type: RPGMFileType,
-) -> Result<Value, Error> {
-    if engine_type.is_new() {
+pub fn parse_rpgm_file(mut content: &[u8], engine_type: EngineType, file_type: RPGMFileType) -> Result<Value, Error> {
+    if engine_type.is_mvmz() {
         // MZ includes Byte Order Mark in files.
         if content.starts_with(BOM) {
             content = &content[3..];
         }
 
         // SAFETY: JSON is always valid UTF-8.
-        let parsed = from_str::<SerdeValue>(unsafe {
-            std::str::from_utf8_unchecked(content)
-        })?;
+        let parsed = from_str::<SerdeValue>(unsafe { std::str::from_utf8_unchecked(content) })?;
 
         Ok(Value::from(parsed))
     } else {
@@ -95,10 +90,7 @@ pub fn filter_maps<'a>(
     result.sort_by_key(|entry| {
         let filename = entry.file_name();
         let filename_str = filename.to_str().unwrap_or("");
-        let digits: String = filename_str[3..]
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
+        let digits: String = filename_str[3..].chars().take_while(|c| c.is_ascii_digit()).collect();
         digits.parse::<u32>().unwrap_or(0)
     });
 
@@ -127,9 +119,7 @@ pub fn filter_other<'a>(
             }
             let filename = entry.file_name();
             let filename_path = Path::new(&filename);
-            let basename = filename_path
-                .file_stem()
-                .and_then(|basename| basename.to_str())?;
+            let basename = filename_path.file_stem().and_then(|basename| basename.to_str())?;
             let extension = filename_path.extension()?;
             let file_type = RPGMFileType::from_filename(basename);
             if extension == engine_extension && file_type.is_other() {
@@ -156,11 +146,7 @@ pub fn filter_other<'a>(
 /// Parsed [`IgnoreMap`].
 ///
 #[must_use]
-pub fn parse_ignore(
-    ignore_file_content: &str,
-    duplicate_mode: DuplicateMode,
-    read: bool,
-) -> IgnoreMap {
+pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, read: bool) -> IgnoreMap {
     /// Canonical key for a section header.
     ///
     /// With duplicates removed every section of a file shares one entry, so the
@@ -168,21 +154,17 @@ pub fn parse_ignore(
     /// produce exactly what `Base::get_ignore_entry` builds, including the
     /// comment prefix - previously the first header in a file kept its prefix
     /// while every later one lost it, so only the first section ever matched.
-    fn section_key(
-        line: &str,
-        duplicate_mode: DuplicateMode,
-        read: bool,
-    ) -> String {
-        let Some(rest) = line.strip_prefix(IGNORE_ENTRY_COMMENT) else {
+    fn section_key(line: &str, duplicate_mode: DuplicateMode, read: bool) -> String {
+        let Some(rest) = line.strip_prefix(get_ignore_entry_comment()) else {
             return line.to_owned();
         };
 
         // These three are single-section files; there is nothing to collapse.
         let collapse = read
             && duplicate_mode.is_remove()
-            && !(rest.starts_with("<#>System")
-                || rest.starts_with("<#>Scripts")
-                || rest.starts_with("<#>Plugins"));
+            && !(rest.starts_with(&format!("{sep}System", sep = get_line_separator()))
+                || rest.starts_with(&format!("{sep}Scripts", sep = get_line_separator()))
+                || rest.starts_with(&format!("{sep}Plugins", sep = get_line_separator())));
 
         if !collapse {
             return line.to_owned();
@@ -190,7 +172,7 @@ pub fn parse_ignore(
 
         // A hand-written file may leave the id off entirely.
         let name = rest.split_once(':').map_or(rest, |(name, _)| name);
-        format!("{IGNORE_ENTRY_COMMENT}{name}")
+        format!("{comment}{name}", comment = get_ignore_entry_comment())
     }
 
     let mut ignore_map = IgnoreMap::default();
@@ -199,9 +181,8 @@ pub fn parse_ignore(
     let mut current: Option<usize> = None;
 
     for line in ignore_file_content.lines().filter(|line| !line.is_empty()) {
-        if line.starts_with(IGNORE_ENTRY_COMMENT) {
-            let entry =
-                ignore_map.entry(section_key(line, duplicate_mode, read));
+        if line.starts_with(get_ignore_entry_comment()) {
+            let entry = ignore_map.entry(section_key(line, duplicate_mode, read));
 
             current = Some(entry.index());
             entry.or_insert_with(|| IgnoreEntry::with_capacity(128));
@@ -247,10 +228,7 @@ pub fn parse_ignore(
 pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
     fn trim_bytes(bytes: &[u8]) -> &[u8] {
         let start = bytes.iter().position(|&b| !is_space(b)).unwrap_or(0);
-        let end = bytes
-            .iter()
-            .rposition(|&b| !is_space(b))
-            .map_or(0, |i| i + 1);
+        let end = bytes.iter().rposition(|&b| !is_space(b)).map_or(0, |i| i + 1);
         &bytes[start..end]
     }
 
@@ -331,9 +309,7 @@ pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
 ///     Ok(())
 /// }
 /// ```
-pub fn get_system_title(
-    mut system_file_content: &str,
-) -> Result<String, Error> {
+pub fn get_system_title(mut system_file_content: &str) -> Result<String, Error> {
     // MZ includes Byte Order Mark in files.
     if system_file_content.as_bytes().starts_with(BOM) {
         system_file_content = &system_file_content[BOM.len()..];

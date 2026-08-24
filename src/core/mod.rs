@@ -27,15 +27,12 @@ pub mod text;
 mod translation;
 
 pub use base::Base;
-pub use file::{
-    filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore,
-    parse_rpgm_file,
-};
+pub use file::{filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore, parse_rpgm_file};
 pub use ignore::{Glob, IgnoreEntry};
 
 pub(crate) use text::{
-    CustomReplace, TranslationLine, ends_with_if_index, push_entries,
-    push_metadata, split_translation_line, string_is_only_symbols,
+    CustomReplace, TranslationLine, ends_with_if_index, push_entries, push_metadata, split_translation_line,
+    string_is_only_symbols,
 };
 pub(crate) use translation::FlushedLines;
 

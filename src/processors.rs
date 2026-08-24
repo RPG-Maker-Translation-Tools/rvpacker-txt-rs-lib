@@ -5,7 +5,7 @@ use crate::{
     types::{BaseFlags, DuplicateMode, EngineType, Error, FileFlags, Mode},
 };
 use gxhash::{HashMap, HashSet, gxhash64};
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::{
     fs::{DirEntry, create_dir_all, read, read_dir, read_to_string, write},
     mem::take,
@@ -59,7 +59,7 @@ pub struct Processor {
     /// Which RPG Maker files to process. See [`FileFlags`].
     pub file_flags: FileFlags,
 
-    /// How to process the text - trimming, ignore entries, and so on. See [`BaseFlags`].
+    /// How to process the text. See [`BaseFlags`].
     ///
     /// Must match the flags used on read when writing or purging.
     pub flags: BaseFlags,
@@ -159,16 +159,12 @@ impl Processor {
         if flags.intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore) {
             ignore_file_path = translation_path.join(RVPACKER_IGNORE_FILE);
 
-            let ignore_file_content = read_to_string(&ignore_file_path)
-                .map_err(|e| Error::Io(ignore_file_path.clone(), e));
+            let ignore_file_content =
+                read_to_string(&ignore_file_path).map_err(|e| Error::Io(ignore_file_path.clone(), e));
 
             match ignore_file_content {
                 Ok(content) => {
-                    base.ignore.map = parse_ignore(
-                        &content,
-                        self.duplicate_mode,
-                        mode.is_read(),
-                    );
+                    base.ignore.map = parse_ignore(&content, self.duplicate_mode, mode.is_read());
                 }
 
                 Err(err) if flags.contains(BaseFlags::Ignore) => {
@@ -179,24 +175,14 @@ impl Processor {
             }
         }
 
-        let output_dir = if mode.is_read() {
-            translation_path
-        } else {
-            output_path
-        };
+        let output_dir = if mode.is_read() { translation_path } else { output_path };
 
-        create_dir_all(output_dir)
-            .map_err(|e| Error::Io(output_dir.to_path_buf(), e))?;
+        create_dir_all(output_dir).map_err(|e| Error::Io(output_dir.to_path_buf(), e))?;
 
-        let data_output_path = output_path.join(if engine_type.is_new() {
-            "data"
-        } else {
-            "Data"
-        });
+        let data_output_path = output_path.join(if engine_type.is_mvmz() { "data" } else { "Data" });
 
         if mode.is_write() {
-            create_dir_all(&data_output_path)
-                .map_err(|e| Error::Io(data_output_path.clone(), e))?;
+            create_dir_all(&data_output_path).map_err(|e| Error::Io(data_output_path.clone(), e))?;
         }
 
         let pre_msg = match mode {
@@ -216,9 +202,7 @@ impl Processor {
                 return Ok(None);
             }
 
-            read_to_string(p)
-                .map_err(|e| Error::Io(p.to_path_buf(), e))
-                .map(Some)
+            read_to_string(p).map_err(|e| Error::Io(p.to_path_buf(), e)).map(Some)
         };
 
         // `true` when a translation file is already there and the caller asked us
@@ -226,8 +210,7 @@ impl Processor {
         let already_exists = |p: &Path| {
             if mode.is_default_default() && p.exists() {
                 info!(
-                    "{}: File already exists. Use append mode to append text \
-                     or force mode to overwrite.",
+                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
                     p.display()
                 );
                 true
@@ -236,10 +219,21 @@ impl Processor {
             }
         };
 
+        // `true`, and warns, when a translation file is required (append,
+        // write or purge all need one) but doesn't exist. Callers skip the
+        // file rather than letting `load_translation` fail and abort every
+        // other file in the run over this one being missing.
+        let missing_translation = |p: &Path| {
+            if !mode.is_default() && !p.exists() {
+                warn!("{}: Translation file does not exist. Skipping.", p.display());
+                true
+            } else {
+                false
+            }
+        };
+
         let mut hash = |content: &[u8], filename: &str| {
-            let filename = &filename
-                [0..filename.find('.').unwrap_or(filename.len())]
-                .to_ascii_lowercase();
+            let filename = &filename[0..filename.find('.').unwrap_or(filename.len())].to_ascii_lowercase();
             let hash = gxhash64(content, self.duplicate_mode as i64);
             let mut unchanged = false;
 
@@ -251,9 +245,8 @@ impl Processor {
 
             if unchanged && self.mode.is_append_default() {
                 info!(
-                    "{filename} hasn't changed since the last read. Skipping \
-                     it. Set `force` on the read mode, if you want to \
-                     forcefully append data."
+                    "{filename} hasn't changed since the last read. Skipping it. Set `force` on the read mode, if you \
+                     want to forcefully append data."
                 );
 
                 return ControlFlow::Break(());
@@ -290,29 +283,24 @@ impl Processor {
         if self.file_flags.contains(FileFlags::Map) {
             let translation_file_path = translation_path.join("maps.txt");
 
-            if !already_exists(&translation_file_path) {
-                let mapinfos_path =
-                    source_path.join(format!("MapInfos.{engine_extension}"));
-                let mapinfos = read(&mapinfos_path)
-                    .map_err(|e| Error::Io(mapinfos_path, e))?;
+            if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
+                let mapinfos_path = source_path.join(format!("MapInfos.{engine_extension}"));
+                let mapinfos = read(&mapinfos_path).map_err(|e| Error::Io(mapinfos_path, e))?;
 
                 let translation = load_translation(&translation_file_path)?;
 
                 base.map_events = self.map_events;
-                base.skip_maps =
-                    take(&mut self.skip_maps).into_iter().collect();
+                base.skip_maps = take(&mut self.skip_maps).into_iter().collect();
 
                 base.begin_maps();
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
-                    let filename =
-                        path.file_name().and_then(|p| p.to_str()).unwrap();
+                    let filename = path.file_name().and_then(|p| p.to_str()).unwrap();
 
                     debug!("{filename}: {pre_msg}");
 
-                    let content =
-                        read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+                    let content = read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
                     let id = Base::parse_map_id(filename);
 
@@ -323,18 +311,12 @@ impl Processor {
                         skipped = true;
                     }
 
-                    let result = base.process_map(
-                        filename,
-                        &content,
-                        &mapinfos,
-                        translation.as_deref(),
-                    )?;
+                    let result = base.process_map(filename, &content, &mapinfos, translation.as_deref())?;
 
                     if mode.is_write() {
                         if let Some(result) = result {
                             let output_path = data_output_path.join(filename);
-                            write(&output_path, result)
-                                .map_err(|e| Error::Io(output_path, e))?;
+                            write(&output_path, result).map_err(|e| Error::Io(output_path, e))?;
                         }
                     }
 
@@ -351,8 +333,7 @@ impl Processor {
                         ProcessedData::RPGMData(_) => unreachable!(),
                     };
 
-                    write(&translation_file_path, contents)
-                        .map_err(|e| Error::Io(translation_file_path, e))?;
+                    write(&translation_file_path, contents).map_err(|e| Error::Io(translation_file_path, e))?;
                 }
             }
         }
@@ -360,8 +341,7 @@ impl Processor {
         if self.file_flags.intersects(FileFlags::other()) {
             for entry in filter_other(entries.iter(), engine_extension) {
                 let path = entry.path();
-                let filename =
-                    path.file_name().and_then(|p| p.to_str()).unwrap();
+                let filename = path.file_name().and_then(|p| p.to_str()).unwrap();
 
                 debug!("{filename}: {pre_msg}");
 
@@ -371,35 +351,24 @@ impl Processor {
                     continue;
                 }
 
-                let translation_file_path = translation_path.join(
-                    Path::new(&filename.to_ascii_lowercase())
-                        .with_extension("txt"),
-                );
+                let translation_file_path =
+                    translation_path.join(Path::new(&filename.to_ascii_lowercase()).with_extension("txt"));
 
-                if already_exists(&translation_file_path) {
+                if already_exists(&translation_file_path) || missing_translation(&translation_file_path) {
                     continue;
                 }
 
                 let translation = load_translation(&translation_file_path)?;
 
-                let content =
-                    read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+                let content = read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
                 if hash(&content, filename).is_break() {
                     continue;
                 }
 
-                let data = base.process_other(
-                    filename,
-                    &content,
-                    translation.as_deref(),
-                )?;
+                let data = base.process_other(filename, &content, translation.as_deref())?;
 
-                emit(
-                    data,
-                    data_output_path.join(filename),
-                    translation_file_path,
-                )?;
+                emit(data, data_output_path.join(filename), translation_file_path)?;
 
                 info!("{filename}: {post_msg}");
             }
@@ -408,27 +377,21 @@ impl Processor {
         if self.file_flags.contains(FileFlags::System) {
             let translation_file_path = translation_path.join("system.txt");
 
-            if !already_exists(&translation_file_path) {
+            if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
                 let translation = load_translation(&translation_file_path)?;
                 let filename = format!("System.{engine_extension}");
 
                 debug!("{filename}: {pre_msg}");
 
                 let system_file_path = source_path.join(&filename);
-                let content = read(&system_file_path)
-                    .map_err(|e| Error::Io(system_file_path, e))?;
+                let content = read(&system_file_path).map_err(|e| Error::Io(system_file_path, e))?;
 
                 if !hash(&content, &filename).is_break() {
                     base.set_game_title(&self.game_title);
 
-                    let data =
-                        base.process_system(&content, translation.as_deref())?;
+                    let data = base.process_system(&content, translation.as_deref())?;
 
-                    emit(
-                        data,
-                        data_output_path.join(&filename),
-                        translation_file_path,
-                    )?;
+                    emit(data, data_output_path.join(&filename), translation_file_path)?;
 
                     info!("{filename}: {post_msg}");
                 }
@@ -436,66 +399,46 @@ impl Processor {
         }
 
         if self.file_flags.contains(FileFlags::Scripts) {
-            if engine_type.is_new() {
-                let translation_file_path =
-                    translation_path.join("plugins.txt");
+            if engine_type.is_mvmz() {
+                let translation_file_path = translation_path.join("plugins.txt");
 
-                if !already_exists(&translation_file_path) {
+                if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
                     debug!("plugins.txt: {pre_msg}");
 
                     let translation = load_translation(&translation_file_path)?;
 
-                    let plugins_file_path =
-                        source_path.parent().unwrap().join("js/plugins.js");
-                    let content = read(&plugins_file_path)
-                        .map_err(|e| Error::Io(plugins_file_path, e))?;
+                    let plugins_file_path = source_path.parent().unwrap().join("js/plugins.js");
+                    let content = read(&plugins_file_path).map_err(|e| Error::Io(plugins_file_path, e))?;
 
                     if !hash(&content, "plugins.js").is_break() {
-                        let data = base.process_plugins(
-                            &content,
-                            translation.as_deref(),
-                        )?;
+                        let data = base.process_plugins(&content, translation.as_deref())?;
 
                         if mode.is_write() {
                             let js_output_path = output_path.join("js");
-                            create_dir_all(&js_output_path)
-                                .map_err(|e| Error::Io(js_output_path, e))?;
+                            create_dir_all(&js_output_path).map_err(|e| Error::Io(js_output_path, e))?;
                         }
 
-                        emit(
-                            data,
-                            output_path.join("js/plugins.js"),
-                            translation_file_path,
-                        )?;
+                        emit(data, output_path.join("js/plugins.js"), translation_file_path)?;
 
                         info!("plugins.js: {post_msg}");
                     }
                 }
             } else {
-                let translation_file_path =
-                    translation_path.join("scripts.txt");
+                let translation_file_path = translation_path.join("scripts.txt");
 
-                if !already_exists(&translation_file_path) {
+                if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
                     debug!("scripts.txt: {pre_msg}");
 
                     let translation = load_translation(&translation_file_path)?;
 
                     let filename = format!("Scripts.{engine_extension}");
                     let scripts_file_path = source_path.join(&filename);
-                    let content = read(&scripts_file_path)
-                        .map_err(|e| Error::Io(scripts_file_path, e))?;
+                    let content = read(&scripts_file_path).map_err(|e| Error::Io(scripts_file_path, e))?;
 
                     if !hash(&content, &filename).is_break() {
-                        let data = base.process_scripts(
-                            &content,
-                            translation.as_deref(),
-                        )?;
+                        let data = base.process_scripts(&content, translation.as_deref())?;
 
-                        emit(
-                            data,
-                            data_output_path.join(&filename),
-                            translation_file_path,
-                        )?;
+                        emit(data, data_output_path.join(&filename), translation_file_path)?;
 
                         info!("{filename}: {post_msg}");
                     }
@@ -506,25 +449,26 @@ impl Processor {
         if flags.contains(BaseFlags::CreateIgnore) {
             use std::fmt::Write;
 
-            let contents: String = take(&mut base.ignore.map).into_iter().fold(
-                String::new(),
-                |mut output, (file, lines)| {
+            let contents: String = take(&mut base.ignore.map)
+                .into_iter()
+                // A section is created for every id as it's processed, but
+                // only gains lines if something under it was actually
+                // purged - most ids keep their translation and leave it
+                // empty. Writing those out produced a header with nothing
+                // under it.
+                .filter(|(_, lines)| !lines.is_empty())
+                .fold(String::new(), |mut output, (file, lines)| {
                     let _ = write!(
                         output,
                         "{}\n{}",
                         file,
-                        lines
-                            .lines()
-                            .map(|line| line.into_owned() + "\n")
-                            .collect::<String>()
+                        lines.lines().map(|line| line.into_owned() + "\n").collect::<String>()
                     );
 
                     output
-                },
-            );
+                });
 
-            write(&ignore_file_path, contents)
-                .map_err(|e| Error::Io(ignore_file_path, e))?;
+            write(&ignore_file_path, contents).map_err(|e| Error::Io(ignore_file_path, e))?;
         }
 
         Ok(())

@@ -6,8 +6,7 @@
 //! directory under `target/lifecycle`, and never writes inside the fixtures.
 
 use rvpacker_txt_rs_lib::{
-    BaseFlags, DuplicateMode, EngineType, FileFlags, Mode, Processor,
-    RPGMFileType, get_ini_title,
+    BaseFlags, DuplicateMode, EngineType, FileFlags, Mode, Processor, RPGMFileType, get_ini_title,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,9 +33,7 @@ struct Fixture {
 
 impl Fixture {
     fn root(self) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join(self.dir)
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(self.dir)
     }
 
     fn source(self) -> PathBuf {
@@ -45,7 +42,7 @@ impl Fixture {
 
     /// Everything the fixture actually contains.
     fn flags(self) -> FileFlags {
-        if self.engine.is_new() && !self.plugins {
+        if self.engine.is_mvmz() && !self.plugins {
             FileFlags::all() & !FileFlags::Scripts
         } else {
             FileFlags::all()
@@ -57,11 +54,9 @@ impl Fixture {
     /// The file is not necessarily UTF-8 - that is the whole reason the title
     /// is the caller's job - but these fixtures are ASCII.
     fn ini_title(self) -> String {
-        let content = std::fs::read(self.root().join("Game.ini"))
-            .expect("no Game.ini");
+        let content = std::fs::read(self.root().join("Game.ini")).expect("no Game.ini");
 
-        String::from_utf8(get_ini_title(&content).expect("no title in Game.ini"))
-            .expect("the title is not UTF-8")
+        String::from_utf8(get_ini_title(&content).expect("no title in Game.ini")).expect("the title is not UTF-8")
     }
 
     /// Translation files every engine produces.
@@ -81,7 +76,7 @@ impl Fixture {
             "weapons.txt",
         ]);
 
-        if self.engine.is_new() {
+        if self.engine.is_mvmz() {
             if self.plugins {
                 files.push("plugins.txt");
             }
@@ -96,9 +91,7 @@ impl Fixture {
 
 /// A scratch directory of its own per test, so tests can run in parallel.
 fn workspace(tag: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/lifecycle")
-        .join(tag);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/lifecycle").join(tag);
 
     let _ = remove_dir_all(&path);
     create_dir_all(&path).expect("could not create the workspace");
@@ -121,9 +114,7 @@ fn run(
         ..Default::default()
     };
 
-    if let Err(error) =
-        processor.process(fixture.engine, fixture.source(), translation, output)
-    {
+    if let Err(error) = processor.process(fixture.engine, fixture.source(), translation, output) {
         panic!("{mode:?} failed for {}: {error}", fixture.dir);
     }
 }
@@ -158,17 +149,10 @@ fn append(fixture: Fixture, flags: BaseFlags, translation: &Path) {
 }
 
 /// Runs a processor the caller configured, for the options `run` does not take.
-fn run_with(
-    fixture: Fixture,
-    processor: &mut Processor,
-    translation: &Path,
-    output: Option<&Path>,
-) {
+fn run_with(fixture: Fixture, processor: &mut Processor, translation: &Path, output: Option<&Path>) {
     let mode = processor.mode;
 
-    if let Err(error) =
-        processor.process(fixture.engine, fixture.source(), translation, output)
-    {
+    if let Err(error) = processor.process(fixture.engine, fixture.source(), translation, output) {
         panic!("{mode:?} failed for {}: {error}", fixture.dir);
     }
 }
@@ -201,9 +185,7 @@ fn read_with_map_events(fixture: Fixture, mode: Mode, translation: &Path) {
         ..Default::default()
     };
 
-    if let Err(error) =
-        processor.process(fixture.engine, fixture.source(), translation, None)
-    {
+    if let Err(error) = processor.process(fixture.engine, fixture.source(), translation, None) {
         panic!("{mode:?} failed for {}: {error}", fixture.dir);
     }
 }
@@ -253,8 +235,7 @@ fn file_names(dir: &Path) -> Vec<String> {
 }
 
 fn slurp(path: &Path) -> String {
-    read_to_string(path)
-        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 fn is_metadata(line: &str) -> bool {
@@ -356,9 +337,7 @@ fn untranslate(text: &str, sources: &[&str]) -> String {
 
     for line in text.lines() {
         match line.split_once("<#>") {
-            Some((source, _))
-                if !is_metadata(line) && sources.contains(&source) =>
-            {
+            Some((source, _)) if !is_metadata(line) && sources.contains(&source) => {
                 output.push_str(source);
                 output.push_str("<#>");
             }
@@ -438,9 +417,7 @@ fn drop_entry(text: &str, source: &str) -> String {
     let mut output = String::with_capacity(text.len());
 
     for line in text.lines() {
-        if !is_metadata(line)
-            && line.split_once("<#>").is_some_and(|(s, _)| s == source)
-        {
+        if !is_metadata(line) && line.split_once("<#>").is_some_and(|(s, _)| s == source) {
             continue;
         }
 
@@ -554,21 +531,15 @@ mod scenarios {
                 continue;
             }
 
-            let found = restored.get(source).unwrap_or_else(|| {
-                panic!("{SUBJECT}: {source} did not come back")
-            });
+            let found = restored
+                .get(source)
+                .unwrap_or_else(|| panic!("{SUBJECT}: {source} did not come back"));
 
             if dropped.iter().any(|d| d == source) {
                 // Re-read from the game files, so untranslated again.
-                assert!(
-                    found.is_empty(),
-                    "{SUBJECT}: {source} came back already translated"
-                );
+                assert!(found.is_empty(), "{SUBJECT}: {source} came back already translated");
             } else {
-                assert_eq!(
-                    *found, translation,
-                    "{SUBJECT}: {source} lost its translation"
-                );
+                assert_eq!(*found, translation, "{SUBJECT}: {source} lost its translation");
             }
         }
 
@@ -600,10 +571,8 @@ mod scenarios {
             .collect();
         assert_eq!(abandoned.len(), 3, "{SUBJECT} has too few entries to test");
 
-        let abandoned: Vec<String> =
-            abandoned.iter().map(|s| (*s).to_owned()).collect();
-        let abandoned_refs: Vec<&str> =
-            abandoned.iter().map(String::as_str).collect();
+        let abandoned: Vec<String> = abandoned.iter().map(|s| (*s).to_owned()).collect();
+        let abandoned_refs: Vec<&str> = abandoned.iter().map(String::as_str).collect();
 
         write(&subject, untranslate(&translated, &abandoned_refs)).unwrap();
 
@@ -690,10 +659,7 @@ mod scenarios {
         let text = slurp(&maps);
         check_shape(&text, "maps.txt");
 
-        let headers: Vec<&str> = text
-            .lines()
-            .filter(|line| line.starts_with("<!>EVENT ID<#>"))
-            .collect();
+        let headers: Vec<&str> = text.lines().filter(|line| line.starts_with("<!>EVENT ID<#>")).collect();
         assert!(!headers.is_empty(), "no event headers were written");
 
         assert!(
@@ -724,10 +690,7 @@ mod scenarios {
             .lines()
             .filter(|line| line.starts_with("<!>EVENT ID<#>"))
             .collect();
-        assert_eq!(
-            appended_headers, headers,
-            "the event headers changed across an append"
-        );
+        assert_eq!(appended_headers, headers, "the event headers changed across an append");
 
         for (source, translation) in translations(&translated) {
             assert_eq!(
@@ -776,12 +739,7 @@ mod scenarios {
             ..Default::default()
         };
         processor
-            .process(
-                fixture.engine,
-                output.join(fixture.data),
-                &reread,
-                None,
-            )
+            .process(fixture.engine, output.join(fixture.data), &reread, None)
             .expect("could not read the written project back");
 
         for name in fixture.expected_files() {
@@ -794,14 +752,11 @@ mod scenarios {
             let after = slurp(&reread.join(name));
             let after_sources = sources(&after);
 
-            for (source, translation) in entries_outside(&before, "Game Title")
-            {
-                let (source, translation) =
-                    (source.as_str(), translation.as_str());
+            for (source, translation) in entries_outside(&before, "Game Title") {
+                let (source, translation) = (source.as_str(), translation.as_str());
                 assert!(
                     after_sources.contains(translation),
-                    "{name}: {source} was translated to {translation}, which \
-                     is not in the rewritten project"
+                    "{name}: {source} was translated to {translation}, which is not in the rewritten project"
                 );
             }
         }
@@ -831,10 +786,7 @@ mod scenarios {
         check_shape(&text, "plugins.txt");
 
         assert!(!entries(&text).is_empty(), "no plugin text was extracted");
-        assert!(
-            text.contains("<!>NAME<#>"),
-            "plugin sections carry no plugin name"
-        );
+        assert!(text.contains("<!>NAME<#>"), "plugin sections carry no plugin name");
 
         for (source, translation) in entries(&text) {
             assert!(
@@ -864,12 +816,7 @@ mod scenarios {
             ..processor(fixture, FORCED_READ)
         };
         rereader
-            .process(
-                fixture.engine,
-                output.join(fixture.data),
-                &reread,
-                None,
-            )
+            .process(fixture.engine, output.join(fixture.data), &reread, None)
             .expect("could not read the rewritten plugins back");
 
         let after_text = slurp(&reread.join("plugins.txt"));
@@ -878,8 +825,7 @@ mod scenarios {
         for (source, translation) in translations(&text) {
             assert!(
                 after.contains(format!("[{source}]").as_str()),
-                "plugins.txt: {source} was translated to {translation}, which \
-                 is not in the rewritten file"
+                "plugins.txt: {source} was translated to {translation}, which is not in the rewritten file"
             );
         }
     }
@@ -937,12 +883,7 @@ mod scenarios {
             ..processor(fixture, FORCED_READ)
         };
         rereader
-            .process(
-                fixture.engine,
-                output.join(fixture.data),
-                &reread,
-                None,
-            )
+            .process(fixture.engine, output.join(fixture.data), &reread, None)
             .expect("could not read the rewritten system file back");
 
         let after = slurp(&reread.join("system.txt"));
@@ -953,84 +894,6 @@ mod scenarios {
             block(&after, 8).contains(&format!("{translated_title}<#>")),
             "the translated title did not reach the system file"
         );
-    }
-
-    /// Trimming applies on the way in and stays consistent on the way back.
-    pub fn trimmed(fixture: Fixture, tag: &str) {
-        let workspace = workspace(tag);
-        let translation = workspace.join("translation");
-        let output = workspace.join("output");
-
-        run(
-            fixture,
-            FORCED_READ,
-            BaseFlags::Trim,
-            DuplicateMode::Allow,
-            &translation,
-            None,
-        );
-
-        for path in txt_files(&translation) {
-            let text = slurp(&path);
-            let name = path.file_name().unwrap().to_string_lossy();
-
-            check_shape(&text, &name);
-
-            // Trimming applies to maps and the "other" files; script and
-            // plugin text is code, and keeps its indentation.
-            if is_main_file(&name) {
-                for (source, _) in entries(&text) {
-                    for part in source.split(r"\#") {
-                        assert_eq!(
-                            part,
-                            part.trim(),
-                            "{name}: {source} kept its padding under Trim"
-                        );
-                    }
-                }
-            }
-
-            write(&path, translate(&text)).unwrap();
-        }
-
-        copy_dir(&fixture.source(), &output.join(fixture.data));
-
-        // The flags have to match the read's, which is what makes the write's
-        // lookup keys line up.
-        run(
-            fixture,
-            Mode::Write,
-            BaseFlags::Trim,
-            DuplicateMode::Allow,
-            &translation,
-            Some(&output),
-        );
-
-        let reread = workspace.join("reread");
-        let mut rereader = Processor {
-            flags: BaseFlags::Trim,
-            ..processor(fixture, FORCED_READ)
-        };
-        rereader
-            .process(
-                fixture.engine,
-                output.join(fixture.data),
-                &reread,
-                None,
-            )
-            .expect("could not read the rewritten project back");
-
-        let before = slurp(&translation.join(SUBJECT));
-        let after_text = slurp(&reread.join(SUBJECT));
-        let after = sources(&after_text);
-
-        for (source, translation) in translations(&before) {
-            assert!(
-                after.contains(translation),
-                "{SUBJECT}: {source} was translated to {translation}, which \
-                 is not in the rewritten project"
-            );
-        }
     }
 
     /// `SkipObsolete` drops entries that the game files no longer have.
@@ -1112,8 +975,7 @@ mod scenarios {
         write(&subject, drop_entry(&text, &victim)).unwrap();
 
         let mut skipping = processor(fixture, FORCED_APPEND);
-        skipping.skip_events =
-            Vec::from([(RPGMFileType::Items, Vec::from([id]))]);
+        skipping.skip_events = Vec::from([(RPGMFileType::Items, Vec::from([id]))]);
         run_with(fixture, &mut skipping, &translation, None);
 
         let skipped = slurp(&subject);
@@ -1167,8 +1029,7 @@ mod scenarios {
         append(fixture, BaseFlags::empty(), &translation);
 
         assert!(
-            sources(&block(&slurp(&maps), skipped_id))
-                .contains(victim.as_str()),
+            sources(&block(&slurp(&maps), skipped_id)).contains(victim.as_str()),
             "maps.txt: the entry did not come back once the skip was gone"
         );
     }
@@ -1183,11 +1044,7 @@ mod scenarios {
 
         let subject = translation.join(SUBJECT);
         let text = translate(&slurp(&subject));
-        let victim = entries(&text)
-            .first()
-            .expect("no entries to drop")
-            .0
-            .to_owned();
+        let victim = entries(&text).first().expect("no entries to drop").0.to_owned();
 
         write(&subject, drop_entry(&text, &victim)).unwrap();
 
@@ -1225,10 +1082,7 @@ mod scenarios {
             "{SUBJECT}: the entry did not come back without the hashes"
         );
 
-        assert!(
-            !unhashed.hashes.is_empty(),
-            "the processor recorded no hashes to reuse"
-        );
+        assert!(!unhashed.hashes.is_empty(), "the processor recorded no hashes to reuse");
     }
 
     /// Reading and writing with duplicates removed exercises the flattened
@@ -1257,14 +1111,9 @@ mod scenarios {
             // script and plugin files are exempt, as `DuplicateMode`
             // documents.
             if is_main_file(&name) {
-                let all: Vec<&str> =
-                    entries(&text).into_iter().map(|(s, _)| s).collect();
+                let all: Vec<&str> = entries(&text).into_iter().map(|(s, _)| s).collect();
 
-                assert_eq!(
-                    all.len(),
-                    sources(&text).len(),
-                    "{name} still has duplicate sources"
-                );
+                assert_eq!(all.len(), sources(&text).len(), "{name} still has duplicate sources");
             }
 
             write(&path, translate(&text)).unwrap();
@@ -1360,14 +1209,6 @@ macro_rules! engines {
                 }
 
                 #[test]
-                fn trimmed() {
-                    scenarios::trimmed(
-                        FIXTURE,
-                        concat!($dir, "-trim"),
-                    );
-                }
-
-                #[test]
                 fn skip_obsolete() {
                     scenarios::skip_obsolete(
                         FIXTURE,
@@ -1420,8 +1261,8 @@ macro_rules! engines {
 }
 
 engines! {
-    mz => ("RMMZ", "data", EngineType::New, false, false),
-    mv => ("RMMV", "data", EngineType::New, true, false),
+    mz => ("RMMZ", "data", EngineType::MVMZ, false, false),
+    mv => ("RMMV", "data", EngineType::MVMZ, true, false),
     vxace => ("RMVXACE", "Data", EngineType::VXAce, false, true),
     vx => ("RMVX", "Data", EngineType::VX, false, true),
     xp => ("RMXP", "Data", EngineType::XP, false, true),

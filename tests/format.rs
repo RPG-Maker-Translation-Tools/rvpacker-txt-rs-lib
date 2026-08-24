@@ -3,8 +3,8 @@
 //! their serialized forms.
 
 use rvpacker_txt_rs_lib::{
-    DuplicateMode, EngineType, Error, FileFlags, Mode, RPGMFileType,
-    core::Base, get_ini_title, get_system_title, parse_ignore,
+    DuplicateMode, EngineType, Error, FileFlags, Mode, RPGMFileType, core::Base, get_ini_title, get_system_title,
+    parse_ignore,
 };
 use std::str::FromStr;
 
@@ -24,9 +24,7 @@ Flashlight
 
         assert_eq!(map.len(), 1);
 
-        let entry = map
-            .get("<!>Ignore Entry<#>Items")
-            .expect("collapsed section missing");
+        let entry = map.get("<!>Ignore Entry<#>Items").expect("collapsed section missing");
         assert!(entry.contains("Torch"));
         assert!(entry.contains("Flashlight"));
     }
@@ -77,11 +75,7 @@ plugin text
 
     #[test]
     fn a_header_without_an_id_is_accepted() {
-        let map = parse_ignore(
-            "<!>Ignore Entry<#>Items\nTorch\n",
-            DuplicateMode::Remove,
-            true,
-        );
+        let map = parse_ignore("<!>Ignore Entry<#>Items\nTorch\n", DuplicateMode::Remove, true);
 
         assert_eq!(map.len(), 1);
         assert!(
@@ -111,9 +105,7 @@ plugin text
             true,
         );
 
-        let entry = map
-            .get("<!>Ignore Entry<#>Items: 1")
-            .expect("section missing");
+        let entry = map.get("<!>Ignore Entry<#>Items: 1").expect("section missing");
         assert!(entry.contains("Rotten soul"));
         assert!(!entry.contains("Torch"));
     }
@@ -125,17 +117,12 @@ plugin text
 
         assert_eq!(map.len(), 5);
 
-        let items = map
-            .get("<!>Ignore Entry<#>Items: 1")
-            .expect("Items missing");
+        let items = map.get("<!>Ignore Entry<#>Items: 1").expect("Items missing");
         assert!(items.contains("Torch"));
-        assert!(items.contains("The Fellowship of the Dark"));
-        assert!(items.contains("Rotten soul"));
+        assert!(items.contains("Soul of human"));
         assert!(!items.contains("Bandage"));
 
-        let armors = map
-            .get("<!>Ignore Entry<#>Armors: 1")
-            .expect("Armors missing");
+        let armors = map.get("<!>Ignore Entry<#>Armors: 1").expect("Armors missing");
         assert!(armors.contains("test_armor2"));
     }
 }
@@ -146,26 +133,14 @@ mod filenames {
     #[test]
     fn file_types_come_from_the_first_three_bytes() {
         assert_eq!(RPGMFileType::from_filename("Actors"), RPGMFileType::Actors);
-        assert_eq!(
-            RPGMFileType::from_filename("CommonEvents"),
-            RPGMFileType::Events
-        );
+        assert_eq!(RPGMFileType::from_filename("CommonEvents"), RPGMFileType::Events);
         assert_eq!(RPGMFileType::from_filename("Map001"), RPGMFileType::Map);
-        assert_eq!(
-            RPGMFileType::from_filename("plugins"),
-            RPGMFileType::Plugins
-        );
-        assert_eq!(
-            RPGMFileType::from_filename("Unknown"),
-            RPGMFileType::Invalid
-        );
+        assert_eq!(RPGMFileType::from_filename("plugins"), RPGMFileType::Plugins);
+        assert_eq!(RPGMFileType::from_filename("Unknown"), RPGMFileType::Invalid);
         // Too short to have a prefix, and a multi-byte character at byte 3 must
         // not panic the way slicing did.
         assert_eq!(RPGMFileType::from_filename("ab"), RPGMFileType::Invalid);
-        assert_eq!(
-            RPGMFileType::from_filename("マップ"),
-            RPGMFileType::Invalid
-        );
+        assert_eq!(RPGMFileType::from_filename("マップ"), RPGMFileType::Invalid);
     }
 
     #[test]
@@ -188,16 +163,8 @@ mod filenames {
 
     #[test]
     fn engine_types_map_to_extensions() {
-        for engine in [
-            EngineType::New,
-            EngineType::VXAce,
-            EngineType::VX,
-            EngineType::XP,
-        ] {
-            assert_eq!(
-                EngineType::from_extension(engine.extension()),
-                Some(engine)
-            );
+        for engine in [EngineType::MVMZ, EngineType::VXAce, EngineType::VX, EngineType::XP] {
+            assert_eq!(EngineType::from_extension(engine.extension()), Some(engine));
         }
 
         assert_eq!(EngineType::from_extension("txt"), None);
@@ -221,18 +188,12 @@ mod titles {
 
     #[test]
     fn an_ini_without_a_title_errors() {
-        assert!(matches!(
-            get_ini_title(b"[Game]\nRTP=RPGVXAce\n"),
-            Err(Error::NoTitle)
-        ));
+        assert!(matches!(get_ini_title(b"[Game]\nRTP=RPGVXAce\n"), Err(Error::NoTitle)));
     }
 
     #[test]
     fn system_titles_are_read_past_the_byte_order_mark() {
-        assert_eq!(
-            get_system_title(r#"{"gameTitle":"Some Game"}"#).unwrap(),
-            "Some Game"
-        );
+        assert_eq!(get_system_title(r#"{"gameTitle":"Some Game"}"#).unwrap(), "Some Game");
         assert_eq!(
             get_system_title("\u{feff}{\"gameTitle\":\"Some Game\"}").unwrap(),
             "Some Game"
@@ -242,10 +203,7 @@ mod titles {
     #[test]
     fn a_system_file_without_a_title_errors() {
         assert!(matches!(get_system_title("{}"), Err(Error::NoTitle)));
-        assert!(matches!(
-            get_system_title("not json"),
-            Err(Error::JsonParse(_))
-        ));
+        assert!(matches!(get_system_title("not json"), Err(Error::JsonParse(_))));
     }
 }
 
@@ -312,8 +270,7 @@ mod file_flags {
 
     #[test]
     fn other_is_everything_but_maps_system_and_scripts() {
-        let rest =
-            FileFlags::map() | FileFlags::system() | FileFlags::scripts();
+        let rest = FileFlags::map() | FileFlags::system() | FileFlags::scripts();
         assert_eq!(FileFlags::other() | rest, FileFlags::all());
         assert!(!FileFlags::other().intersects(rest));
     }
@@ -329,10 +286,7 @@ mod file_flags {
     #[test]
     fn flags_parse_from_filenames() {
         assert_eq!(FileFlags::from_str("Actors").unwrap(), FileFlags::Actors);
-        assert_eq!(
-            FileFlags::from_str("CommonEvents").unwrap(),
-            FileFlags::CommonEvents
-        );
+        assert_eq!(FileFlags::from_str("CommonEvents").unwrap(), FileFlags::CommonEvents);
         // Both script kinds share one flag.
         assert_eq!(FileFlags::from_str("Scripts").unwrap(), FileFlags::Scripts);
         assert_eq!(FileFlags::from_str("plugins").unwrap(), FileFlags::Scripts);

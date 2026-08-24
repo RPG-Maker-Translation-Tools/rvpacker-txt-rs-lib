@@ -4,10 +4,7 @@
 //! is written and read back, so anything else parsing these files - a GUI, a CLI -
 //! can rely on the same functions rather than reimplementing them.
 
-use crate::{
-    constants::{ID_COMMENT, NEW_LINE, SEPARATOR, SYMBOLS},
-    types::TranslationEntry,
-};
+use crate::{constants::SYMBOLS, get_id_comment, get_line_break, get_line_separator, types::TranslationEntry};
 use regex::Regex;
 use std::{borrow::Cow, cell::LazyCell};
 
@@ -16,7 +13,7 @@ thread_local! {
         Regex::new(r"\r\n|\r|\n").unwrap_unchecked()
     });
     static NEW_LINE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"\\#").unwrap_unchecked()
+        Regex::new(&regex::escape(get_line_break())).unwrap_unchecked()
     });
 }
 
@@ -25,7 +22,7 @@ thread_local! {
 /// Implemented for [`str`], so a consumer parsing the generated `.txt` files can
 /// round-trip a line the same way this crate does.
 pub trait CustomReplace {
-    /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the format that the library uses (`\#`).
+    /// Normalizes RPG Maker line break symbols (`\n`, `\r`, `\r\n`) to the custom internal format that the library uses.
     fn normalize(&self) -> Cow<'_, str>;
 
     /// Denormalizes library line break symbols to the format that RPG Maker uses (`\n`).
@@ -34,7 +31,7 @@ pub trait CustomReplace {
 
 impl CustomReplace for str {
     fn normalize(&self) -> Cow<'_, str> {
-        LINE_BREAKS_RE.with(|re| re.replace_all(self, NEW_LINE))
+        LINE_BREAKS_RE.with(|re| re.replace_all(self, get_line_break()))
     }
 
     fn denormalize(&self) -> Cow<'_, str> {
@@ -131,7 +128,7 @@ pub fn latinize_string(string: &str) -> Cow<'_, str> {
     }
 }
 
-/// Outcome of splitting one `source<#>translation` line from a translation file.
+/// Outcome of splitting one `source{SEP}translation` line from a translation file.
 pub enum TranslationLine<'a> {
     /// No separator present; the caller should warn and skip the line.
     Malformed,
@@ -149,25 +146,15 @@ pub enum TranslationLine<'a> {
 /// carrying several translation columns still resolve to the rightmost filled one.
 ///
 /// Borrows throughout; allocates only where `write` forces denormalization.
-pub fn split_translation_line(
-    line: &str,
-    trim: bool,
-    write: bool,
-) -> TranslationLine<'_> {
-    let Some((source, rest)) = line.split_once(SEPARATOR) else {
+pub fn split_translation_line(line: &str, write: bool) -> TranslationLine<'_> {
+    let Some((source, rest)) = line.split_once(get_line_separator()) else {
         return TranslationLine::Malformed;
     };
 
     let translation = rest
-        .rsplit(SEPARATOR)
+        .rsplit(get_line_separator())
         .find(|field| !field.is_empty())
         .unwrap_or_default();
-
-    let (source, translation) = if trim {
-        (source.trim(), translation.trim())
-    } else {
-        (source, translation)
-    };
 
     if write {
         // Lines with no translation are unused on write.
@@ -187,13 +174,9 @@ pub fn split_translation_line(
     }
 }
 
-pub(crate) fn push_metadata(
-    output: &mut Vec<u8>,
-    id: u16,
-    metadata: &[String],
-) {
-    output.extend_from_slice(ID_COMMENT.as_bytes());
-    output.extend_from_slice(SEPARATOR.as_bytes());
+pub(crate) fn push_metadata(output: &mut Vec<u8>, id: u16, metadata: &[String]) {
+    output.extend_from_slice(get_id_comment().as_bytes());
+    output.extend_from_slice(get_line_separator().as_bytes());
     output.extend_from_slice(id.to_string().as_bytes());
     output.push(b'\n');
 
@@ -203,11 +186,7 @@ pub(crate) fn push_metadata(
     }
 }
 
-pub(crate) fn push_entries(
-    output: &mut Vec<u8>,
-    source: &str,
-    translation: &TranslationEntry,
-) {
+pub(crate) fn push_entries(output: &mut Vec<u8>, source: &str, translation: &TranslationEntry) {
     for comment in translation.comments.iter().filter(|c| !c.is_empty()) {
         output.extend_from_slice(comment.as_bytes());
         output.push(b'\n');
@@ -215,7 +194,7 @@ pub(crate) fn push_entries(
 
     if !source.is_empty() {
         output.extend_from_slice(source.as_bytes());
-        output.extend_from_slice(SEPARATOR.as_bytes());
+        output.extend_from_slice(get_line_separator().as_bytes());
     }
 
     if !translation.is_empty() {

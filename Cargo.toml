@@ -10,9 +10,19 @@ readme = "README.md"
 repository = "https://github.com/savannstm/rvpacker-txt-rs-lib"
 license-file = "LICENSE.md"
 
+[package.metadata.cargo-machete]
+ignored = ["strum"]
+
+[features]
+serde-csv = ["dep:csv"]
+serde-xml = ["dep:quick-xml"]
+serde-xlsx = ["dep:rust_xlsxwriter", "dep:calamine"]
+serde-yaml = ["dep:yaml_serde"]
+
 [dependencies]
 bitflags = { version = "2.13.1", features = ["serde"] }
-const_format = "0.2.36"
+calamine = { version = "0.36.1", optional = true }
+csv = { version = "1.4.0", optional = true }
 encoding_rs = "0.8.35"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 gxhash = { version = "3.5.0", features = ["deterministic"] }
@@ -21,25 +31,16 @@ log = "0.4.34"
 marshal-rs = { version = "2.0.2" }
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
+quick-xml = { version = "0.42.0", optional = true }
 regex = "1.13.1"
+rust_xlsxwriter = { version = "0.99.0", optional = true }
 serde = "1.0.229"
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 smallvec = "1.15.2"
 strum = { version = "0.28.0", features = ["strum_macros"] }
 strum_macros = "0.28.0"
 thiserror = "2.0.20"
-
-csv = { version = "1.4.0", optional = true }
-quick-xml = { version = "0.42.0", optional = true }
-rust_xlsxwriter = { version = "0.98.2", optional = true }
-calamine = { version = "0.36.1", optional = true }
 yaml_serde = { version = "0.10.7", optional = true }
 
 [dev-dependencies]
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
-
-[features]
-serde-csv = ["dep:csv"]
-serde-xml = ["dep:quick-xml"]
-serde-xlsx = ["dep:rust_xlsxwriter", "dep:calamine"]
-serde-yaml = ["dep:yaml_serde"]

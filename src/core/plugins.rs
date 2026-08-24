@@ -1,7 +1,7 @@
 //! Text handling for RPG Maker plugins, as opposed to particular games.
 //!
 //! A plugin's markup turns up in every game that uses it, so these are keyed off
-//! the markup and the engine that can run the plugin — never off a game
+//! the markup and the engine that can run the plugin - never off a game
 //! identifier.
 
 /// Byte index just past an Advanced Text System dialogue prefix, or [`None`] if

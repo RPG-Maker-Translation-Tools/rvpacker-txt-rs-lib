@@ -1,6 +1,7 @@
 use crate::{
-    constants::{INSTANCE_VAR_PREFIX, SCRIPT_COMMENT, SEPARATOR},
+    constants::INSTANCE_VAR_PREFIX,
     core::Base,
+    get_line_separator, get_script_comment,
     types::{EngineType, Error, Scripts},
 };
 use marshal_rs::{Value, dump, load_binary, load_utf8};
@@ -29,10 +30,7 @@ use std::{
 ///
 /// - [`Error::MarshalLoad`] - if parsing `file_content` Marshal data fails.
 ///
-pub fn generate_file(
-    file_content: &[u8],
-    filename: &str,
-) -> Result<String, Error> {
+pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Error> {
     if filename.starts_with("Scripts") {
         let scripts_array = unsafe {
             load_binary(file_content, INSTANCE_VAR_PREFIX)?
@@ -50,7 +48,9 @@ pub fn generate_file(
             .fold(String::new(), |mut result, ((a, b), c)| {
                 let _ = write!(
                     result,
-                    "{SCRIPT_COMMENT}{SEPARATOR}{a}{SEPARATOR}{b}\n{c}{end}",
+                    "{comment}{sep}{a}{sep}{b}\n{c}{end}",
+                    comment = get_script_comment(),
+                    sep = get_line_separator(),
                     c = c.replace("\r\n", "\n"),
                     end = if c.ends_with('\n') { "" } else { "\n" }
                 );
@@ -119,22 +119,15 @@ pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
 ///     Ok(())
 /// }
 /// ```
-pub fn generate<P: AsRef<Path>>(
-    source_path: P,
-    output_path: P,
-    force: bool,
-) -> Result<(), Error> {
-    create_dir_all(&output_path)
-        .map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
+pub fn generate<P: AsRef<Path>>(source_path: P, output_path: P, force: bool) -> Result<(), Error> {
+    create_dir_all(&output_path).map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
 
     for entry in read_dir(source_path.as_ref())
         .map_err(|e| Error::Io(source_path.as_ref().to_path_buf(), e))?
         .flatten()
     {
         let filename = entry.file_name();
-        let mut output_file_path = output_path
-            .as_ref()
-            .join(Path::new(&filename).with_extension("json"));
+        let mut output_file_path = output_path.as_ref().join(Path::new(&filename).with_extension("json"));
 
         if !force && output_file_path.exists() {
             log::info!(
@@ -155,13 +148,9 @@ pub fn generate<P: AsRef<Path>>(
 
         let output_content = generate_file(&content, filename_str.as_ref())?;
 
-        fs::write(&output_file_path, output_content)
-            .map_err(|e| Error::Io(output_file_path, e))?;
+        fs::write(&output_file_path, output_content).map_err(|e| Error::Io(output_file_path, e))?;
 
-        log::info!(
-            "{}: Successfully generated JSON.",
-            Path::new(&filename).display()
-        );
+        log::info!("{}: Successfully generated JSON.", Path::new(&filename).display());
     }
 
     Ok(())
@@ -197,13 +186,8 @@ pub fn generate<P: AsRef<Path>>(
 ///     Ok(())
 /// }
 /// ```
-pub fn write<P: AsRef<Path>>(
-    json_path: P,
-    output_path: P,
-    engine_type: EngineType,
-) -> Result<(), Error> {
-    create_dir_all(&output_path)
-        .map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
+pub fn write<P: AsRef<Path>>(json_path: P, output_path: P, engine_type: EngineType) -> Result<(), Error> {
+    create_dir_all(&output_path).map_err(|e| Error::Io(output_path.as_ref().to_path_buf(), e))?;
 
     for entry in read_dir(json_path.as_ref())
         .map_err(|e| Error::Io(json_path.as_ref().to_path_buf(), e))?
@@ -233,29 +217,25 @@ pub fn write<P: AsRef<Path>>(
             let mut read = 0;
 
             for script_line in content.split_inclusive('\n') {
-                if script_line.starts_with(SCRIPT_COMMENT) {
+                if script_line.starts_with(get_script_comment()) {
                     let header = unsafe {
                         script_line
-                            .strip_prefix(SCRIPT_COMMENT)
+                            .strip_prefix(get_script_comment())
                             .unwrap_unchecked()
-                            .strip_prefix(SEPARATOR)
+                            .strip_prefix(get_line_separator())
                             .unwrap_unchecked()
                             .trim_end_matches('\n')
                     };
 
-                    let (magic_number, name) = unsafe {
-                        header.split_once(SEPARATOR).unwrap_unchecked()
-                    };
+                    let (magic_number, name) = unsafe { header.split_once(get_line_separator()).unwrap_unchecked() };
 
-                    scripts.numbers.push(unsafe {
-                        magic_number.parse::<i32>().unwrap_unchecked()
-                    });
+                    scripts
+                        .numbers
+                        .push(unsafe { magic_number.parse::<i32>().unwrap_unchecked() });
                     scripts.names.push(name.to_string());
 
                     if prev_content_start != 0 {
-                        scripts.contents.push(
-                            content[prev_content_start..read].to_string(),
-                        );
+                        scripts.contents.push(content[prev_content_start..read].to_string());
                     }
 
                     prev_content_start = read + script_line.len();
@@ -265,9 +245,7 @@ pub fn write<P: AsRef<Path>>(
             }
 
             if prev_content_start != 0 && prev_content_start < content.len() {
-                scripts
-                    .contents
-                    .push(content[prev_content_start..].to_string());
+                scripts.contents.push(content[prev_content_start..].to_string());
             }
 
             dump(Value::array(Base::encode_scripts(&scripts)), None)
@@ -275,8 +253,7 @@ pub fn write<P: AsRef<Path>>(
             write_file(&content)?
         };
 
-        fs::write(&output_file_path, written)
-            .map_err(|e| Error::Io(output_file_path, e))?;
+        fs::write(&output_file_path, written).map_err(|e| Error::Io(output_file_path, e))?;
 
         log::info!("{}: Successfully written.", Path::new(&filename).display());
     }

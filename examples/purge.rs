@@ -7,11 +7,6 @@ fn main() -> Result<(), Error> {
         ..Default::default()
     };
 
-    processor.process(
-        EngineType::New,
-        "C:/Game/www/data",
-        "C:/Game/translation",
-        None,
-    )?;
+    processor.process(EngineType::MVMZ, "C:/Game/www/data", "C:/Game/translation", None)?;
     Ok(())
 }

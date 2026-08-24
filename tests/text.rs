@@ -4,18 +4,15 @@
 use rvpacker_txt_rs_lib::core::{
     Glob, IgnoreEntry,
     text::{
-        CustomReplace, TranslationLine, ends_with_if_index, latinize_string,
-        split_translation_line, string_is_only_symbols,
+        CustomReplace, TranslationLine, ends_with_if_index, latinize_string, split_translation_line,
+        string_is_only_symbols,
     },
 };
 use std::borrow::Cow;
 
-fn split(line: &str, trim: bool, write: bool) -> (String, String) {
-    match split_translation_line(line, trim, write) {
-        TranslationLine::Split {
-            source,
-            translation,
-        } => (source.into_owned(), translation.into_owned()),
+fn split(line: &str, write: bool) -> (String, String) {
+    match split_translation_line(line, write) {
+        TranslationLine::Split { source, translation } => (source.into_owned(), translation.into_owned()),
         TranslationLine::Malformed => panic!("malformed: {line}"),
         TranslationLine::Untranslated => panic!("untranslated: {line}"),
     }
@@ -64,7 +61,7 @@ mod splitting {
     #[test]
     fn splits_on_the_first_separator() {
         assert_eq!(
-            split("source<#>translation", false, false),
+            split("source<#>translation", false),
             ("source".to_owned(), "translation".to_owned())
         );
     }
@@ -72,11 +69,11 @@ mod splitting {
     #[test]
     fn takes_the_rightmost_filled_column() {
         assert_eq!(
-            split("source<#>first<#>second", false, false),
+            split("source<#>first<#>second", false),
             ("source".to_owned(), "second".to_owned())
         );
         assert_eq!(
-            split("source<#>filled<#>", false, false),
+            split("source<#>filled<#>", false),
             ("source".to_owned(), "filled".to_owned())
         );
     }
@@ -84,41 +81,23 @@ mod splitting {
     #[test]
     fn a_line_without_a_separator_is_malformed() {
         assert!(matches!(
-            split_translation_line("no separator here", false, false),
+            split_translation_line("no separator here", false),
             TranslationLine::Malformed
         ));
     }
 
     #[test]
     fn an_empty_translation_reads_but_does_not_write() {
-        assert_eq!(
-            split("source<#>", false, false),
-            ("source".to_owned(), String::new())
-        );
+        assert_eq!(split("source<#>", false), ("source".to_owned(), String::new()));
         assert!(matches!(
-            split_translation_line("source<#>", false, true),
+            split_translation_line("source<#>", true),
             TranslationLine::Untranslated
         ));
     }
 
     #[test]
-    fn trimming_applies_to_both_halves() {
-        assert_eq!(
-            split("  source  <#>  translation  ", true, false),
-            ("source".to_owned(), "translation".to_owned())
-        );
-        assert_eq!(
-            split("  source  <#>  translation  ", false, false),
-            ("  source  ".to_owned(), "  translation  ".to_owned())
-        );
-    }
-
-    #[test]
     fn writing_denormalizes_both_halves() {
-        assert_eq!(
-            split(r"a\#b<#>c\#d", false, true),
-            ("a\nb".to_owned(), "c\nd".to_owned())
-        );
+        assert_eq!(split(r"a\#b<#>c\#d", true), ("a\nb".to_owned(), "c\nd".to_owned()));
     }
 }
 
@@ -260,8 +239,7 @@ mod ignore_entries {
         entry.insert_line("Torch");
         entry.insert_line("<!>Glob<#>*soul");
 
-        let mut lines: Vec<String> =
-            entry.lines().map(Cow::into_owned).collect();
+        let mut lines: Vec<String> = entry.lines().map(Cow::into_owned).collect();
         lines.sort_unstable();
 
         assert_eq!(lines, ["<!>Glob<#>*soul", "Torch"]);

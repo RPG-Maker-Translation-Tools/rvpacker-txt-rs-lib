@@ -35,12 +35,7 @@ fn translations() -> &'static PathBuf {
         };
 
         processor
-            .process(
-                EngineType::XP,
-                root.join("tests/RMXP/Data"),
-                &out,
-                None,
-            )
+            .process(EngineType::XP, root.join("tests/RMXP/Data"), &out, None)
             .expect("could not read the fixture");
 
         out
@@ -48,8 +43,7 @@ fn translations() -> &'static PathBuf {
 }
 
 fn sample(name: &str) -> String {
-    read_to_string(translations().join(name))
-        .unwrap_or_else(|e| panic!("{name}: {e}"))
+    read_to_string(translations().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 /// The same file with every entry translated, for the columns to be non-empty.
@@ -76,22 +70,15 @@ fn translated(name: &str) -> String {
 
 /// Files that between them cover comments, metadata, multi-line entries and
 /// Ruby source.
-const SAMPLES: [&str; 4] =
-    ["items.txt", "maps.txt", "system.txt", "scripts.txt"];
+const SAMPLES: [&str; 4] = ["items.txt", "maps.txt", "system.txt", "scripts.txt"];
 
 /// Hand-written cases the fixtures do not produce.
 const EDGE_CASES: [(&str, &str); 6] = [
     ("a single entry", "source<#>"),
     ("a filled entry", "source<#>translation"),
-    (
-        "several translation columns",
-        "source<#>first<#>second<#>third",
-    ),
+    ("several translation columns", "source<#>first<#>second<#>third"),
     ("an empty middle column", "source<#><#>third"),
-    (
-        "a line break marker",
-        r"first line\#second line<#>первая\#вторая",
-    ),
+    ("a line break marker", r"first line\#second line<#>первая\#вторая"),
     (
         "text that looks like the old comment syntax",
         "<!-- not a comment --><#>translated",
@@ -131,8 +118,7 @@ fn json_round_trips() {
 #[test]
 fn the_json_export_is_valid_json() {
     let exported = export_json(&sample("items.txt")).expect("export failed");
-    let value: serde_json::Value =
-        serde_json::from_str(&exported).expect("not valid JSON");
+    let value: serde_json::Value = serde_json::from_str(&exported).expect("not valid JSON");
 
     let entries = value.as_array().expect("the export is not an array");
     assert!(!entries.is_empty());
@@ -194,9 +180,6 @@ fn xlsx_round_trips() {
         let exported = export_xlsx(&content).expect("export failed");
         let imported = import_xlsx(&exported).expect("import failed");
 
-        assert_eq!(
-            imported, content,
-            "{name} changed across an XLSX round trip"
-        );
+        assert_eq!(imported, content, "{name} changed across an XLSX round trip");
     }
 }

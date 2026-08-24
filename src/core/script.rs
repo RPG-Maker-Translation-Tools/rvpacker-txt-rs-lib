@@ -100,10 +100,7 @@ impl Base {
 
             processed = true;
 
-            self.update_metadata(
-                id,
-                Vec::from([(CommentPos::Name, script_name.as_str())]),
-            );
+            self.update_metadata(id, Vec::from([(CommentPos::Name, script_name.as_str())]));
             let (extracted_strings, ranges) = self.extract_strings(&code);
 
             if self.mode.is_write() {
@@ -131,10 +128,7 @@ impl Base {
                     script[2] = Value::bytes(&buf);
                 }
             } else {
-                for extracted in extracted_strings
-                    .into_iter()
-                    .filter(|s| !s.trim().is_empty())
-                {
+                for extracted in extracted_strings.into_iter().filter(|s| !s.trim().is_empty()) {
                     if string_is_only_symbols(&extracted)
                         || extracted.contains("@window")
                         || extracted.contains(r"\$game")
@@ -215,17 +209,12 @@ impl Base {
                     inside_string = true;
                     string_start_index = global_index + i;
                     current_quote_type = char;
-                } else if inside_string
-                    && char == current_quote_type
-                    && !Self::is_escaped(i, &line)
-                {
+                } else if inside_string && char == current_quote_type && !Self::is_escaped(i, &line) {
                     let range = string_start_index + 1..global_index + i;
 
                     let extracted_string = ruby_code[range.clone()].normalize();
 
-                    if !extracted_string.is_empty()
-                        && !strings.contains(extracted_string.as_ref())
-                    {
+                    if !extracted_string.is_empty() && !strings.contains(extracted_string.as_ref()) {
                         strings.insert(extracted_string.into_owned());
 
                         if self.mode.is_write() {
@@ -268,32 +257,20 @@ impl Base {
             // SAFETY: Scripts always have a layout like this. `0` is magic number, `1` is name and `2` is actual script data.
             let script_number = if script[0].is_bytes() {
                 unsafe {
-                    str::from_utf8_unchecked(
-                        script[0].as_byte_vec().unwrap_unchecked(),
-                    )
-                    .parse::<i32>()
-                    .unwrap_unchecked()
-                }
-            } else if script[0].is_string() {
-                unsafe {
-                    script[0]
-                        .as_str()
-                        .unwrap_unchecked()
+                    str::from_utf8_unchecked(script[0].as_byte_vec().unwrap_unchecked())
                         .parse::<i32>()
                         .unwrap_unchecked()
                 }
+            } else if script[0].is_string() {
+                unsafe { script[0].as_str().unwrap_unchecked().parse::<i32>().unwrap_unchecked() }
             } else {
                 unsafe { script[0].as_int().unwrap_unchecked() }
             };
-            let script_name_data =
-                unsafe { script[1].as_byte_vec().unwrap_unchecked() };
-            let script_data =
-                unsafe { script[2].as_byte_vec().unwrap_unchecked() };
+            let script_name_data = unsafe { script[1].as_byte_vec().unwrap_unchecked() };
+            let script_data = unsafe { script[2].as_byte_vec().unwrap_unchecked() };
 
             let mut decoded_script = Vec::with_capacity(script_data.len());
-            ZlibDecoder::new(script_data)
-                .read_to_end(&mut decoded_script)
-                .unwrap();
+            ZlibDecoder::new(script_data).read_to_end(&mut decoded_script).unwrap();
 
             for encoding in [
                 encoding_rs::UTF_8,
@@ -302,8 +279,7 @@ impl Base {
                 encoding_rs::SHIFT_JIS,
                 encoding_rs::GB18030,
             ] {
-                let (content_cow, _, had_errors) =
-                    encoding.decode(&decoded_script);
+                let (content_cow, _, had_errors) = encoding.decode(&decoded_script);
                 let (name_cow, _, _) = encoding.decode(script_name_data);
 
                 if !had_errors {
@@ -342,8 +318,7 @@ impl Base {
             .zip(scripts.names.iter())
             .zip(scripts.numbers.iter())
         {
-            let mut encoder =
-                ZlibEncoder::new(Vec::new(), Compression::default());
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(content.as_bytes()).unwrap();
             let compressed_content = encoder.finish().unwrap();
 

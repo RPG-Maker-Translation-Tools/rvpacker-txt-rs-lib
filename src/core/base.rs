@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
     BaseFlags, Comments, IndexSetExt, ProcessedData,
-    constants::{IGNORE_ENTRY_COMMENT, INSTANCE_VAR_PREFIX, SEPARATOR},
+    constants::INSTANCE_VAR_PREFIX,
+    get_ignore_entry_comment, get_line_separator,
     types::{
-        DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels,
-        Lines, Mode, RPGMFileType, TranslationEntry, TranslationMap,
+        DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode, RPGMFileType,
+        TranslationEntry, TranslationMap,
     },
 };
 use gxhash::{HashMap, HashMapExt, HashSet};
@@ -65,24 +66,25 @@ impl Ignore {
     ///
     /// With duplicates removed on a read the whole file shares a single entry,
     /// so the id is left off; every other combination keys on the entry id.
-    pub(super) fn key(
-        file_type: RPGMFileType,
-        id: u16,
-        flags: BaseFlags,
-        duplicate_mode: DuplicateMode,
-    ) -> String {
+    ///
+    /// System, Scripts and Plugins are exempt from the collapse: each is a
+    /// single section already (there is nothing to deduplicate), and
+    /// `parse_ignore` keeps their id for exactly that reason - it must match
+    /// what this function builds, or a `.rvpacker-ignore` entry written under
+    /// one of these three never matches at read time. This used to collapse
+    /// them anyway, so ignore entries silently had no effect on System and
+    /// Plugins under `DuplicateMode::Remove`.
+    pub(super) fn key(file_type: RPGMFileType, id: u16, flags: BaseFlags, duplicate_mode: DuplicateMode) -> String {
         // Built in one pass. This previously formatted the name, truncated it at
         // the ':', then formatted the whole key again - two allocations per map
         // and per event.
-        let mut key = String::with_capacity(
-            IGNORE_ENTRY_COMMENT.len() + SEPARATOR.len() + 24,
-        );
+        let mut key = String::with_capacity(get_ignore_entry_comment().len() + get_line_separator().len() + 24);
 
-        key.push_str(IGNORE_ENTRY_COMMENT);
-        key.push_str(SEPARATOR);
+        key.push_str(get_ignore_entry_comment());
+        key.push_str(get_line_separator());
         let _ = write!(key, "{file_type}");
 
-        if !(flags.contains(BaseFlags::Ignore) && duplicate_mode.is_remove()) {
+        if file_type.is_misc() || !(flags.contains(BaseFlags::Ignore) && duplicate_mode.is_remove()) {
             let _ = write!(key, ": {id}");
         }
 
@@ -176,7 +178,7 @@ impl Default for Base {
         Self {
             mode: Mode::read(),
             flags: BaseFlags::empty(),
-            engine_type: EngineType::New,
+            engine_type: EngineType::MVMZ,
             duplicate_mode: DuplicateMode::Remove,
 
             ignore: Ignore::default(),
@@ -244,9 +246,7 @@ impl Base {
     pub(super) fn insert_string(&mut self, string: Cow<'_, str>) {
         if self.mode.is_write()
             || (self.flags.contains(BaseFlags::Ignore)
-                && self
-                    .ignore_entry()
-                    .is_some_and(|entry| entry.contains(string.as_ref())))
+                && self.ignore_entry().is_some_and(|entry| entry.contains(string.as_ref())))
         {
             return;
         }
@@ -263,19 +263,11 @@ impl Base {
     /// - `id` - ID of the entry to get.
     ///
     pub(super) fn get_ignore_entry(&mut self, id: u16) {
-        if !self
-            .flags
-            .intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore)
-        {
+        if !self.flags.intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore) {
             return;
         }
 
-        let key = Ignore::key(
-            self.file_type,
-            id,
-            self.flags,
-            self.duplicate_mode,
-        );
+        let key = Ignore::key(self.file_type, id, self.flags, self.duplicate_mode);
 
         let entry = self.ignore.map.entry(key);
 
@@ -345,14 +337,10 @@ impl Base {
     ///
     /// The returned string borrows `value`, not `self` - keeping the lifetimes
     /// separate lets the caller drop the `&self` borrow immediately.
-    pub(super) fn extract_string<'v>(
-        &self,
-        value: &'v Value,
-        fail_if_empty: bool,
-    ) -> Option<&'v str> {
-        let string = value.as_str().or_else(|| {
-            std::str::from_utf8(value.as_byte_vec().unwrap_or_default()).ok()
-        })?;
+    pub(super) fn extract_string<'v>(&self, value: &'v Value, fail_if_empty: bool) -> Option<&'v str> {
+        let string = value
+            .as_str()
+            .or_else(|| std::str::from_utf8(value.as_byte_vec().unwrap_or_default()).ok())?;
 
         let trimmed = string.trim();
 
@@ -360,11 +348,7 @@ impl Base {
             return None;
         }
 
-        Some(if self.flags.contains(BaseFlags::Trim) {
-            trimmed
-        } else {
-            string
-        })
+        Some(string)
     }
 
     /// ONLY CALLED ON WRITE.
@@ -404,12 +388,10 @@ impl Base {
     pub(super) fn finish(&mut self, value: Value) -> ProcessedData {
         if self.mode.is_write() {
             ProcessedData::RPGMData(if self.file_type.is_plugins() {
-                let plugins_bytes = unsafe {
-                    to_vec(&SerdeValue::from(value)).unwrap_unchecked()
-                };
+                let plugins_bytes = unsafe { to_vec(&SerdeValue::from(value)).unwrap_unchecked() };
 
                 ["var $plugins =\n".as_bytes(), &plugins_bytes].concat()
-            } else if self.engine_type.is_new() {
+            } else if self.engine_type.is_mvmz() {
                 unsafe { to_vec(&SerdeValue::from(value)).unwrap_unchecked() }
             } else {
                 dump(

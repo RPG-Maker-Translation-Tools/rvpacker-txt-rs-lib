@@ -1,4 +1,4 @@
-use crate::constants::{GLOB_ENTRY_COMMENT, SEPARATOR};
+use crate::{get_glob_entry_comment, get_line_separator};
 use gxhash::{HashSet, HashSetExt};
 
 /// A shell-style pattern from a `.rvpacker-ignore` file.
@@ -37,9 +37,7 @@ impl Glob {
         let (mut star, mut retry) = (usize::MAX, 0);
 
         while t < text.len() {
-            if p < pattern.len()
-                && (pattern[p] == b'?' || pattern[p] == text[t])
-            {
+            if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == text[t]) {
                 p += 1;
                 t += 1;
             } else if p < pattern.len() && pattern[p] == b'*' {
@@ -67,7 +65,7 @@ impl Glob {
 /// Lines to skip for one file or section.
 ///
 /// Plain lines are matched exactly, which is the common case and stays a hash
-/// lookup. Lines written as `<!>Glob<#>pattern` are matched as [`Glob`]s,
+/// lookup. Lines written as `{COMMENT_PREFIX}Glob{SEP}pattern` are matched as [`Glob`]s,
 /// for text that can only be recognised by shape - a shared prefix or suffix
 /// rather than a fixed string.
 #[derive(Default)]
@@ -88,8 +86,8 @@ impl IgnoreEntry {
     /// Adds a line read from a `.rvpacker-ignore` file, which may be a glob.
     pub fn insert_line(&mut self, line: &str) {
         if let Some(pattern) = line
-            .strip_prefix(GLOB_ENTRY_COMMENT)
-            .and_then(|rest| rest.strip_prefix(SEPARATOR))
+            .strip_prefix(get_glob_entry_comment())
+            .and_then(|rest| rest.strip_prefix(get_line_separator()))
         {
             self.globs.push(Glob::new(pattern.to_owned()));
         } else {
@@ -105,8 +103,7 @@ impl IgnoreEntry {
     /// Whether `text` is ignored, by exact match or by any glob.
     #[must_use]
     pub fn contains(&self, text: &str) -> bool {
-        self.literals.contains(text)
-            || self.globs.iter().any(|glob| glob.matches(text))
+        self.literals.contains(text) || self.globs.iter().any(|glob| glob.matches(text))
     }
 
     #[must_use]
@@ -123,7 +120,9 @@ impl IgnoreEntry {
             .map(|literal| std::borrow::Cow::Borrowed(literal.as_str()))
             .chain(self.globs.iter().map(|glob| {
                 std::borrow::Cow::Owned(format!(
-                    "{GLOB_ENTRY_COMMENT}{SEPARATOR}{pattern}",
+                    "{comment}{sep}{pattern}",
+                    comment = get_glob_entry_comment(),
+                    sep = get_line_separator(),
                     pattern = glob.pattern()
                 ))
             }))
