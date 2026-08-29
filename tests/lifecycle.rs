@@ -888,12 +888,18 @@ mod scenarios {
 
         let after = slurp(&reread.join("system.txt"));
 
-        // XP's system file has no title field of its own - the writer adds
-        // one, which is inert in the game but does come back out on a read.
-        assert!(
-            block(&after, 8).contains(&format!("{translated_title}<#>")),
-            "the translated title did not reach the system file"
-        );
+        if fixture.engine.is_xp() {
+            // XP's system file has no title field of its own
+            assert!(
+                !block(&after, 8).contains(&format!("{translated_title}<#>")),
+                "XP has no game-title field of its own; the writer should not have invented one"
+            );
+        } else {
+            assert!(
+                block(&after, 8).contains(&format!("{translated_title}<#>")),
+                "the translated title did not reach the system file"
+            );
+        }
     }
 
     /// `SkipObsolete` drops entries that the game files no longer have.

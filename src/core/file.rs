@@ -1,55 +1,13 @@
 use super::IgnoreEntry;
 use crate::{
-    constants::INSTANCE_VAR_PREFIX,
     get_ignore_entry_comment, get_line_separator,
-    types::{DuplicateMode, EngineType, Error, IgnoreMap, RPGMFileType},
+    types::{DuplicateMode, Error, IgnoreMap, RPGMFileType},
 };
-use marshal_rs::{Value, load_binary, load_utf8};
 use serde_json::{Value as SerdeValue, from_str};
 use smallvec::SmallVec;
 use std::{fs::DirEntry, path::Path};
 
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-
-/// Parses RPG Maker file from passed content.
-///
-/// # Parameters
-///
-/// - `content` - Content of file to parse.
-/// - `engine_type` - Engine type of the file.
-/// - `file_type` - Type of the file.
-///
-/// # Returns
-///
-/// - [`Value`] - if file was parsed successfully.
-/// - [`Error`] - if unable to deserialize the file.
-///
-/// # Errors
-///
-/// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
-/// - [`Error::JsonParse`] - if unable to parse the JSON data.
-///
-pub fn parse_rpgm_file(mut content: &[u8], engine_type: EngineType, file_type: RPGMFileType) -> Result<Value, Error> {
-    if engine_type.is_mvmz() {
-        // MZ includes Byte Order Mark in files.
-        if content.starts_with(BOM) {
-            content = &content[3..];
-        }
-
-        // SAFETY: JSON is always valid UTF-8.
-        let parsed = from_str::<SerdeValue>(unsafe { std::str::from_utf8_unchecked(content) })?;
-
-        Ok(Value::from(parsed))
-    } else {
-        let loaded = if file_type.is_scripts() {
-            load_binary(content, INSTANCE_VAR_PREFIX)
-        } else {
-            load_utf8(content, INSTANCE_VAR_PREFIX)
-        }?;
-
-        Ok(loaded)
-    }
-}
 
 /// Filters entries of [`std::fs::ReadDir`] and returns iterator of only `Map` entries.
 ///
@@ -133,6 +91,50 @@ pub fn filter_other<'a>(
     result.into_iter()
 }
 
+/// Filters entries of [`std::fs::ReadDir`] and returns an iterator of only `MapNNNN.lmu`
+/// entries, sorted by numeric id.
+///
+/// Rm2k projects keep every map at the project root rather than in a `Data`
+/// subdirectory, and don't share [`filter_maps`]'s extension-driven filter -
+/// the extension is always `lmu`, and the numeric id is four digits rather
+/// than the variable-width id MV/VX uses.
+///
+/// # Parameters
+///
+/// - `entries` - Entries read with [`std::fs::read_dir`].
+///
+/// # Returns
+///
+/// Filtered iterator containing only `MapNNNN.lmu` entries.
+#[must_use]
+pub fn filter_rm2k_maps<'a>(entries: impl Iterator<Item = &'a DirEntry>) -> impl Iterator<Item = &'a DirEntry> {
+    let mut result: Vec<&'a DirEntry> = entries
+        .filter_map(move |entry| {
+            if !entry.file_type().ok()?.is_file() {
+                return None;
+            }
+
+            let filename = entry.file_name();
+            let filename_str = filename.to_str()?;
+            let digits = filename_str.strip_prefix("Map")?.strip_suffix(".lmu")?;
+
+            if digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()) {
+                return Some(entry);
+            }
+
+            None
+        })
+        .collect();
+
+    result.sort_by_key(|entry| {
+        let filename = entry.file_name();
+        let filename_str = filename.to_str().unwrap_or("");
+        filename_str[3..7].parse::<u32>().unwrap_or(0)
+    });
+
+    result.into_iter()
+}
+
 /// Parses ignore file contents to [`IgnoreMap`].
 ///
 /// # Parameters
@@ -199,6 +201,19 @@ pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, re
 }
 
 /// Extracts the game title from a `Game.ini` file's content.
+///
+/// Doubles as a practical way to guess an XP/VX project's [`Base::set_read_encoding`](super::Base::set_read_encoding)
+/// (see the "Text encoding" section of the crate documentation for the underlying
+/// problem): every other `Game.ini` entry is ASCII, so the title is the one place
+/// non-ASCII bytes can turn up at all, and when it does contain them, it was RPG
+/// Maker's own editor - running on the original developer's machine - that wrote
+/// them, in whatever codepage that machine's locale used at the time (Shift-JIS
+/// for a Japanese developer, Windows-1251 for a Russian one, and so on). Feeding
+/// the returned bytes to each codepage `encoding_rs` supports and keeping whichever
+/// one decodes without errors (ideally with a human sanity-check of the result, or
+/// falling back to a language-specific heuristic when more than one decodes
+/// cleanly) recovers that same codepage - not with certainty, since a purely-ASCII
+/// title gives no signal either way, but it is the same trick used in practice.
 ///
 /// # Parameters
 ///

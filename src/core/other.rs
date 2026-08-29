@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData, get_line_break,
+    marshal_compat::Value,
     types::{Error, RPGMFileType, Variable},
 };
-use marshal_rs::{Get, Value};
 use regex::Regex;
 use std::{borrow::Cow, cell::LazyCell, fmt::Write as FmtWrite};
 
@@ -67,46 +67,53 @@ impl Base {
         self.reset();
         self.initialize_translation(translation)?;
 
-        let mut entry_value = parse_rpgm_file(content, self.engine_type, self.file_type)?;
-
-        // SAFETY: All "other" entries are always arrays.
-        let object_array = unsafe { entry_value.as_array_mut().unwrap_unchecked() };
-
+        let mut data = parse_rpgm_file(content, self.engine_type)?;
         let mut processed = false;
 
-        // Skipping one, because the first entry is always null.
-        for object in object_array.iter_mut().skip(1) {
-            // SAFETY: Name and ID exists on every object.
-            let id = unsafe { object["id"].as_int().unwrap_unchecked() } as u16;
+        {
+            let mut root = data.root();
 
-            if self.get_translation_map(id).is_break() {
-                if self.mode.is_purge() {
-                    processed = true;
+            // Skipping one, because the first entry is always null.
+            root.for_each_element_mut(1, |object| {
+                // SAFETY: Name and ID exists on every object.
+                let id = unsafe { object.member("id").unwrap_unchecked().as_int().unwrap_unchecked() } as u16;
+
+                if self.get_translation_map(id).is_break() {
+                    if self.mode.is_purge() {
+                        processed = true;
+                    }
+
+                    return;
                 }
 
-                continue;
-            }
+                processed = true;
 
-            processed = true;
+                let event_name = unsafe {
+                    object
+                        .member(self.labels.name)
+                        .unwrap_unchecked()
+                        .as_str()
+                        .unwrap_unchecked()
+                        .to_owned()
+                };
 
-            let event_name = unsafe { object[self.labels.name].as_str().unwrap_unchecked() };
+                self.update_metadata(id, Vec::from([(CommentPos::Name, event_name.as_str())]));
 
-            self.update_metadata(id, Vec::from([(CommentPos::Name, event_name)]));
+                if self.file_type.is_events() || self.file_type.is_troops() {
+                    self.process_object(object);
+                } else {
+                    self.process_array(object);
+                }
 
-            if self.file_type.is_events() || self.file_type.is_troops() {
-                self.process_object(object);
-            } else {
-                self.process_array(object);
-            }
-
-            self.flush_translation(id);
+                self.flush_translation(id);
+            });
         }
 
         if !processed {
             return Ok(None);
         }
 
-        Ok(Some(self.finish(entry_value)))
+        Ok(Some(self.finish(data)))
     }
 
     #[allow(clippy::collapsible_match, clippy::single_match)]
@@ -147,26 +154,26 @@ impl Base {
     }
 
     /// Processes an object from `CommonEvents` or `Troops` file.
-    fn process_object(&mut self, object: &mut Value) {
+    fn process_object(&mut self, object: &mut Value<'_>) {
         if self.file_type.is_troops() {
             // SAFETY: Troops always include pages.
-            let pages = unsafe { object[self.labels.pages].as_array_mut().unwrap_unchecked() };
+            let mut pages = unsafe { object.member(self.labels.pages).unwrap_unchecked() };
 
-            for page in pages {
-                if let Some(list_array) = page[self.labels.list].as_array_mut() {
-                    self.process_list(list_array);
+            pages.for_each_element_mut(0, |page| {
+                if let Some(mut list_array) = page.member(self.labels.list) {
+                    self.process_list(&mut list_array);
                 }
-            }
+            });
         } else {
             // SAFETY: CommonEvents always include list.
-            let list = unsafe { object[self.labels.list].as_array_mut().unwrap_unchecked() };
+            let mut list = unsafe { object.member(self.labels.list).unwrap_unchecked() };
 
-            self.process_list(list);
+            self.process_list(&mut list);
         }
     }
 
     /// Processes an object array from `Actors`, `Armors`, `Classes`, `Enemies`, `Items`, `States`, `Weapons` files.
-    fn process_array(&mut self, array: &mut Value) {
+    fn process_array(&mut self, array: &mut Value<'_>) {
         let variable_pairs = [
             (self.labels.name, Variable::Name),
             (self.labels.nickname, Variable::Nickname),
@@ -179,26 +186,28 @@ impl Base {
         ];
 
         for (variable_label, variable_type) in variable_pairs {
-            let Some(object) = array.get(variable_label) else {
+            let Some(mut object) = array.member(variable_label) else {
                 continue;
             };
 
-            let Some(string) = self.extract_string(object, true) else {
-                continue;
+            let parsed = {
+                let Some(mut string) = self.extract_string(&object, true) else {
+                    continue;
+                };
+
+                if self.mode.is_write() && variable_type.is_any_message() {
+                    string = Cow::Owned(string.lines().map(str::trim).collect::<Vec<_>>().join("\n"));
+                }
+
+                self.process_variable(&string, variable_type)
             };
 
-            let mut string = Cow::Borrowed(string);
-
-            if self.mode.is_write() && variable_type.is_any_message() {
-                string = Cow::Owned(string.lines().map(str::trim).collect::<Vec<_>>().join("\n"));
-            }
-
-            let Some(parsed) = self.process_variable(&string, variable_type) else {
+            let Some(parsed) = parsed else {
                 continue;
             };
 
             if self.mode.is_write() {
-                array[variable_label] = Value::string(parsed);
+                self.write_translated(&mut object, parsed, self.engine_type.is_mvmz());
             } else {
                 let folded = parsed
                     .lines()

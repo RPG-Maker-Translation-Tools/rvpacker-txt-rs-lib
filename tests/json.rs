@@ -276,19 +276,12 @@ engines! {
     xp => ("RMXP", EngineType::XP),
 }
 
-/// Every integer survives a Marshal round trip.
-///
-/// `marshal-rs` 2.0.1 writes a positive length byte for any negative integer in
-/// `-256..=-124`, so it loads back as `value + 256`: `dump.rs`'s `write_int` has
-/// `I8_MIN..=I8_MAX => { buf.push(1); ... }` where the other arms pick the
-/// length's sign from the number's. XP's and VX's default `Skills` carry -150
-/// and -250, which is how this turned up.
 #[test]
 fn negative_integers_survive_a_round_trip() {
     for value in [-1, -123, -124, -150, -250, -256, -257, -1000, 0, 150] {
         // The tagged form `generate_file` produces: an array object holding
         // one integer.
-        let json = format!(r#"{{"__id": 1, "__type": 9, "__value": [{value}]}}"#);
+        let json = format!(r#"{{"__type": "array", "__value": [{value}]}}"#);
         let dumped = write_file(&json).expect("write_file failed");
         let loaded = generate_file(&dumped, "Numbers.rvdata2").expect("generate failed");
 

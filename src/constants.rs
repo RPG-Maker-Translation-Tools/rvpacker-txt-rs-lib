@@ -16,5 +16,3 @@ pub const DEFAULT_LINE_SEPARATOR: &str = "<#>";
 
 pub const RVPACKER_IGNORE_FILE: &str = ".rvpacker-ignore";
 pub const RVPACKER_METADATA_FILE: &str = ".rvpacker-metadata";
-
-pub(crate) const INSTANCE_VAR_PREFIX: Option<&str> = Some("");

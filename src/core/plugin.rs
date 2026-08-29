@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData,
+    marshal_compat::RpgmData,
     types::{Error, RPGMFileType},
 };
-use marshal_rs::{Value, ValueType};
 use regex::Regex;
 use serde_json::{Value as SerdeValue, from_str};
 use std::cell::LazyCell;
@@ -85,10 +85,8 @@ impl Base {
         };
 
         // SAFETY: Plugins are always array.
-        let mut plugins_array = unsafe {
-            Value::from(from_str::<SerdeValue>(plugins_array_str)?)
-                .into_array()
-                .unwrap_unchecked()
+        let SerdeValue::Array(mut plugins_array) = from_str::<SerdeValue>(plugins_array_str)? else {
+            unsafe { std::hint::unreachable_unchecked() }
         };
 
         let mut processed = false;
@@ -117,10 +115,10 @@ impl Base {
             return Ok(None);
         }
 
-        Ok(Some(self.finish(Value::array(plugins_array))))
+        Ok(Some(self.finish(RpgmData::from_json(SerdeValue::Array(plugins_array)))))
     }
 
-    fn parse_plugin(&mut self, key: Option<&str>, value: &mut Value) {
+    fn parse_plugin(&mut self, key: Option<&str>, value: &mut SerdeValue) {
         let is_invalid_key = |key: Option<&str>| {
             let Some(key_string) = key else {
                 return false;
@@ -133,8 +131,8 @@ impl Base {
             }
         };
 
-        match &mut **value {
-            ValueType::String(value_string) => {
+        match value {
+            SerdeValue::String(value_string) => {
                 if is_invalid_key(key) {
                     return;
                 }
@@ -156,19 +154,19 @@ impl Base {
                         // too. Looking up the normalized form left any plugin
                         // string with a line break in it unwritable.
                         if let Some(translated) = self.get_key(&string.denormalize()) {
-                            *value = Value::string(translated.as_str());
+                            *value = SerdeValue::String(translated.to_string());
                         }
                     } else {
                         self.insert_string(string);
                     }
                 }
             }
-            ValueType::Object(obj) => {
+            SerdeValue::Object(obj) => {
                 for (key, value) in obj.iter_mut() {
                     self.parse_plugin(Some(key), value);
                 }
             }
-            ValueType::Array(arr) => {
+            SerdeValue::Array(arr) => {
                 for value in arr {
                     self.parse_plugin(None, value);
                 }

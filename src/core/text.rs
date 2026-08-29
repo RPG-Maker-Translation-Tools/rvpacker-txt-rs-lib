@@ -220,7 +220,7 @@ pub fn string_is_only_symbols(string: &str) -> bool {
 ///
 /// Older engines append a condition to some event parameters; it is code rather
 /// than text, so it is cut before translation and restored on write.
-// TODO(v15): Check when starts with if
+// TODO(v whatever): Check when starts with if
 //* This is breaking
 #[must_use]
 pub fn ends_with_if_index(string: &str) -> Option<usize> {

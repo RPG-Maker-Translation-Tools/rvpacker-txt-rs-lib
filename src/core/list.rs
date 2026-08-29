@@ -1,6 +1,5 @@
 use super::*;
-use crate::{get_line_break, types::Code};
-use marshal_rs::Value;
+use crate::{get_line_break, marshal_compat::Value, types::Code};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
@@ -96,9 +95,9 @@ impl Base {
     }
 
     /// Applies an already-processed parameter, produced by [`Base::process_parameter`].
-    pub(super) fn process_param(&mut self, value: &mut Value, parsed: String) {
+    pub(super) fn process_param(&mut self, value: &mut Value<'_>, parsed: String) {
         if self.mode.is_write() {
-            *value = Self::make_string_value(&parsed, self.engine_type.is_mvmz());
+            self.write_translated(value, parsed, self.engine_type.is_mvmz());
         } else {
             self.insert_string(Cow::Owned(parsed));
         }
@@ -106,7 +105,7 @@ impl Base {
 
     pub(super) fn join_dialogue_lines(
         &mut self,
-        list: &mut [Value],
+        list: &mut Value<'_>,
         dialogue_lines: &mut SmallVec<[String; 4]>,
         dialogue_line_indices: &mut SmallVec<[usize; 4]>,
         write_string_literally: bool,
@@ -123,11 +122,15 @@ impl Base {
             let dialogue_line_count = dialogue_lines.len();
 
             for (i, &index) in dialogue_line_indices.iter().enumerate() {
-                list[index][self.labels.parameters][0] = if i < split_line_count {
-                    Self::make_string_value(translation_lines[i], write_string_literally)
+                let Some(mut item) = list.at(index) else { continue };
+                let Some(mut params) = item.member(self.labels.parameters) else { continue };
+                let Some(mut slot) = params.at(0) else { continue };
+
+                if i < split_line_count {
+                    self.write_translated(&mut slot, translation_lines[i].to_owned(), write_string_literally);
                 } else {
                     // Overwrite leftover source text
-                    Value::string(" ")
+                    slot.set_string(" ".to_owned());
                 }
             }
 
@@ -135,11 +138,17 @@ impl Base {
                 let remaining = translation_lines[dialogue_line_count - 1..].join("\n");
 
                 // SAFETY: We checked that `dialogue_lines` are not empty before calling this.
-                list[unsafe { *dialogue_line_indices.last().unwrap_unchecked() }][self.labels.parameters][0] =
-                    Value::string(remaining);
+                let last_index = unsafe { *dialogue_line_indices.last().unwrap_unchecked() };
+
+                if let Some(mut item) = list.at(last_index)
+                    && let Some(mut params) = item.member(self.labels.parameters)
+                    && let Some(mut slot) = params.at(0)
+                {
+                    self.write_translated(&mut slot, remaining, write_string_literally);
+                }
             }
         } else if let Some(parsed) = self.process_parameter(Code::Dialogue, &joined) {
-            self.process_param(&mut Value::default(), parsed);
+            self.insert_string(Cow::Owned(parsed));
         }
     }
 
@@ -147,9 +156,9 @@ impl Base {
     ///
     /// # Parameters
     ///
-    /// - `list` - list of [`Value`]s.
+    /// - `list` - the `list` array [`Value`] cursor.
     ///
-    pub(super) fn process_list(&mut self, list: &mut Vec<Value>) {
+    pub(super) fn process_list(&mut self, list: &mut Value<'_>) {
         let mut in_sequence = false;
         let mut write_string_literally = self.engine_type.is_mvmz();
         let mut dialogue_lines = SmallVec::with_capacity(4);
@@ -158,10 +167,12 @@ impl Base {
         // Indexed rather than iterated, because `join_dialogue_lines` needs `list`
         // itself while we're partway through it.
         for item_idx in 0..list.len() {
-            let item = &mut list[item_idx];
-
             // SAFETY: Each item must contain code.
-            let code = Code::from(unsafe { item[self.labels.code].as_int().unwrap_unchecked() } as u16);
+            let code = {
+                let mut item = unsafe { list.at(item_idx).unwrap_unchecked() };
+                let code = unsafe { item.member(self.labels.code).unwrap_unchecked().as_int().unwrap_unchecked() };
+                Code::from(code as u16)
+            };
 
             let code = if code.is_dialogue_start() && !self.engine_type.is_xp() {
                 Code::Bad
@@ -170,14 +181,19 @@ impl Base {
             };
 
             if self.mode.is_write() && !self.engine_type.is_mvmz() {
+                let mut item = unsafe { list.at(item_idx).unwrap_unchecked() };
                 // SAFETY: Each item must contain parameters.
-                let parameters = unsafe { item[self.labels.parameters].as_array().unwrap_unchecked() };
+                let mut parameters = unsafe { item.member(self.labels.parameters).unwrap_unchecked() };
 
-                if !parameters.is_empty() {
+                if parameters.len() > 0 {
                     write_string_literally = !match code {
-                        Code::ChoiceArray => parameters[0][0].is_bytes(),
-                        Code::Misc1 | Code::Misc2 | Code::Choice => parameters[1].is_bytes(),
-                        _ => parameters[0].is_bytes(),
+                        Code::ChoiceArray => unsafe {
+                            parameters.at(0).unwrap_unchecked().at(0).unwrap_unchecked().is_bytes()
+                        },
+                        Code::Misc1 | Code::Misc2 | Code::Choice => unsafe {
+                            parameters.at(1).unwrap_unchecked().is_bytes()
+                        },
+                        _ => unsafe { parameters.at(0).unwrap_unchecked().is_bytes() },
                     }
                 }
             }
@@ -203,10 +219,11 @@ impl Base {
                 continue;
             }
 
+            let mut item = unsafe { list.at(item_idx).unwrap_unchecked() };
             // SAFETY: Each item must contain parameters.
-            let parameters = unsafe { list[item_idx][self.labels.parameters].as_array_mut().unwrap_unchecked() };
+            let mut parameters = unsafe { item.member(self.labels.parameters).unwrap_unchecked() };
 
-            if parameters.is_empty() {
+            if parameters.len() == 0 {
                 continue;
             }
 
@@ -214,45 +231,57 @@ impl Base {
 
             if code.is_choice_array() {
                 // SAFETY: We have just checked - it's an array.
-                let choices = unsafe { parameters[value_index].as_array_mut().unwrap_unchecked() };
+                let mut choices = unsafe { parameters.at(value_index).unwrap_unchecked() };
 
                 for choice_idx in 0..choices.len() {
-                    // Scoped so that the borrow of `choices[choice_idx]` ends
+                    // Scoped so that the borrow of `choices.at(choice_idx)` ends
                     // before we write back into it; `process_parameter` returns
                     // owned data, so nothing outlives the scope.
                     let parsed = {
-                        let Some(string) = self.extract_string(&choices[choice_idx], true) else {
+                        let Some(choice) = choices.at(choice_idx) else {
                             continue;
                         };
 
-                        self.process_parameter(code, string)
+                        let Some(string) = self.extract_string(&choice, true) else {
+                            continue;
+                        };
+
+                        self.process_parameter(code, &string)
                     };
 
-                    if let Some(parsed) = parsed {
-                        self.process_param(&mut choices[choice_idx], parsed);
+                    if let Some(parsed) = parsed
+                        && let Some(mut choice) = choices.at(choice_idx)
+                    {
+                        self.process_param(&mut choice, parsed);
                     }
                 }
             } else {
-                let value = &mut parameters[value_index];
-
-                let Some(parameter_string) = self.extract_string(&*value, false) else {
+                let Some(mut value) = parameters.at(value_index) else {
                     continue;
                 };
 
-                if !code.is_credit() && parameter_string.is_empty() {
-                    continue;
-                }
+                let parameter_string = {
+                    let Some(parameter_string) = self.extract_string(&value, false) else {
+                        continue;
+                    };
+
+                    if !code.is_credit() && parameter_string.is_empty() {
+                        continue;
+                    }
+
+                    parameter_string.into_owned()
+                };
 
                 if code.is_any_dialogue() {
-                    dialogue_lines.push(parameter_string.into());
+                    dialogue_lines.push(parameter_string);
 
                     if self.mode.is_write() {
                         dialogue_line_indices.push(item_idx);
                     }
 
                     in_sequence = true;
-                } else if let Some(parsed) = self.process_parameter(code, parameter_string) {
-                    self.process_param(value, parsed);
+                } else if let Some(parsed) = self.process_parameter(code, &parameter_string) {
+                    self.process_param(&mut value, parsed);
                 }
             }
         }

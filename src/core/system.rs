@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData,
+    marshal_compat::Value,
     types::{Error, RPGMFileType, TranslationEntry},
 };
-use marshal_rs::{Get, Value};
 use std::{borrow::Cow, mem::take};
 
 impl Base {
@@ -76,9 +76,7 @@ impl Base {
         self.file_type = RPGMFileType::System;
         self.initialize_translation(translation)?;
 
-        // Per-call state, kept out of `Base` so that borrowing it stays disjoint
-        // from the `&mut self` the per-value helpers need.
-        let mut system_value = parse_rpgm_file(content, self.engine_type, self.file_type)?;
+        let mut data = parse_rpgm_file(content, self.engine_type)?;
         let mut processed = false;
 
         for (entry_id, entry_name) in [
@@ -108,6 +106,8 @@ impl Base {
 
             self.update_metadata(id, Vec::from([(CommentPos::Name, entry_name)]));
 
+            let mut root = data.root();
+
             if id <= 5 {
                 let label = [
                     self.labels.armor_types,
@@ -117,19 +117,17 @@ impl Base {
                     self.labels.equip_types,
                 ][id as usize - 1];
 
-                let Some(array) = system_value[label].as_array_mut() else {
+                let Some(mut array) = root.member(label) else {
                     continue;
                 };
 
-                for value in array {
-                    self.process_value(value);
-                }
+                array.for_each_element_mut(0, |value| self.process_value(value));
             } else if id == 6 {
-                self.process_terms(&mut system_value);
+                self.process_terms(&mut root);
             } else if id == 7 {
-                self.process_currency_unit(&mut system_value);
+                self.process_currency_unit(&mut root);
             } else {
-                self.process_game_title(&mut system_value);
+                self.process_game_title(&mut root);
             }
 
             self.flush_translation(id);
@@ -139,57 +137,57 @@ impl Base {
             return Ok(None);
         }
 
-        Ok(Some(self.finish(system_value)))
+        Ok(Some(self.finish(data)))
     }
 
-    fn process_terms(&mut self, system_value: &mut Value) {
-        let Some(terms) = system_value[self.labels.terms].as_object_mut() else {
+    fn process_terms(&mut self, system_value: &mut Value<'_>) {
+        let Some(mut terms) = system_value.member(self.labels.terms) else {
             return;
         };
 
-        for (key, value) in terms.iter_mut() {
+        terms.for_each_member_mut(|key, value| {
             if key == "messages" {
-                if let Some(messages) = value.as_object_mut() {
-                    for value in messages.values_mut() {
-                        self.process_value(value);
-                    }
-                }
-            } else if let Some(array) = value.as_array_mut() {
-                for value in array {
-                    self.process_value(value);
-                }
+                value.for_each_member_mut(|_, value| self.process_value(value));
+            } else if value.is_container() {
+                value.for_each_element_mut(0, |value| self.process_value(value));
             } else if value.is_bytes() || value.is_string() {
                 self.process_value(value);
             }
-        }
+        });
     }
 
-    fn process_value(&mut self, value: &mut Value) {
-        let Some(extracted) = self.extract_string(&*value, true) else {
+    fn process_value(&mut self, value: &mut Value<'_>) {
+        let Some(extracted) = self.extract_string(value, true) else {
             return;
         };
 
         if self.mode.is_read() {
-            self.insert_string(Cow::Borrowed(extracted));
+            self.insert_string(extracted);
         } else if self.mode.is_write() {
-            if let Some(translated) = self.get_key(extracted) {
-                *value = Base::make_string_value(translated, self.engine_type.is_mvmz());
+            if let Some(translated) = self.get_key(&extracted) {
+                let translated = translated.to_string();
+                self.write_translated(value, translated, self.engine_type.is_mvmz());
             }
         } else {
             self.translation_map_mut()
-                .insert(extracted.into(), TranslationEntry::default());
+                .insert(extracted.into_owned(), TranslationEntry::default());
         }
     }
 
-    fn process_currency_unit(&mut self, system_value: &mut Value) {
+    fn process_currency_unit(&mut self, system_value: &mut Value<'_>) {
         let label = self.labels.currency_unit;
-        self.process_value(&mut system_value[label]);
+
+        if let Some(mut value) = system_value.member(label) {
+            self.process_value(&mut value);
+        }
     }
 
-    fn process_game_title(&mut self, system_value: &mut Value) {
+    fn process_game_title(&mut self, system_value: &mut Value<'_>) {
         if self.mode.is_write() {
-            if !self.game_title.is_empty() {
-                system_value[self.labels.game_title] = Value::string(self.game_title.as_str());
+            if !self.game_title.is_empty()
+                && let Some(mut value) = system_value.member(self.labels.game_title)
+            {
+                value.set_string(self.game_title.clone());
             }
         } else {
             // User previously set the game title through set_game_title
@@ -199,13 +197,12 @@ impl Base {
                 return;
             }
 
-            if let Some(game_title_value) = system_value.get(self.labels.game_title) {
-                let Some(game_title) = self.extract_string(game_title_value, true) else {
+            if let Some(game_title_value) = system_value.member(self.labels.game_title) {
+                let Some(game_title) = self.extract_string(&game_title_value, true) else {
                     return;
                 };
 
-                let game_title = game_title.to_owned();
-                self.insert_string(Cow::Owned(game_title));
+                self.insert_string(game_title);
             }
         }
     }

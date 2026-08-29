@@ -1,10 +1,9 @@
 use crate::{
-    constants::INSTANCE_VAR_PREFIX,
     core::Base,
     get_line_separator, get_script_comment,
     types::{EngineType, Error, Scripts},
 };
-use marshal_rs::{Value, dump, load_binary, load_utf8};
+use marshal_rs::arena::Arena;
 use serde_json::{from_str, to_string_pretty};
 use std::{
     fmt::Write,
@@ -32,13 +31,8 @@ use std::{
 ///
 pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Error> {
     if filename.starts_with("Scripts") {
-        let scripts_array = unsafe {
-            load_binary(file_content, INSTANCE_VAR_PREFIX)?
-                .into_array()
-                .unwrap_unchecked()
-        };
-
-        let scripts = Base::decode_scripts(&scripts_array);
+        let arena = marshal_rs::load(file_content)?.into_owned();
+        let scripts = Base::decode_scripts(&arena, arena.root(), None);
 
         Ok(scripts
             .numbers
@@ -58,8 +52,8 @@ pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Erro
                 result
             }))
     } else {
-        let loaded = load_utf8(file_content, INSTANCE_VAR_PREFIX)?;
-        Ok(unsafe { to_string_pretty(&loaded).unwrap_unchecked() })
+        let arena = marshal_rs::load(file_content)?;
+        Ok(unsafe { to_string_pretty(&arena).unwrap_unchecked() })
     }
 }
 
@@ -79,12 +73,8 @@ pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Erro
 /// - [`Error::JsonParse`] - if parsing `file_content` JSON fails.
 ///
 pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
-    let json = from_str::<Value>(file_content)?;
-
-    // The same prefix `generate_file` loaded with. Dumping without it left
-    // every instance variable stripped of its `@`, so the file the game got
-    // back had no fields it could recognise.
-    Ok(dump(json, INSTANCE_VAR_PREFIX))
+    let arena = from_str::<Arena<'static>>(file_content)?;
+    Ok(marshal_rs::dump(&arena))
 }
 
 /// Generates JSON representations of older engine files (`.rxdata`, `.rvdata`, `.rvdata2`).
@@ -248,7 +238,7 @@ pub fn write<P: AsRef<Path>>(json_path: P, output_path: P, engine_type: EngineTy
                 scripts.contents.push(content[prev_content_start..].to_string());
             }
 
-            dump(Value::array(Base::encode_scripts(&scripts)), None)
+            marshal_rs::dump(&Base::encode_scripts(&scripts))
         } else {
             write_file(&content)?
         };

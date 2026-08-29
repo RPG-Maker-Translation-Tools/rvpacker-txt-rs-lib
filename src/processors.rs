@@ -1,11 +1,12 @@
 use crate::{
     ProcessedData, RPGMFileType,
     constants::RVPACKER_IGNORE_FILE,
-    core::{Base, filter_maps, filter_other, parse_ignore},
+    core::{Base, filter_maps, filter_other, filter_rm2k_maps, parse_ignore},
     types::{BaseFlags, DuplicateMode, EngineType, Error, FileFlags, Mode},
 };
 use gxhash::{HashMap, HashSet, gxhash64};
 use log::{debug, info, warn};
+use rm2k::engine::{Engine, SaveOpt};
 use std::{
     fs::{DirEntry, create_dir_all, read, read_dir, read_to_string, write},
     mem::take,
@@ -92,6 +93,31 @@ pub struct Processor {
     /// Whether to record event metadata - id, name and coordinates - before each
     /// event's text.
     pub map_events: bool,
+
+    /// Forces *decoding* of untagged source text to a specific codepage,
+    /// instead of guessing it.
+    ///
+    /// XP/VX (pre-1.9 Ruby) and RM2K text carries no reliable in-file encoding
+    /// indicator - set this from a codepage the caller already knows (e.g. from
+    /// `RPG_RT.ini`) rather than relying on the built-in guess.
+    ///
+    /// Independent of [`Processor::write_encoding`] - see that field's docs
+    /// for why reusing one setting for both directions would be wrong.
+    pub read_encoding: Option<&'static encoding_rs::Encoding>,
+
+    /// Forces *encoding* of translated text written back to the source
+    /// format, instead of always writing plain UTF-8.
+    ///
+    /// `None` (the default) always writes UTF-8, which is the only choice
+    /// that cannot silently corrupt a translation written in a different
+    /// script than the source game's own text. Override this only when the
+    /// target engine has no Unicode-aware renderer (RM2K/2003, XP and VX all
+    /// render through the OS's legacy ANSI codepage rather than decoding
+    /// UTF-8) and the translation stays within a script that codepage can
+    /// represent - the player then also needs their system (or a locale
+    /// emulator) set to that same codepage. See the "Text encoding" section
+    /// of the crate documentation.
+    pub write_encoding: Option<&'static encoding_rs::Encoding>,
 }
 
 impl Processor {
@@ -143,9 +169,15 @@ impl Processor {
         let translation_path = translation_path.as_ref();
         let output_path = output_path.unwrap_or(Path::new(""));
 
+        if engine_type == EngineType::RM2K {
+            return self.process_rm2k(source_path, translation_path, output_path);
+        }
+
         let mut base = Base::new(self.mode, engine_type);
         base.flags = self.flags;
         base.duplicate_mode = self.duplicate_mode;
+        base.set_read_encoding(self.read_encoding);
+        base.set_write_encoding(self.write_encoding);
         base.skip_events = take(&mut self.skip_events)
             .into_iter()
             .map(|(id, vec)| (id, HashSet::from_iter(vec)))
@@ -472,5 +504,186 @@ impl Processor {
         }
 
         Ok(())
+    }
+
+    /// Runs the operation selected by [`Processor::mode`] against an RPG Maker
+    /// 2000/2003 project.
+    ///
+    /// Rm2k's layout doesn't fit the rest of [`Processor::process`]: every file
+    /// (`RPG_RT.ldb`, `RPG_RT.lmt`, `MapNNNN.lmu`) lives at the project root
+    /// rather than in a `Data` subdirectory, there's no `Scripts`/`Plugins`
+    /// equivalent, and the entire "other" file set is one `RPG_RT.ldb`
+    /// producing several txt files instead of several source files each
+    /// producing one. [`Processor::process`] dispatches here in a single
+    /// branch instead of threading `engine_type == EngineType::RM2K` through
+    /// the MV/VX flow below.
+    ///
+    /// # Errors
+    ///
+    /// As [`Processor::process`], plus [`Error::Rm2kLoad`] if loading any
+    /// `.ldb`/`.lmt`/`.lmu` fails.
+    fn process_rm2k(&mut self, source_path: &Path, translation_path: &Path, output_path: &Path) -> Result<(), Error> {
+        let mut base = Base::new(self.mode, EngineType::RM2K);
+        base.flags = self.flags;
+        base.duplicate_mode = self.duplicate_mode;
+        base.set_read_encoding(self.read_encoding);
+        base.set_write_encoding(self.write_encoding);
+
+        let mode = base.mode;
+
+        create_dir_all(translation_path).map_err(|e| Error::Io(translation_path.to_path_buf(), e))?;
+
+        if mode.is_write() {
+            create_dir_all(output_path).map_err(|e| Error::Io(output_path.to_path_buf(), e))?;
+        }
+
+        let load_translation = |p: &Path| -> Result<Option<String>, Error> {
+            if mode.is_default() {
+                return Ok(None);
+            }
+
+            read_to_string(p).map_err(|e| Error::Io(p.to_path_buf(), e)).map(Some)
+        };
+
+        let already_exists = |p: &Path| {
+            if mode.is_default_default() && p.exists() {
+                info!(
+                    "{}: File already exists. Use append mode to append text or force mode to overwrite.",
+                    p.display()
+                );
+                true
+            } else {
+                false
+            }
+        };
+
+        let missing_translation = |p: &Path| {
+            if !mode.is_default() && !p.exists() {
+                warn!("{}: Translation file does not exist. Skipping.", p.display());
+                true
+            } else {
+                false
+            }
+        };
+
+        let entries: Vec<DirEntry> = read_dir(source_path)
+            .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
+            .flatten()
+            .collect();
+
+        // Read unconditionally: even a map-only run needs the database's
+        // `system.ldb_id` to know whether to write 2000 or 2003 fields.
+        let ldb_path = source_path.join("RPG_RT.ldb");
+        let ldb_content = read(&ldb_path).map_err(|e| Error::Io(ldb_path, e))?;
+        let mut database = rm2k::file::load_database(&ldb_content)?;
+        let engine = Engine::from_ldb_id(database.value.system.ldb_id);
+        base.set_rm2k_engine(engine);
+
+        if self.file_flags.contains(FileFlags::Map) {
+            let translation_file_path = translation_path.join("maps.txt");
+
+            if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
+                let lmt_path = source_path.join("RPG_RT.lmt");
+                let lmt_content = read(&lmt_path).map_err(|e| Error::Io(lmt_path, e))?;
+                let tree = rm2k::file::load_tree_map(&lmt_content)?;
+
+                let translation = load_translation(&translation_file_path)?;
+
+                base.begin_rm2k_maps();
+
+                for entry in filter_rm2k_maps(entries.iter()) {
+                    let path = entry.path();
+                    let filename = path.file_name().and_then(|p| p.to_str()).unwrap();
+
+                    debug!("{filename}: {pre_msg}", pre_msg = mode_pre_msg(mode));
+
+                    let content = read(&path).map_err(|e| Error::Io(path.clone(), e))?;
+
+                    let result = base.process_rm2k_map(filename, &content, &tree.value, translation.as_deref())?;
+
+                    if mode.is_write()
+                        && let Some(result) = result
+                    {
+                        let out_path = output_path.join(filename);
+                        write(&out_path, result).map_err(|e| Error::Io(out_path, e))?;
+                    }
+
+                    info!("{filename}: {post_msg}", post_msg = mode_post_msg(mode));
+                }
+
+                if !mode.is_write() {
+                    let contents = match base.finish_rm2k_maps() {
+                        ProcessedData::TranslationData(t) => t,
+                        ProcessedData::RPGMData(_) => unreachable!(),
+                    };
+
+                    write(&translation_file_path, contents).map_err(|e| Error::Io(translation_file_path, e))?;
+                }
+            }
+        }
+
+        if self.file_flags.contains(FileFlags::Database) {
+            // Every section shares this shape: load its own txt (translations
+            // aren't bundled - `RPG_RT.ldb` holds every entity kind, so each
+            // kind gets treated as if it were its own file, same as MV/VX's
+            // `Actors.*`/`Skills.*`/...), mutate the shared `database` in
+            // place, and - on read/purge - write the section's own txt back.
+            macro_rules! db_section {
+                ($field:ident, $method:ident, $stem:literal) => {{
+                    let translation_file_path = translation_path.join(concat!($stem, ".txt"));
+
+                    if !already_exists(&translation_file_path) && !missing_translation(&translation_file_path) {
+                        let translation = load_translation(&translation_file_path)?;
+                        let data = base.$method(&mut database.value.$field, translation.as_deref())?;
+
+                        if let Some(data) = data {
+                            write(&translation_file_path, data).map_err(|e| Error::Io(translation_file_path, e))?;
+                        }
+
+                        info!(concat!($stem, ".txt: {}"), mode_post_msg(mode));
+                    }
+                }};
+            }
+
+            db_section!(actors, process_rm2k_actors, "actors");
+            db_section!(skills, process_rm2k_skills, "skills");
+            db_section!(items, process_rm2k_items, "items");
+            db_section!(enemies, process_rm2k_enemies, "enemies");
+            db_section!(troops, process_rm2k_troops, "troops");
+            db_section!(classes, process_rm2k_classes, "classes");
+            db_section!(commonevents, process_rm2k_commonevents, "commonevents");
+            db_section!(states, process_rm2k_states, "states");
+            db_section!(switches, process_rm2k_switches, "switches");
+            db_section!(variables, process_rm2k_variables, "variables");
+            db_section!(terms, process_rm2k_terms, "terms");
+
+            if mode.is_write() {
+                let mut bytes = Vec::new();
+                let opt = SaveOpt { preserve_header: true };
+
+                rm2k::file::save_database(&database.value, &mut bytes, engine, opt, database.header).unwrap();
+
+                let out_path = output_path.join("RPG_RT.ldb");
+                write(&out_path, bytes).map_err(|e| Error::Io(out_path, e))?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn mode_pre_msg(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Read { .. } => "Started reading.",
+        Mode::Write => "Started writing.",
+        Mode::Purge => "Started purging.",
+    }
+}
+
+fn mode_post_msg(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Read { .. } => "Successfully read.",
+        Mode::Write => "Successfully written.",
+        Mode::Purge => "Successfully purged.",
     }
 }

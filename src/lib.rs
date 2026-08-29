@@ -123,6 +123,7 @@ pub(crate) fn get_script_comment() -> &'static str {
 pub mod constants;
 pub mod core;
 pub mod json;
+pub(crate) mod marshal_compat;
 pub mod processors;
 pub mod serde;
 pub mod types;

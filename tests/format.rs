@@ -269,8 +269,11 @@ mod file_flags {
     use super::*;
 
     #[test]
-    fn other_is_everything_but_maps_system_and_scripts() {
-        let rest = FileFlags::map() | FileFlags::system() | FileFlags::scripts();
+    fn other_is_everything_but_maps_system_scripts_and_database() {
+        // `Database` isn't part of `other()` even though it plays the same role
+        // for RM2K: it's a single `RPG_RT.ldb` covering what `other()` and
+        // `system()` cover separately for MV/VX, so it stays its own bit.
+        let rest = FileFlags::map() | FileFlags::system() | FileFlags::scripts() | FileFlags::database();
         assert_eq!(FileFlags::other() | rest, FileFlags::all());
         assert!(!FileFlags::other().intersects(rest));
     }

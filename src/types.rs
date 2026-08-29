@@ -218,6 +218,18 @@ pub enum RPGMFileType {
     Weapons,
     Scripts,
     Plugins,
+    Rm2kMap,
+    Rm2kActors,
+    Rm2kSkills,
+    Rm2kItems,
+    Rm2kEnemies,
+    Rm2kTroops,
+    Rm2kClasses,
+    Rm2kCommonEvents,
+    Rm2kStates,
+    Rm2kTerms,
+    Rm2kSwitches,
+    Rm2kVariables,
 }
 
 impl RPGMFileType {
@@ -240,17 +252,28 @@ impl RPGMFileType {
                 | Self::States
                 | Self::Troops
                 | Self::Weapons
+                | Self::Rm2kActors
+                | Self::Rm2kSkills
+                | Self::Rm2kItems
+                | Self::Rm2kEnemies
+                | Self::Rm2kTroops
+                | Self::Rm2kClasses
+                | Self::Rm2kCommonEvents
+                | Self::Rm2kStates
         )
     }
 
     #[must_use]
     pub const fn is_main(self) -> bool {
-        self.is_map() || self.is_other()
+        matches!(self, Self::Map | Self::Rm2kMap) || self.is_other()
     }
 
     #[must_use]
     pub const fn is_misc(self) -> bool {
-        matches!(self, Self::System | Self::Plugins | Self::Scripts)
+        matches!(
+            self,
+            Self::System | Self::Plugins | Self::Scripts | Self::Rm2kTerms | Self::Rm2kSwitches | Self::Rm2kVariables
+        )
     }
 }
 
@@ -350,13 +373,17 @@ pub enum Error {
     #[error("{0}: IO error occurred: {1}")]
     Io(PathBuf, io::Error),
     #[error("Loading RPG Maker data failed with: {0}")]
-    MarshalLoad(#[from] marshal_rs::LoadError),
+    MarshalLoad(#[from] marshal_rs::ReadError),
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
+    #[error("Loading RPG Maker 2000/2003 data failed with: {0}")]
+    Rm2kLoad(#[from] rm2k::error::ReadError),
     #[error("Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file.")]
     NoTitle,
     #[error("Processing mode is not default read, but no translation was supplied.")]
     NoTranslation,
+    #[error("`{0}` does not resolve to a value in the file.")]
+    InvalidPath(String),
 }
 
 impl Serialize for Error {
@@ -545,6 +572,8 @@ pub enum EngineType {
     VXAce,
     VX,
     XP,
+    /// RPG Maker 2000/2003.
+    RM2K,
 }
 
 impl EngineType {
@@ -554,6 +583,7 @@ impl EngineType {
             "rxdata" => Some(EngineType::XP),
             "rvdata" => Some(EngineType::VX),
             "rvdata2" => Some(EngineType::VXAce),
+            "lmu" | "ldb" | "lmt" => Some(EngineType::RM2K),
             _ => None,
         }
     }
@@ -564,15 +594,25 @@ impl EngineType {
             EngineType::VX => "VX",
             EngineType::VXAce => "VX Ace",
             EngineType::XP => "XP",
+            EngineType::RM2K => "RPG Maker 2000/2003",
         }
     }
 
+    /// The per-entity file extension used to name individual data files.
+    ///
+    /// # Panics
+    ///
+    /// Panics for [`EngineType::RM2K`], whose files (`RPG_RT.ldb`/`.lmt`/`.lmu`)
+    /// don't follow the "one extension per entity file" convention the other
+    /// engines use - rm2k projects are routed through their own filesystem logic
+    /// instead of this method.
     pub fn extension(self) -> &'static str {
         match self {
             EngineType::MVMZ => "json",
             EngineType::VXAce => "rvdata2",
             EngineType::VX => "rvdata",
             EngineType::XP => "rxdata",
+            EngineType::RM2K => unreachable!("RM2K projects are not addressed by a single per-entity extension"),
         }
     }
 }
@@ -631,6 +671,11 @@ bitflags! {
 
         /// `Scripts.ext`/`plugins.js` file.
         const Scripts = 1 << 12;
+
+        /// `RPG_RT.ldb` file. Only meaningful for [`EngineType::RM2K`], where it
+        /// replaces [`FileFlags::other`] and [`FileFlags::System`] - rm2k bundles
+        /// every entity kind plus terms/switches/variables into one database file.
+        const Database = 1 << 13;
     }
 }
 
@@ -653,6 +698,7 @@ impl FieldNames for FileFlags {
         "weapons",
         "system",
         "scripts",
+        "database",
     ];
 }
 
@@ -701,6 +747,7 @@ impl FileFlags {
         weapons => Weapons,
         system => System,
         scripts => Scripts,
+        database => Database,
     }
 }
 
@@ -708,7 +755,17 @@ impl FromStr for FileFlags {
     type Err = &'static str;
 
     /// Derived from [`RPGMFileType`] rather than repeating its filename table.
+    ///
+    /// `"database"` is handled directly: it has no `RPGMFileType` variant of its
+    /// own (every RM2K entity kind - actors, skills, ... - keys its own
+    /// [`RPGMFileType::Rm2k*`](RPGMFileType) variant instead), and RM2K files
+    /// don't reach [`RPGMFileType::from_str`]'s first-three-bytes filename
+    /// matching, since `RPG_RT.ldb` bundles every kind into one file.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("database") {
+            return Ok(Self::Database);
+        }
+
         // SAFETY: `RPGMFileType`'s error type is `Infallible`.
         let file_type = unsafe { RPGMFileType::from_str(s).unwrap_unchecked() };
 
@@ -719,7 +776,7 @@ impl FromStr for FileFlags {
             RPGMFileType::Events => Self::CommonEvents,
             RPGMFileType::Enemies => Self::Enemies,
             RPGMFileType::Items => Self::Items,
-            RPGMFileType::Map => Self::Map,
+            RPGMFileType::Map | RPGMFileType::Rm2kMap => Self::Map,
             RPGMFileType::Skills => Self::Skills,
             RPGMFileType::States => Self::States,
             RPGMFileType::System => Self::System,
@@ -729,6 +786,20 @@ impl FromStr for FileFlags {
             RPGMFileType::Invalid => {
                 return Err("FileFlags require valid RPG Maker data file name to parse from.");
             }
+            // The rest of the RM2K variants are assigned directly by the rm2k
+            // processing path, never parsed from a filename - they don't reach
+            // `RPGMFileType::from_str`.
+            RPGMFileType::Rm2kActors
+            | RPGMFileType::Rm2kSkills
+            | RPGMFileType::Rm2kItems
+            | RPGMFileType::Rm2kEnemies
+            | RPGMFileType::Rm2kTroops
+            | RPGMFileType::Rm2kClasses
+            | RPGMFileType::Rm2kCommonEvents
+            | RPGMFileType::Rm2kStates
+            | RPGMFileType::Rm2kTerms
+            | RPGMFileType::Rm2kSwitches
+            | RPGMFileType::Rm2kVariables => Self::Database,
         })
     }
 }

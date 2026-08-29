@@ -3,28 +3,11 @@ use crate::{
     CommentPos, ProcessedData,
     constants::{COULD_NOT_SPLIT_LINE_MSG, IN_FILE_MSG},
     get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_line_separator,
+    marshal_compat::{RpgmData, Value, marshal_as_text},
     types::{Error, RPGMFileType, TranslationEntry, TranslationMap},
 };
-use marshal_rs::{Get, Value};
+use marshal_rs::value::ValueRef;
 use smallvec::SmallVec;
-
-/// Newer RPG Maker versions store events in arrays while older versions use hash maps.
-#[repr(u8)]
-enum EventIterator<'a> {
-    New(std::iter::Skip<std::slice::IterMut<'a, Value>>),
-    Old(indexmap::map::ValuesMut<'a, Value, Value>),
-}
-
-impl<'a> Iterator for EventIterator<'a> {
-    type Item = &'a mut Value;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            EventIterator::New(iter) => iter.next(),
-            EventIterator::Old(iter) => iter.next(),
-        }
-    }
-}
 
 impl Base {
     /// Prepares this base to process a run of map files.
@@ -34,7 +17,7 @@ impl Base {
     pub fn begin_maps(&mut self) {
         self.reset();
         self.file_type = RPGMFileType::Map;
-        self.mapinfos = Value::default();
+        self.mapinfos = None;
     }
 
     /// Returns the translation data, accumulated after processing multiple maps.
@@ -63,7 +46,7 @@ impl Base {
     /// }
     /// ```
     pub fn finish_maps(&mut self) -> ProcessedData {
-        self.finish(Value::default())
+        self.finish(RpgmData::from_json(serde_json::Value::Null))
     }
 
     /// Processes the RPG Maker map file content.
@@ -118,8 +101,8 @@ impl Base {
         mapinfos: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
-        if self.mapinfos.is_null() {
-            self.mapinfos = parse_rpgm_file(mapinfos, self.engine_type, self.file_type)?;
+        if self.mapinfos.is_none() {
+            self.mapinfos = Some(parse_rpgm_file(mapinfos, self.engine_type)?);
         }
 
         self.initialize_translation(translation)?;
@@ -133,18 +116,15 @@ impl Base {
             return Ok(None);
         }
 
-        let mut map_object = parse_rpgm_file(content, self.engine_type, self.file_type)?;
-        let display_name = self.get_display_name(&map_object);
+        let mut map_data = parse_rpgm_file(content, self.engine_type)?;
+        let display_name = self.get_display_name(&mut map_data.root());
 
         if self.mode.is_read() {
             let map_order = self.get_map_order(id).to_string();
-            let engine_is_new = self.engine_type.is_mvmz();
 
             // Owned, so the borrow of `self.mapinfos` ends before
             // `update_metadata` takes `&mut self`. One short allocation per map.
-            let replaced_map_name = Self::get_map_name(&self.mapinfos, engine_is_new, id)
-                .normalize()
-                .into_owned();
+            let replaced_map_name = self.get_map_name(id).normalize().into_owned();
 
             self.update_metadata(
                 id,
@@ -165,7 +145,9 @@ impl Base {
                 let translation_replaced = translation.denormalize();
                 translation = &translation_replaced;
 
-                map_object[self.labels.display_name] = Value::string(translation);
+                if let Some(mut field) = map_data.root().member(self.labels.display_name) {
+                    self.write_translated(&mut field, translation.to_owned(), self.engine_type.is_mvmz());
+                }
             } else {
                 log::warn!(
                     "{COULD_NOT_SPLIT_LINE_MSG} {display_name_comment_line}\n{IN_FILE_MSG}: {file}.txt",
@@ -174,88 +156,87 @@ impl Base {
             }
         }
 
-        let events = if self.engine_type.is_mvmz() {
-            // Previously, this line was using `unwrap_unchecked`, because it assumed, that events are always an array in MV/MZ.
-            // This is not the case. This array can also contain just `bool`. Now, it returns, if encounters something else than an array.
-            let Some(array) = map_object[self.labels.events].as_array_mut() else {
+        let visited = {
+            let mut root = map_data.root();
+            // Previously, this assumed events are always an array/hash. This
+            // isn't the case for MV/MZ - the field can also just be `false`.
+            // `for_each_event_mut` returns `false` without visiting anything
+            // when the field isn't array/hash shaped either way.
+            let Some(mut events) = root.member(self.labels.events) else {
                 return Ok(None);
             };
 
-            EventIterator::New(array.iter_mut().skip(1))
-        } else {
-            // SAFETY: Always a hashmap in old maps.
-            EventIterator::Old(unsafe {
-                map_object[self.labels.events]
-                    .as_hashmap_mut()
-                    .unwrap_unchecked()
-                    .values_mut()
+            events.for_each_event_mut(|event| {
+                if event.is_null() {
+                    return;
+                }
+
+                // Read before borrowing `pages` out of the same event.
+                let event_metadata = if self.map_events {
+                    Some((
+                        event.member("id").and_then(|v| v.as_int()).unwrap_or_default(),
+                        event
+                            .member("name")
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                            .unwrap_or_default(),
+                        event.member("x").and_then(|v| v.as_int()).unwrap_or_default(),
+                        event.member("y").and_then(|v| v.as_int()).unwrap_or_default(),
+                    ))
+                } else {
+                    None
+                };
+
+                let Some(mut pages) = event.member(self.labels.pages) else {
+                    return;
+                };
+
+                if let Some((event_id, event_name, event_x, event_y)) = event_metadata {
+                    self.flush_translation(id);
+
+                    self.output.accumulated.push((
+                        id,
+                        SmallVec::default(),
+                        FlushedLines::EMPTY,
+                        TranslationMap::from_iter([(
+                            String::new(),
+                            TranslationEntry {
+                                comments: vec![
+                                    format!(
+                                        "{comment}{sep}{event_id}",
+                                        sep = get_line_separator(),
+                                        comment = get_event_id_comment()
+                                    ),
+                                    format!(
+                                        "{comment}{sep}{event_name}",
+                                        sep = get_line_separator(),
+                                        comment = get_event_name_comment()
+                                    ),
+                                    format!(
+                                        "{comment}{sep}{event_x},{event_y}",
+                                        sep = get_line_separator(),
+                                        comment = get_event_pos_comment()
+                                    ),
+                                ],
+                                translation: String::new(),
+                            },
+                        )]),
+                    ));
+                }
+
+                pages.for_each_element_mut(0, |page| {
+                    // SAFETY: List is always in map files.
+                    let mut list = unsafe { page.member(self.labels.list).unwrap_unchecked() };
+                    self.process_list(&mut list);
+                });
             })
         };
 
-        for event in events {
-            if event.is_null() {
-                continue;
-            }
-
-            // Read before borrowing `pages` out of the same event.
-            let event_metadata = if self.map_events {
-                Some((
-                    event["id"].as_int().unwrap(),
-                    event["name"].as_str().unwrap().to_owned(),
-                    event["x"].as_int().unwrap(),
-                    event["y"].as_int().unwrap(),
-                ))
-            } else {
-                None
-            };
-
-            let Some(pages) = event[self.labels.pages].as_array_mut() else {
-                continue;
-            };
-
-            if let Some((event_id, event_name, event_x, event_y)) = event_metadata {
-                self.flush_translation(id);
-
-                self.output.accumulated.push((
-                    id,
-                    SmallVec::default(),
-                    FlushedLines::EMPTY,
-                    TranslationMap::from_iter([(
-                        String::new(),
-                        TranslationEntry {
-                            comments: vec![
-                                format!(
-                                    "{comment}{sep}{event_id}",
-                                    sep = get_line_separator(),
-                                    comment = get_event_id_comment()
-                                ),
-                                format!(
-                                    "{comment}{sep}{event_name}",
-                                    sep = get_line_separator(),
-                                    comment = get_event_name_comment()
-                                ),
-                                format!(
-                                    "{comment}{sep}{event_x},{event_y}",
-                                    sep = get_line_separator(),
-                                    comment = get_event_pos_comment()
-                                ),
-                            ],
-                            translation: String::new(),
-                        },
-                    )]),
-                ));
-            }
-
-            for page in pages {
-                // SAFETY: List is always in map files.
-                let list = unsafe { page[self.labels.list].as_array_mut().unwrap_unchecked() };
-
-                self.process_list(list);
-            }
+        if !visited {
+            return Ok(None);
         }
 
         if self.mode.is_write() {
-            Ok(Some(self.finish(map_object)))
+            Ok(Some(self.finish(map_data)))
         } else {
             self.flush_translation(id);
             Ok(None)
@@ -300,10 +281,12 @@ impl Base {
     ///
     fn is_map_unused(&self, id: u16) -> bool {
         // If map ID can't be found in mapinfos, then it is unused in game.
-        if self.engine_type.is_mvmz() {
-            self.mapinfos.get_index(id as usize).is_none()
-        } else {
-            self.mapinfos.get(&Value::int(i32::from(id))).is_none()
+        match self.mapinfos.as_ref().expect("mapinfos is parsed before is_map_unused is ever called") {
+            RpgmData::Json(v) => v.as_array().and_then(|a| a.get(id as usize)).is_none(),
+            RpgmData::Marshal(arena) => ValueRef::root(arena)
+                .entries()
+                .find(|(k, _)| k.as_i64() == Some(i64::from(id)))
+                .is_none(),
         }
     }
 
@@ -320,13 +303,18 @@ impl Base {
     fn get_map_order(&self, id: u16) -> i32 {
         // SAFETY: "order" always exists in mapinfos and is always an integer.
         unsafe {
-            if self.engine_type.is_mvmz() {
-                &self.mapinfos[id as usize]["order"]
-            } else {
-                &self.mapinfos[Value::int(i32::from(id))]["order"]
+            match self.mapinfos.as_ref().unwrap_unchecked() {
+                RpgmData::Json(v) => v[id as usize]["order"].as_i64().unwrap_unchecked() as i32,
+                RpgmData::Marshal(arena) => ValueRef::root(arena)
+                    .entries()
+                    .find(|(k, _)| k.as_i64() == Some(i64::from(id)))
+                    .unwrap_unchecked()
+                    .1
+                    .get("order")
+                    .unwrap_unchecked()
+                    .as_i64()
+                    .unwrap_unchecked() as i32,
             }
-            .as_int()
-            .unwrap_unchecked()
         }
     }
 
@@ -340,18 +328,22 @@ impl Base {
     ///
     /// - [`&str`] - The name of the map.
     ///
-    /// Takes `mapinfos` explicitly rather than reading it through `&self`, so the
-    /// returned string borrows only that field and leaves `self` free.
-    fn get_map_name(mapinfos: &Value, engine_is_new: bool, id: u16) -> &str {
+    fn get_map_name(&self, id: u16) -> &str {
         // SAFETY: "name" always exists in mapinfos and is always a string.
         unsafe {
-            if engine_is_new {
-                &mapinfos[id as usize]["name"]
-            } else {
-                &mapinfos[Value::int(i32::from(id))]["name"]
+            match self.mapinfos.as_ref().unwrap_unchecked() {
+                RpgmData::Json(v) => v[id as usize]["name"].as_str().unwrap_unchecked(),
+                RpgmData::Marshal(arena) => marshal_as_text(
+                    ValueRef::root(arena)
+                        .entries()
+                        .find(|(k, _)| k.as_i64() == Some(i64::from(id)))
+                        .unwrap_unchecked()
+                        .1
+                        .get("name")
+                        .unwrap_unchecked(),
+                )
+                .unwrap_unchecked(),
             }
-            .as_str()
-            .unwrap_unchecked()
         }
     }
 
@@ -359,15 +351,15 @@ impl Base {
     ///
     /// # Parameters
     ///
-    /// - `map_object` - A reference to a [`Value`] representing the map object.
+    /// - `map_object` - A [`Value`] cursor over the map object.
     ///
     /// # Returns
     ///
     /// - [`String`] - The processed display name, or an empty string if not found.
     ///
-    fn get_display_name(&self, map_object: &Value) -> String {
+    fn get_display_name(&self, map_object: &mut Value<'_>) -> String {
         map_object
-            .get(self.labels.display_name)
+            .member(self.labels.display_name)
             .map(|display_name| {
                 display_name
                     .as_str()

@@ -14,6 +14,7 @@
 //! the file system.
 
 mod base;
+pub mod entity;
 mod file;
 mod ignore;
 mod list;
@@ -21,15 +22,19 @@ mod map;
 mod other;
 mod plugin;
 mod plugins;
+/// `rm2000` to avoid colliding with the `rm2k` crate name
+mod rm2000;
 mod script;
 mod system;
 pub mod text;
 mod translation;
 
 pub use base::Base;
-pub use file::{filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore, parse_rpgm_file};
+pub use entity::{PathSegment, get_entity_values};
+pub use file::{filter_maps, filter_other, filter_rm2k_maps, get_ini_title, get_system_title, parse_ignore};
 pub use ignore::{Glob, IgnoreEntry};
 
+pub(crate) use crate::marshal_compat::parse_rpgm_file;
 pub(crate) use text::{
     CustomReplace, TranslationLine, ends_with_if_index, push_entries, push_metadata, split_translation_line,
     string_is_only_symbols,

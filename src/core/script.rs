@@ -1,10 +1,14 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData,
+    marshal_compat::RpgmData,
     types::{Error, Lines, RPGMFileType, Scripts},
 };
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use marshal_rs::Value;
+use marshal_rs::{
+    arena::{Arena, ValueId},
+    value::ValueRef,
+};
 use regex::Regex;
 use std::{
     borrow::Cow,
@@ -60,13 +64,16 @@ impl Base {
         self.file_type = RPGMFileType::Scripts;
         self.initialize_translation(translation)?;
 
+        // Scripts.* never carries an encoding ivar's UTF-8 validity check
+        // meaningfully - its zlib-compressed bodies are tagged UTF-8 by Ruby
+        // regardless, so it's loaded via raw `Arena`/`ValueRef` here rather
+        // than through the shared `Value` cursor, which would otherwise try
+        // (and fail) to classify that binary content as text.
+        let mut arena = marshal_rs::load(content)?.into_owned();
         // SAFETY: Scripts are always array.
-        let mut scripts_array = unsafe {
-            parse_rpgm_file(content, self.engine_type, self.file_type)?
-                .into_array()
-                .unwrap_unchecked()
-        };
-        let mut scripts = Self::decode_scripts(&scripts_array);
+        let root = arena.root();
+
+        let mut scripts = Self::decode_scripts(&arena, root, self.read_encoding);
 
         // SAFETY: These regexes are valid, 100% no shit.
         let regexes = unsafe {
@@ -82,8 +89,10 @@ impl Base {
 
         let mut processed = false;
 
-        for (((script_id, script), script_name), mut code) in scripts_array
-            .iter_mut()
+        let script_ids: Vec<ValueId> = ValueRef::new(&arena, root).array().map(|v| v.id()).collect();
+
+        for (((script_id, script_element_id), script_name), mut code) in script_ids
+            .into_iter()
             .enumerate()
             .zip(take(&mut scripts.names))
             .zip(take(&mut scripts.contents))
@@ -119,13 +128,14 @@ impl Base {
                 }
 
                 if code_changed {
-                    let mut buf = Vec::with_capacity(code.len());
+                    let encoded_code = self.encode_with_fallback(&code);
+                    let mut buf = Vec::with_capacity(encoded_code.len());
 
                     ZlibEncoder::new(&mut buf, Compression::default())
-                        .write_all(code.as_bytes())
+                        .write_all(&encoded_code)
                         .unwrap();
 
-                    script[2] = Value::bytes(&buf);
+                    arena.set_array_bytes(script_element_id, 2, buf);
                 }
             } else {
                 for extracted in extracted_strings.into_iter().filter(|s| !s.trim().is_empty()) {
@@ -151,7 +161,7 @@ impl Base {
             return Ok(None);
         }
 
-        Ok(Some(self.finish(Value::array(scripts_array))))
+        Ok(Some(self.finish(RpgmData::Marshal(arena))))
     }
 
     fn is_escaped(index: usize, string: &str) -> bool {
@@ -237,7 +247,13 @@ impl Base {
     ///
     /// # Parameters
     ///
-    /// - `scripts_array`: Slice of script entries.
+    /// - `arena` - The loaded `Scripts.*` arena.
+    /// - `root` - The scripts array's id within `arena`.
+    /// - `encoding` - Codepage to decode each script's name and source with,
+    ///   or [`None`] to guess it per script - see [`Base::decode_with_fallback`].
+    ///   [`Base::process_scripts`] passes [`Base::set_read_encoding`]'s override
+    ///   through here; a caller with no [`Base`] in hand (e.g. [`crate::json`])
+    ///   passes [`None`] to keep guessing.
     ///
     /// # Returns
     ///
@@ -248,53 +264,48 @@ impl Base {
     /// May panic if decoder gets interrupted.
     ///
     #[must_use]
-    pub fn decode_scripts(scripts_array: &[Value]) -> Scripts {
-        let mut numbers = Vec::with_capacity(scripts_array.len());
-        let mut contents = Vec::with_capacity(scripts_array.len());
-        let mut names = Vec::with_capacity(scripts_array.len());
+    pub fn decode_scripts(
+        arena: &Arena<'static>,
+        root: ValueId,
+        encoding: Option<&'static encoding_rs::Encoding>,
+    ) -> Scripts {
+        let scripts_len = ValueRef::new(arena, root).len();
+        let mut numbers = Vec::with_capacity(scripts_len);
+        let mut contents = Vec::with_capacity(scripts_len);
+        let mut names = Vec::with_capacity(scripts_len);
 
-        for script in scripts_array {
+        for script in ValueRef::new(arena, root).array() {
             // SAFETY: Scripts always have a layout like this. `0` is magic number, `1` is name and `2` is actual script data.
-            let script_number = if script[0].is_bytes() {
+            let entry0 = unsafe { script.at(0).unwrap_unchecked() };
+
+            // The magic number is a plain integer in modern data, but can be
+            // stored as a numeric string in older/hand-edited files.
+            let script_number = if let Some(n) = entry0.as_i64() {
+                n as i32
+            } else {
                 unsafe {
-                    str::from_utf8_unchecked(script[0].as_byte_vec().unwrap_unchecked())
+                    std::str::from_utf8_unchecked(entry0.as_bytes().unwrap_unchecked())
                         .parse::<i32>()
                         .unwrap_unchecked()
                 }
-            } else if script[0].is_string() {
-                unsafe { script[0].as_str().unwrap_unchecked().parse::<i32>().unwrap_unchecked() }
-            } else {
-                unsafe { script[0].as_int().unwrap_unchecked() }
             };
-            let script_name_data = unsafe { script[1].as_byte_vec().unwrap_unchecked() };
-            let script_data = unsafe { script[2].as_byte_vec().unwrap_unchecked() };
+
+            let script_name_data = unsafe { script.at(1).unwrap_unchecked().as_bytes().unwrap_unchecked() };
+            let script_data = unsafe { script.at(2).unwrap_unchecked().as_bytes().unwrap_unchecked() };
 
             let mut decoded_script = Vec::with_capacity(script_data.len());
             ZlibDecoder::new(script_data).read_to_end(&mut decoded_script).unwrap();
 
-            for encoding in [
-                encoding_rs::UTF_8,
-                encoding_rs::WINDOWS_1252,
-                encoding_rs::WINDOWS_1251,
-                encoding_rs::SHIFT_JIS,
-                encoding_rs::GB18030,
-            ] {
-                let (content_cow, _, had_errors) = encoding.decode(&decoded_script);
-                let (name_cow, _, _) = encoding.decode(script_name_data);
-
-                if !had_errors {
-                    numbers.push(script_number);
-                    contents.push(content_cow.into());
-                    names.push(name_cow.into());
-                    break;
-                }
-            }
+            numbers.push(script_number);
+            contents.push(Base::decode_bytes_with(&decoded_script, encoding));
+            names.push(Base::decode_bytes_with(script_name_data, encoding));
         }
 
         Scripts::new(numbers, contents, names)
     }
 
-    /// Encodes decoded [`Scripts`] struct back to [`Vec<Value>`].
+    /// Encodes decoded [`Scripts`] struct back to a fresh `Arena`, rooted at
+    /// the scripts array.
     ///
     /// # Parameters
     ///
@@ -302,15 +313,16 @@ impl Base {
     ///
     /// # Returns
     ///
-    /// - [`Vec<Value>`] of encoded script entries.
+    /// - [`Arena`] holding the encoded scripts array, ready for [`marshal_rs::dump`].
     ///
     /// # Panics
     ///
     /// May panic if encoder gets interrupted.
     ///
     #[must_use]
-    pub fn encode_scripts(scripts: &Scripts) -> Vec<Value> {
-        let mut scripts_array = Vec::with_capacity(scripts.contents.len());
+    pub fn encode_scripts(scripts: &Scripts) -> Arena<'static> {
+        let mut arena = Arena::builder();
+        let mut entries = Vec::with_capacity(scripts.contents.len());
 
         for ((content, name), number) in scripts
             .contents
@@ -322,13 +334,15 @@ impl Base {
             encoder.write_all(content.as_bytes()).unwrap();
             let compressed_content = encoder.finish().unwrap();
 
-            scripts_array.push(Value::array(vec![
-                Value::int(*number),
-                Value::string(name),
-                Value::bytes(&compressed_content),
-            ]));
+            let number_id = arena.push_fixnum(*number);
+            let name_id = arena.push_string(name.clone());
+            let content_id = arena.push_bytes(compressed_content);
+
+            entries.push(arena.push_array(&[number_id, name_id, content_id]));
         }
 
-        scripts_array
+        let root = arena.push_array(&entries);
+        arena.set_root(root);
+        arena
     }
 }
