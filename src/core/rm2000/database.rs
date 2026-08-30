@@ -58,22 +58,6 @@ rm2k_entity_pass!(
     { name, message_actor, message_enemy, message_already, message_affected, message_recovery }
 );
 
-rm2k_entity_pass!(
-    /// Processes the `switches` entity list from `RPG_RT.ldb`.
-    process_rm2k_switches,
-    RPGMFileType::Rm2kSwitches,
-    Switch<'_>,
-    { name }
-);
-
-rm2k_entity_pass!(
-    /// Processes the `variables` entity list from `RPG_RT.ldb`.
-    process_rm2k_variables,
-    RPGMFileType::Rm2kVariables,
-    Variable<'_>,
-    { name }
-);
-
 impl Base {
     /// Processes the `troops` entity list from `RPG_RT.ldb`.
     ///

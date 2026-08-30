@@ -1,9 +1,11 @@
 use super::*;
 use crate::{
     CommentPos, ProcessedData,
-    types::{Error, RPGMFileType},
+    get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_line_separator,
+    types::{Error, RPGMFileType, TranslationEntry, TranslationMap},
 };
 use rm2k::{engine::SaveOpt, file, rpg::TreeMap};
+use smallvec::SmallVec;
 
 impl Base {
     /// Prepares this base to process a run of `MapNNNN.lmu` files.
@@ -80,6 +82,48 @@ impl Base {
         let mut visited = false;
 
         for event in map.events.iter_mut() {
+            if event.pages.iter().all(|page| page.event_commands.0.is_empty()) {
+                continue;
+            }
+
+            if self.map_events {
+                let event_name = self.decode_with_fallback(event.name.as_bytes());
+
+                self.flush_translation(id);
+
+                self.output.accumulated.push((
+                    id,
+                    SmallVec::default(),
+                    FlushedLines::EMPTY,
+                    TranslationMap::from_iter([(
+                        String::new(),
+                        TranslationEntry {
+                            comments: vec![
+                                format!(
+                                    "{comment}{sep}{event_id}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_id_comment(),
+                                    event_id = event.id
+                                ),
+                                format!(
+                                    "{comment}{sep}{event_name}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_name_comment()
+                                ),
+                                format!(
+                                    "{comment}{sep}{x},{y}",
+                                    sep = get_line_separator(),
+                                    comment = get_event_pos_comment(),
+                                    x = event.x,
+                                    y = event.y
+                                ),
+                            ],
+                            translation: String::new(),
+                        },
+                    )]),
+                ));
+            }
+
             for page in event.pages.iter_mut() {
                 if page.event_commands.0.is_empty() {
                     continue;

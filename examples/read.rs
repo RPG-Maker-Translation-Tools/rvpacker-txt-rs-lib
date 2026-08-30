@@ -24,7 +24,7 @@ fn main() -> Result<(), Error> {
         // `Remove` drops a source line that repeats across multiple sections
         // (e.g. the same dialogue in `map002` and `map003`), keeping only its
         // first appearance in the `.txt` file. Doesn't apply to system,
-        // scripts, plugins or RM2K terms/switches/variables.
+        // scripts, plugins or RM2K terms.
         duplicate_mode: DuplicateMode::Remove,
 
         // XP/VX/VX Ace keep their title only in `Game.ini`, not necessarily as
@@ -73,7 +73,7 @@ fn main() -> Result<(), Error> {
     // RPG Maker 2000/2003 project root (holds `RPG_RT.ldb`/`.lmt`/`MapNNNN.lmu`
     // directly, not a `Data` subdirectory). `FileFlags::Database` replaces
     // `other()` + `System` here - RM2K bundles every entity kind plus
-    // terms/switches/variables into one `RPG_RT.ldb`.
+    // terms into one `RPG_RT.ldb`.
     let mut rm2k_processor = Processor {
         mode: Mode::read(),
         file_flags: FileFlags::Map | FileFlags::Database,

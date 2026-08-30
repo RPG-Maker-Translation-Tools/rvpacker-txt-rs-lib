@@ -265,26 +265,7 @@ impl Processor {
         };
 
         let mut hash = |content: &[u8], filename: &str| {
-            let filename = &filename[0..filename.find('.').unwrap_or(filename.len())].to_ascii_lowercase();
-            let hash = gxhash64(content, self.duplicate_mode as i64);
-            let mut unchanged = false;
-
-            if let Some(&old_hash) = self.hashes.get(filename) {
-                unchanged = old_hash == hash;
-            }
-
-            self.hashes.insert(filename.to_string(), hash);
-
-            if unchanged && self.mode.is_append_default() {
-                info!(
-                    "{filename} hasn't changed since the last read. Skipping it. Set `force` on the read mode, if you \
-                     want to forcefully append data."
-                );
-
-                return ControlFlow::Break(());
-            }
-
-            ControlFlow::Continue(())
+            hash_content(&mut self.hashes, self.duplicate_mode, self.mode, content, filename)
         };
 
         // Writes land next to the source data, everything else lands in the `.txt`.
@@ -525,6 +506,7 @@ impl Processor {
     fn process_rm2k(&mut self, source_path: &Path, translation_path: &Path, output_path: &Path) -> Result<(), Error> {
         let mut base = Base::new(self.mode, EngineType::RM2K);
         base.flags = self.flags;
+        base.map_events = self.map_events;
         base.duplicate_mode = self.duplicate_mode;
         base.set_read_encoding(self.read_encoding);
         base.set_write_encoding(self.write_encoding);
@@ -566,6 +548,10 @@ impl Processor {
             }
         };
 
+        let mut hash = |content: &[u8], filename: &str| {
+            hash_content(&mut self.hashes, self.duplicate_mode, self.mode, content, filename)
+        };
+
         let entries: Vec<DirEntry> = read_dir(source_path)
             .map_err(|e| Error::Io(source_path.to_path_buf(), e))?
             .flatten()
@@ -599,6 +585,11 @@ impl Processor {
 
                     let content = read(&path).map_err(|e| Error::Io(path.clone(), e))?;
 
+                    if hash(&content, filename).is_break() {
+                        info!("{filename}: Skipped.");
+                        continue;
+                    }
+
                     let result = base.process_rm2k_map(filename, &content, &tree.value, translation.as_deref())?;
 
                     if mode.is_write()
@@ -622,7 +613,7 @@ impl Processor {
             }
         }
 
-        if self.file_flags.contains(FileFlags::Database) {
+        if self.file_flags.contains(FileFlags::Database) && !hash(&ldb_content, "RPG_RT.ldb").is_break() {
             // Every section shares this shape: load its own txt (translations
             // aren't bundled - `RPG_RT.ldb` holds every entity kind, so each
             // kind gets treated as if it were its own file, same as MV/VX's
@@ -653,8 +644,6 @@ impl Processor {
             db_section!(classes, process_rm2k_classes, "classes");
             db_section!(commonevents, process_rm2k_commonevents, "commonevents");
             db_section!(states, process_rm2k_states, "states");
-            db_section!(switches, process_rm2k_switches, "switches");
-            db_section!(variables, process_rm2k_variables, "variables");
             db_section!(terms, process_rm2k_terms, "terms");
 
             if mode.is_write() {
@@ -670,6 +659,38 @@ impl Processor {
 
         Ok(())
     }
+}
+
+/// Hashes `content` and records it under `filename`'s lowercased stem,
+/// signaling whether the caller should skip processing this file because
+/// it's unchanged since the last read (only in append-without-force mode).
+fn hash_content(
+    hashes: &mut HashMap<String, u64>,
+    duplicate_mode: DuplicateMode,
+    mode: Mode,
+    content: &[u8],
+    filename: &str,
+) -> ControlFlow<()> {
+    let filename = &filename[0..filename.find('.').unwrap_or(filename.len())].to_ascii_lowercase();
+    let hash = gxhash64(content, duplicate_mode as i64);
+    let mut unchanged = false;
+
+    if let Some(&old_hash) = hashes.get(filename) {
+        unchanged = old_hash == hash;
+    }
+
+    hashes.insert(filename.to_string(), hash);
+
+    if unchanged && mode.is_append_default() {
+        info!(
+            "{filename} hasn't changed since the last read. Skipping it. Set `force` on the read mode, if you want \
+             to forcefully append data."
+        );
+
+        return ControlFlow::Break(());
+    }
+
+    ControlFlow::Continue(())
 }
 
 fn mode_pre_msg(mode: Mode) -> &'static str {

@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "16.0.0"
+version = "16.1.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.87.0"
@@ -44,6 +44,3 @@ strum = { version = "0.28.0", features = ["strum_macros"] }
 strum_macros = "0.28.0"
 thiserror = "2.0.20"
 yaml_serde = { version = "0.10.7", optional = true }
-
-[dev-dependencies]
-serde_json = { version = "1.0.151", features = ["preserve_order"] }

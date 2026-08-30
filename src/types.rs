@@ -228,8 +228,6 @@ pub enum RPGMFileType {
     Rm2kCommonEvents,
     Rm2kStates,
     Rm2kTerms,
-    Rm2kSwitches,
-    Rm2kVariables,
 }
 
 impl RPGMFileType {
@@ -270,10 +268,7 @@ impl RPGMFileType {
 
     #[must_use]
     pub const fn is_misc(self) -> bool {
-        matches!(
-            self,
-            Self::System | Self::Plugins | Self::Scripts | Self::Rm2kTerms | Self::Rm2kSwitches | Self::Rm2kVariables
-        )
+        matches!(self, Self::System | Self::Plugins | Self::Scripts | Self::Rm2kTerms)
     }
 }
 
@@ -674,7 +669,7 @@ bitflags! {
 
         /// `RPG_RT.ldb` file. Only meaningful for [`EngineType::RM2K`], where it
         /// replaces [`FileFlags::other`] and [`FileFlags::System`] - rm2k bundles
-        /// every entity kind plus terms/switches/variables into one database file.
+        /// every entity kind plus terms into one database file.
         const Database = 1 << 13;
     }
 }
@@ -797,9 +792,7 @@ impl FromStr for FileFlags {
             | RPGMFileType::Rm2kClasses
             | RPGMFileType::Rm2kCommonEvents
             | RPGMFileType::Rm2kStates
-            | RPGMFileType::Rm2kTerms
-            | RPGMFileType::Rm2kSwitches
-            | RPGMFileType::Rm2kVariables => Self::Database,
+            | RPGMFileType::Rm2kTerms => Self::Database,
         })
     }
 }

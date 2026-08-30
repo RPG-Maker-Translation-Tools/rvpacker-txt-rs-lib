@@ -31,7 +31,9 @@ mod translation;
 
 pub use base::Base;
 pub use entity::{PathSegment, get_entity_values};
-pub use file::{filter_maps, filter_other, filter_rm2k_maps, get_ini_title, get_system_title, parse_ignore};
+pub use file::{
+    filter_maps, filter_other, filter_rm2k_maps, get_ini_title, get_ini_title_rm2k, get_system_title, parse_ignore,
+};
 pub use ignore::{Glob, IgnoreEntry};
 
 pub(crate) use crate::marshal_compat::parse_rpgm_file;

@@ -131,6 +131,6 @@ pub mod types;
 pub use constants::{
     DEFAULT_COMMENT_PREFIX, DEFAULT_LINE_BREAK, DEFAULT_LINE_SEPARATOR, RVPACKER_IGNORE_FILE, RVPACKER_METADATA_FILE,
 };
-pub use core::{filter_maps, filter_other, get_ini_title, get_system_title, parse_ignore};
+pub use core::{filter_maps, filter_other, get_ini_title, get_ini_title_rm2k, get_system_title, parse_ignore};
 pub use processors::Processor;
 pub use types::*;

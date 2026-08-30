@@ -241,59 +241,99 @@ pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, re
 /// }
 /// ```
 pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
-    fn trim_bytes(bytes: &[u8]) -> &[u8] {
-        let start = bytes.iter().position(|&b| !is_space(b)).unwrap_or(0);
-        let end = bytes.iter().rposition(|&b| !is_space(b)).map_or(0, |i| i + 1);
-        &bytes[start..end]
-    }
+    find_ini_value(ini_file_content, b"title").ok_or(Error::NoTitle)
+}
 
-    fn is_space(b: u8) -> bool {
-        b == b' ' || b == b'\t' || b == b'\r'
-    }
+/// Extracts the game title from an RM2K/2003 `RPG_RT.ini` file's content
+/// (the `GameTitle` key).
+///
+/// See [`get_ini_title`]'s docs for why the title is returned as raw bytes
+/// rather than a decoded [`String`] - the same reasoning applies here.
+///
+/// # Parameters
+///
+/// - `ini_file_content` - raw byte content of the INI file to parse.
+///
+/// # Returns
+///
+/// - [`Vec<u8>`] - vector of extracted title's bytes on success. Title may not be UTF-8.
+/// - [`Error`] - otherwise.
+///
+/// # Errors
+///
+/// - [`Error::NoTitle`] - if no "GameTitle" entry is found in the INI file.
+///
+/// # Example
+///
+/// ```no_run
+/// use rvpacker_txt_rs_lib::{get_ini_title_rm2k, Error};
+/// use std::fs::read;
+///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let ini_content = read("C:/Game/RPG_RT.ini")?;
+///     let title = get_ini_title_rm2k(&ini_content)?;
+///     Ok(())
+/// }
+/// ```
+pub fn get_ini_title_rm2k(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
+    find_ini_value(ini_file_content, b"gametitle").ok_or(Error::NoTitle)
+}
 
-    fn split_lines(data: &[u8]) -> SmallVec<[&[u8]; 4]> {
-        let mut lines = SmallVec::with_capacity(4);
-        let mut start = 0;
-        let mut i = 0;
+fn trim_bytes(bytes: &[u8]) -> &[u8] {
+    let start = bytes.iter().position(|&b| !is_ini_space(b)).unwrap_or(0);
+    let end = bytes.iter().rposition(|&b| !is_ini_space(b)).map_or(0, |i| i + 1);
+    &bytes[start..end]
+}
 
-        while i < data.len() {
-            if data[i] == b'\n' {
-                lines.push(&data[start..i]);
-                i += 1;
-                start = i;
-            } else if data[i] == b'\r' {
-                lines.push(&data[start..i]);
+fn is_ini_space(b: u8) -> bool {
+    b == b' ' || b == b'\t' || b == b'\r'
+}
 
-                if data.get(i + 1).is_some_and(|ch| *ch == b'\n') {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
+fn split_ini_lines(data: &[u8]) -> SmallVec<[&[u8]; 4]> {
+    let mut lines = SmallVec::with_capacity(4);
+    let mut start = 0;
+    let mut i = 0;
 
-                start = i;
+    while i < data.len() {
+        if data[i] == b'\n' {
+            lines.push(&data[start..i]);
+            i += 1;
+            start = i;
+        } else if data[i] == b'\r' {
+            lines.push(&data[start..i]);
+
+            if data.get(i + 1).is_some_and(|ch| *ch == b'\n') {
+                i += 2;
             } else {
                 i += 1;
             }
-        }
 
-        if start < data.len() {
-            lines.push(&data[start..]);
+            start = i;
+        } else {
+            i += 1;
         }
-
-        lines
     }
 
-    for line in split_lines(ini_file_content) {
-        if line.to_ascii_lowercase().starts_with(b"title") {
+    if start < data.len() {
+        lines.push(&data[start..]);
+    }
+
+    lines
+}
+
+/// Finds `key`'s value in an INI file's content. `key` must already be lowercase.
+fn find_ini_value(ini_file_content: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    for line in split_ini_lines(ini_file_content) {
+        if line.to_ascii_lowercase().starts_with(key) {
             if let Some(pos) = line.iter().position(|&b| b == b'=') {
                 let right = &line[pos + 1..];
                 let trimmed = trim_bytes(right);
-                return Ok(trimmed.to_vec());
+                return Some(trimmed.to_vec());
             }
         }
     }
 
-    Err(Error::NoTitle)
+    None
 }
 
 /// Extracts the game title from a `System.json` file's content.
