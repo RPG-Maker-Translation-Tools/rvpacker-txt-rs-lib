@@ -15,6 +15,7 @@ use indexmap::map::Entry;
 use log::warn;
 use smallvec::{SmallVec, smallvec};
 use std::{
+    borrow::Cow,
     mem::{replace, take, transmute},
     ops::{ControlFlow, Range},
 };
@@ -69,6 +70,22 @@ impl Base {
         };
 
         self.translation.initialized = true;
+
+        // Owning a copy here - once per translation file, not once per parsed line -
+        // is what lets every `TranslationMap` entry below borrow a `&'static str`
+        // slice of it instead of allocating a `String` per entry.
+        //
+        // SAFETY: `buf` is transmuted to `'static` so it can be stored alongside the
+        // `TranslationMap`s that borrow from it, but it never actually outlives the
+        // `Box<str>` it points into: `self.translation.buffer` is replaced only by
+        // `Translation::reset`, which unconditionally clears `maps`/`write_lookup`
+        // (every possible borrower, including `Output::accumulated`'s entries, which
+        // are only ever populated from `self.translation.maps`) in the same call,
+        // before the next `initialize_translation` installs a new buffer. So no
+        // borrow derived from `buf` is ever observed after its buffer is gone.
+        self.translation.buffer = Some(translation.into());
+        let buf: &str = self.translation.buffer.as_deref().unwrap();
+        let translation: &'static str = unsafe { transmute::<&str, &'static str>(buf) };
 
         let mut scratch = TranslationMap::default();
         let translation_lines = translation.lines().enumerate();
@@ -174,7 +191,7 @@ impl Base {
             }
 
             scratch.insert(
-                source.into(),
+                source,
                 TranslationEntry {
                     // The three leading slots are positional metadata
                     // (name/order/display name) and are only ever filled for the
@@ -185,8 +202,9 @@ impl Base {
                     comments: replace(&mut comments, smallvec![String::new(); 3])
                         .into_iter()
                         .filter(|comment| !comment.is_empty())
+                        .map(Cow::Owned)
                         .collect(),
-                    translation: translation.into(),
+                    translation,
                 },
             );
         }
@@ -362,7 +380,7 @@ impl Base {
         let output_size = 4096 * 1024;
         let mut output = Vec::with_capacity(output_size);
 
-        let mut accumulated_map: indexmap::IndexMap<String, (u16, TranslationEntry), gxhash::GxBuildHasher> =
+        let mut accumulated_map: indexmap::IndexMap<Cow<'static, str>, (u16, TranslationEntry), gxhash::GxBuildHasher> =
             if allow_dup {
                 indexmap::IndexMap::default()
             } else {
@@ -454,7 +472,7 @@ impl Base {
                             // the next read.
                             ignore
                                 .entry_for(Ignore::key(self.file_type, *id, self.flags, self.duplicate_mode))
-                                .insert(moved);
+                                .insert(moved.into_owned());
                         }
                     }
 

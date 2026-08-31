@@ -564,6 +564,7 @@ impl Processor {
         let mut database = rm2k::file::load_database(&ldb_content)?;
         let engine = Engine::from_ldb_id(database.value.system.ldb_id);
         base.set_rm2k_engine(engine);
+        base.set_game_title(&self.game_title);
 
         if self.file_flags.contains(FileFlags::Map) {
             let translation_file_path = translation_path.join("maps.txt");
@@ -683,8 +684,8 @@ fn hash_content(
 
     if unchanged && mode.is_append_default() {
         info!(
-            "{filename} hasn't changed since the last read. Skipping it. Set `force` on the read mode, if you want \
-             to forcefully append data."
+            "{filename} hasn't changed since the last read. Skipping it. Set `force` on the read mode, if you want to \
+             forcefully append data."
         );
 
         return ControlFlow::Break(());

@@ -83,7 +83,11 @@ impl Base {
                 let dialogue_line_count = dialogue_lines.len();
 
                 for (i, &index) in dialogue_line_indices.iter().enumerate() {
-                    let bytes = self.encode_with_fallback(if i < split_line_count { translation_lines[i] } else { " " });
+                    let bytes = self.encode_with_fallback(if i < split_line_count {
+                        translation_lines[i]
+                    } else {
+                        " "
+                    });
                     commands.0[index].string = DbStr::from_vec(bytes);
                 }
 

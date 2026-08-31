@@ -157,20 +157,41 @@ impl Base {
     }
 
     fn process_value(&mut self, value: &mut Value<'_>) {
-        let Some(extracted) = self.extract_string(value, true) else {
-            return;
-        };
+        if self.mode.is_write() {
+            let Some(extracted) = self.extract_string(value, true) else {
+                return;
+            };
 
-        if self.mode.is_read() {
-            self.insert_string(extracted);
-        } else if self.mode.is_write() {
             if let Some(translated) = self.get_key(&extracted) {
                 let translated = translated.to_string();
                 self.write_translated(value, translated, self.engine_type.is_mvmz());
             }
+
+            return;
+        }
+
+        // Read/purge: move the value's own text out directly instead of
+        // extracting a borrow and cloning it - see the equivalent comment in
+        // `list.rs`'s `process_list`.
+        let text = if let Some(taken) = value.take_str() {
+            if taken.trim().is_empty() {
+                return;
+            }
+
+            taken
+        } else {
+            let Some(extracted) = self.extract_string(value, true) else {
+                return;
+            };
+
+            extracted.into_owned()
+        };
+
+        if self.mode.is_read() {
+            self.insert_string(Cow::Owned(text));
         } else {
             self.translation_map_mut()
-                .insert(extracted.into_owned(), TranslationEntry::default());
+                .insert(Cow::Owned(text), TranslationEntry::default());
         }
     }
 

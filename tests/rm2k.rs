@@ -3,9 +3,15 @@
 //! (the game/graphics/audio assets `process_rm2k` never touches are left out),
 //! the same shape [`tests/lifecycle.rs`] uses for the other engines.
 
-use rvpacker_txt_rs_lib::{BaseFlags, DuplicateMode, EngineType, FileFlags, Mode, Processor};
+use rvpacker_txt_rs_lib::{
+    BaseFlags, DuplicateMode, EngineType, FileFlags, Mode, Processor,
+    json::{
+        generate_rm2k, generate_rm2k_database_file, generate_rm2k_map_file, generate_rm2k_tree_map_file, write_rm2k,
+        write_rm2k_database_file, write_rm2k_map_file, write_rm2k_tree_map_file,
+    },
+};
 use std::{
-    fs::{create_dir_all, read_dir, read_to_string, remove_dir_all},
+    fs::{create_dir_all, read, read_dir, read_to_string, remove_dir_all},
     path::{Path, PathBuf},
 };
 
@@ -14,7 +20,9 @@ fn source_dir() -> PathBuf {
 }
 
 fn workspace(tag: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rm2k_smoke").join(tag);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/rm2k_smoke")
+        .join(tag);
 
     let _ = remove_dir_all(&path);
     create_dir_all(&path).expect("could not create the workspace");
@@ -119,5 +127,115 @@ fn rm2k_read_write_round_trip() {
     for path in &rebuilt_maps {
         let bytes = std::fs::read(path).unwrap();
         rm2k::file::load_map(&bytes).unwrap_or_else(|e| panic!("{}: rebuilt map does not parse: {e}", path.display()));
+    }
+}
+
+/// A title set through `Processor::game_title` should show up in `terms.txt` on
+/// read as its own `<!>ID`/`<!>Name` section - the same shape `system.rs` gives
+/// every other engine's game title, not an untagged extra line inside `Terms`.
+/// This is the only place RM2K can surface a translated title at all, since
+/// `RPG_RT.ldb` has no field for one.
+#[test]
+fn rm2k_game_title_is_its_own_terms_section() {
+    let translation_dir = workspace("game_title").join("translation");
+
+    let mut processor = Processor {
+        mode: Mode::read(),
+        file_flags: FileFlags::Database,
+        flags: BaseFlags::empty(),
+        duplicate_mode: DuplicateMode::Allow,
+        game_title: "My Game".to_owned(),
+        ..Default::default()
+    };
+
+    processor
+        .process(EngineType::RM2K, source_dir(), &translation_dir, None)
+        .expect("read should not fail");
+
+    let terms_text = read_to_string(translation_dir.join("terms.txt")).expect("terms.txt should exist");
+    let lines: Vec<&str> = terms_text.lines().collect();
+    let id_line = lines.len().checked_sub(3).map(|i| lines[i]);
+    let name_line = lines.len().checked_sub(2).map(|i| lines[i]);
+    let last_line = lines.last().copied();
+
+    assert_eq!(
+        id_line,
+        Some("<!>ID<#>2"),
+        "game title should get its own <!>ID section"
+    );
+    assert_eq!(
+        name_line,
+        Some("<!>NAME<#>Game Title"),
+        "game title's section should be named, like every other engine's"
+    );
+    assert_eq!(
+        last_line,
+        Some("My Game<#>"),
+        "game title should be the last line of terms.txt"
+    );
+}
+
+/// LCF -> JSON -> LCF must not change a byte, mirroring `rm2k-lib`'s own
+/// `serde_tier` guarantee, against the real fixture files this crate ships.
+#[test]
+fn rm2k_json_round_trips() {
+    let ldb = read(source_dir().join("RPG_RT.ldb")).unwrap();
+    let json = generate_rm2k_database_file(&ldb).expect("database should generate JSON");
+    let rebuilt = write_rm2k_database_file(&json).expect("database JSON should write back");
+    assert_eq!(ldb, rebuilt, "database LCF -> JSON -> LCF should be byte-identical");
+
+    let lmt = read(source_dir().join("RPG_RT.lmt")).unwrap();
+    let json = generate_rm2k_tree_map_file(&lmt).expect("tree map should generate JSON");
+    let engine = rm2k::engine::Engine::from_ldb_id(
+        rm2k::file::load_database(&ldb)
+            .expect("database should still load")
+            .value
+            .system
+            .ldb_id,
+    );
+    let rebuilt = write_rm2k_tree_map_file(&json, engine).expect("tree map JSON should write back");
+    assert_eq!(lmt, rebuilt, "tree map LCF -> JSON -> LCF should be byte-identical");
+
+    let lmu_path = source_dir().join("Map0001.lmu");
+    let lmu = read(&lmu_path).unwrap();
+    let json = generate_rm2k_map_file(&lmu).expect("map should generate JSON");
+    let rebuilt = write_rm2k_map_file(&json, engine).expect("map JSON should write back");
+    assert_eq!(lmu, rebuilt, "map LCF -> JSON -> LCF should be byte-identical");
+}
+
+/// The directory-batch counterpart of `rm2k_json_round_trips`: every `.ldb`/`.lmt`/
+/// `.lmu` file in a real project directory should survive `generate_rm2k` and
+/// `write_rm2k` byte-identically, including the engine (2000 vs. 2003) getting
+/// threaded from `RPG_RT.ldb.json` into every map/tree file.
+#[test]
+fn rm2k_batch_json_round_trips() {
+    let json_dir = workspace("batch_json").join("json");
+    let rebuilt_dir = workspace("batch_json").join("rebuilt");
+
+    generate_rm2k(source_dir(), json_dir.clone(), false).expect("batch generate should not fail");
+
+    assert!(json_dir.join("RPG_RT.ldb.json").exists());
+    assert!(json_dir.join("RPG_RT.lmt.json").exists());
+    assert!(json_dir.join("Map0001.lmu.json").exists());
+
+    write_rm2k(json_dir, rebuilt_dir.clone()).expect("batch write should not fail");
+
+    for name in ["RPG_RT.ldb", "RPG_RT.lmt"] {
+        let original = read(source_dir().join(name)).unwrap();
+        let rebuilt = read(rebuilt_dir.join(name)).unwrap_or_else(|e| panic!("{name} was not rebuilt: {e}"));
+        assert_eq!(original, rebuilt, "{name} should round-trip byte-identically");
+    }
+
+    for entry in read_dir(source_dir()).unwrap().flatten() {
+        let path = entry.path();
+
+        if path.extension().is_none_or(|ext| ext != "lmu") {
+            continue;
+        }
+
+        let name = path.file_name().unwrap();
+        let original = read(&path).unwrap();
+        let rebuilt = read(rebuilt_dir.join(name)).unwrap_or_else(|e| panic!("{name:?} was not rebuilt: {e}"));
+        assert_eq!(original, rebuilt, "{name:?} should round-trip byte-identically");
     }
 }

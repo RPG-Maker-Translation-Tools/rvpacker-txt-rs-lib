@@ -5,7 +5,7 @@ use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
-use std::{convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf, str::FromStr};
+use std::{borrow::Cow, convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf, str::FromStr};
 use strum_macros::{Display, EnumIs, VariantNames};
 use thiserror::Error;
 
@@ -16,7 +16,12 @@ pub(crate) type IgnoreMap = IndexMapGx<String, crate::core::IgnoreEntry>;
 
 pub(crate) type Comments = SmallVec<[String; 3]>;
 pub(crate) type Lines = IndexSetGx<String>;
-pub(crate) type TranslationMap = IndexMapGx<String, TranslationEntry>;
+
+/// Keyed on the denormalized source text, borrowed from [`Base`](crate::core::Base)'s
+/// own copy of the current translation `.txt` buffer wherever no substitution was
+/// needed to produce it - see [`Base::initialize_translation`](crate::core::Base) for
+/// the safety argument behind the `'static` lifetime.
+pub(crate) type TranslationMap = IndexMapGx<Cow<'static, str>, TranslationEntry>;
 
 /// 401 - Dialogue line.
 ///
@@ -333,14 +338,14 @@ impl<K, V, S: BuildHasher + Default> IndexMapExt for IndexMap<K, V, S> {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TranslationEntry {
-    pub comments: Vec<String>,
-    pub translation: String,
+    pub comments: Vec<Cow<'static, str>>,
+    pub translation: Cow<'static, str>,
 }
 
-impl From<&str> for TranslationEntry {
-    fn from(translation: &str) -> Self {
+impl From<&'static str> for TranslationEntry {
+    fn from(translation: &'static str) -> Self {
         TranslationEntry {
-            translation: translation.to_string(),
+            translation: Cow::Borrowed(translation),
             ..Default::default()
         }
     }
@@ -349,6 +354,15 @@ impl From<&str> for TranslationEntry {
 impl From<String> for TranslationEntry {
     fn from(translation: String) -> Self {
         TranslationEntry {
+            translation: Cow::Owned(translation),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<Cow<'static, str>> for TranslationEntry {
+    fn from(translation: Cow<'static, str>) -> Self {
+        TranslationEntry {
             translation,
             ..Default::default()
         }
@@ -356,7 +370,7 @@ impl From<String> for TranslationEntry {
 }
 
 impl Deref for TranslationEntry {
-    type Target = String;
+    type Target = str;
 
     fn deref(&self) -> &Self::Target {
         &self.translation

@@ -5,8 +5,9 @@ use crate::{
 };
 use rm2k::{
     field::List,
-    rpg::{CommonEvent, Enemy, Item, Skill, State, Switch, Terms, Troop, Variable},
+    rpg::{CommonEvent, Enemy, Item, Skill, State, Terms, Troop},
 };
+use std::mem::take;
 
 use super::rm2k_entity_pass;
 
@@ -167,12 +168,17 @@ impl Base {
         }
     }
 
-    /// Processes the `terms` (battle/menu/shop vocabulary) section from `RPG_RT.ldb`.
+    /// Processes the `terms` (battle/menu/shop vocabulary) section from `RPG_RT.ldb`,
+    /// plus the game title as a second, dedicated section - see
+    /// [`Base::process_rm2k_game_title`].
     ///
     /// `Terms` is a single struct, not a list - there is nothing to key
     /// `get_translation_map` on but one fixed id, the same one-section
     /// convention `core::system::process_system` uses for MV/VX's currency
-    /// unit/game title.
+    /// unit/game title. The game title gets a second fixed id rather than
+    /// sharing the terms one, again mirroring `process_system` - MV/VX/XP
+    /// give the game title its own `<!>ID`/`<!>Name` section too, separate
+    /// from `Terms`, not one more untagged line inside it.
     pub fn process_rm2k_terms(
         &mut self,
         terms: &mut Terms<'_>,
@@ -182,186 +188,243 @@ impl Base {
         self.file_type = RPGMFileType::Rm2kTerms;
         self.initialize_translation(translation)?;
 
-        const ID: u16 = 1;
+        const TERMS_ID: u16 = 1;
+        const GAME_TITLE_ID: u16 = 2;
 
-        if self.get_translation_map(ID).is_break() {
+        let mut processed = false;
+
+        if self.get_translation_map(TERMS_ID).is_break() {
             // On `Mode::Purge`, `get_translation_map` already flushed the
-            // section by itself; on any other mode there's nothing to do.
-            return if self.mode.is_purge() {
-                Ok(Some(self.finish_translation()))
-            } else {
-                Ok(None)
-            };
-        }
+            // section by itself.
+            if self.mode.is_purge() {
+                processed = true;
+            }
+        } else {
+            processed = true;
 
-        macro_rules! fields {
+            macro_rules! fields {
             ($($field:ident),* $(,)?) => {
                 $( self.process_rm2k_string_field(&mut terms.$field); )*
             };
         }
 
-        fields!(
-            encounter,
-            special_combat,
-            escape_success,
-            escape_failure,
-            victory,
-            defeat,
-            exp_received,
-            gold_recieved_a,
-            gold_recieved_b,
-            item_recieved,
-            attacking,
-            enemy_critical,
-            actor_critical,
-            defending,
-            observing,
-            focus,
-            autodestruction,
-            enemy_escape,
-            enemy_transform,
-            enemy_damaged,
-            enemy_undamaged,
-            actor_damaged,
-            actor_undamaged,
-            skill_failure_a,
-            skill_failure_b,
-            skill_failure_c,
-            dodge,
-            use_item,
-            hp_recovery,
-            parameter_increase,
-            parameter_decrease,
-            enemy_hp_absorbed,
-            actor_hp_absorbed,
-            resistance_increase,
-            resistance_decrease,
-            level_up,
-            skill_learned,
-            battle_start,
-            miss,
-            shop_greeting1,
-            shop_regreeting1,
-            shop_buy1,
-            shop_sell1,
-            shop_leave1,
-            shop_buy_select1,
-            shop_buy_number1,
-            shop_purchased1,
-            shop_sell_select1,
-            shop_sell_number1,
-            shop_sold1,
-            shop_greeting2,
-            shop_regreeting2,
-            shop_buy2,
-            shop_sell2,
-            shop_leave2,
-            shop_buy_select2,
-            shop_buy_number2,
-            shop_purchased2,
-            shop_sell_select2,
-            shop_sell_number2,
-            shop_sold2,
-            shop_greeting3,
-            shop_regreeting3,
-            shop_buy3,
-            shop_sell3,
-            shop_leave3,
-            shop_buy_select3,
-            shop_buy_number3,
-            shop_purchased3,
-            shop_sell_select3,
-            shop_sell_number3,
-            shop_sold3,
-            inn_a_greeting_1,
-            inn_a_greeting_2,
-            inn_a_greeting_3,
-            inn_a_accept,
-            inn_a_cancel,
-            inn_b_greeting_1,
-            inn_b_greeting_2,
-            inn_b_greeting_3,
-            inn_b_accept,
-            inn_b_cancel,
-            possessed_items,
-            equipped_items,
-            gold,
-            battle_fight,
-            battle_auto,
-            battle_escape,
-            command_attack,
-            command_defend,
-            command_item,
-            command_skill,
-            menu_equipment,
-            menu_save,
-            menu_quit,
-            new_game,
-            load_game,
-            exit_game,
-            status,
-            row,
-            order,
-            wait_on,
-            wait_off,
-            level,
-            health_points,
-            spirit_points,
-            normal_status,
-            exp_short,
-            lvl_short,
-            hp_short,
-            sp_short,
-            sp_cost,
-            attack,
-            defense,
-            spirit,
-            agility,
-            weapon,
-            shield,
-            armor,
-            helmet,
-            accessory,
-            save_game_message,
-            load_game_message,
-            file,
-            exit_game_message,
-            yes,
-            no,
-            maniac_item_received_a,
-            maniac_level_up_a,
-            maniac_level_up_b,
-            maniac_level_up_c,
-            maniac_exp_received_a,
-            maniac_skill_learned_a,
-            easyrpg_item_number_separator,
-            easyrpg_skill_cost_separator,
-            easyrpg_equipment_arrow,
-            easyrpg_status_scene_name,
-            easyrpg_status_scene_class,
-            easyrpg_status_scene_title,
-            easyrpg_status_scene_condition,
-            easyrpg_status_scene_front,
-            easyrpg_status_scene_back,
-            easyrpg_order_scene_confirm,
-            easyrpg_order_scene_redo,
-            easyrpg_battle2k3_double_attack,
-            easyrpg_battle2k3_defend,
-            easyrpg_battle2k3_observe,
-            easyrpg_battle2k3_charge,
-            easyrpg_battle2k3_selfdestruct,
-            easyrpg_battle2k3_escape,
-            easyrpg_battle2k3_special_combat_back,
-            easyrpg_battle2k3_skill,
-            easyrpg_battle2k3_item,
-        );
+            fields!(
+                encounter,
+                special_combat,
+                escape_success,
+                escape_failure,
+                victory,
+                defeat,
+                exp_received,
+                gold_recieved_a,
+                gold_recieved_b,
+                item_recieved,
+                attacking,
+                enemy_critical,
+                actor_critical,
+                defending,
+                observing,
+                focus,
+                autodestruction,
+                enemy_escape,
+                enemy_transform,
+                enemy_damaged,
+                enemy_undamaged,
+                actor_damaged,
+                actor_undamaged,
+                skill_failure_a,
+                skill_failure_b,
+                skill_failure_c,
+                dodge,
+                use_item,
+                hp_recovery,
+                parameter_increase,
+                parameter_decrease,
+                enemy_hp_absorbed,
+                actor_hp_absorbed,
+                resistance_increase,
+                resistance_decrease,
+                level_up,
+                skill_learned,
+                battle_start,
+                miss,
+                shop_greeting1,
+                shop_regreeting1,
+                shop_buy1,
+                shop_sell1,
+                shop_leave1,
+                shop_buy_select1,
+                shop_buy_number1,
+                shop_purchased1,
+                shop_sell_select1,
+                shop_sell_number1,
+                shop_sold1,
+                shop_greeting2,
+                shop_regreeting2,
+                shop_buy2,
+                shop_sell2,
+                shop_leave2,
+                shop_buy_select2,
+                shop_buy_number2,
+                shop_purchased2,
+                shop_sell_select2,
+                shop_sell_number2,
+                shop_sold2,
+                shop_greeting3,
+                shop_regreeting3,
+                shop_buy3,
+                shop_sell3,
+                shop_leave3,
+                shop_buy_select3,
+                shop_buy_number3,
+                shop_purchased3,
+                shop_sell_select3,
+                shop_sell_number3,
+                shop_sold3,
+                inn_a_greeting_1,
+                inn_a_greeting_2,
+                inn_a_greeting_3,
+                inn_a_accept,
+                inn_a_cancel,
+                inn_b_greeting_1,
+                inn_b_greeting_2,
+                inn_b_greeting_3,
+                inn_b_accept,
+                inn_b_cancel,
+                possessed_items,
+                equipped_items,
+                gold,
+                battle_fight,
+                battle_auto,
+                battle_escape,
+                command_attack,
+                command_defend,
+                command_item,
+                command_skill,
+                menu_equipment,
+                menu_save,
+                menu_quit,
+                new_game,
+                load_game,
+                exit_game,
+                status,
+                row,
+                order,
+                wait_on,
+                wait_off,
+                level,
+                health_points,
+                spirit_points,
+                normal_status,
+                exp_short,
+                lvl_short,
+                hp_short,
+                sp_short,
+                sp_cost,
+                attack,
+                defense,
+                spirit,
+                agility,
+                weapon,
+                shield,
+                armor,
+                helmet,
+                accessory,
+                save_game_message,
+                load_game_message,
+                file,
+                exit_game_message,
+                yes,
+                no,
+                maniac_item_received_a,
+                maniac_level_up_a,
+                maniac_level_up_b,
+                maniac_level_up_c,
+                maniac_exp_received_a,
+                maniac_skill_learned_a,
+                easyrpg_item_number_separator,
+                easyrpg_skill_cost_separator,
+                easyrpg_equipment_arrow,
+                easyrpg_status_scene_name,
+                easyrpg_status_scene_class,
+                easyrpg_status_scene_title,
+                easyrpg_status_scene_condition,
+                easyrpg_status_scene_front,
+                easyrpg_status_scene_back,
+                easyrpg_order_scene_confirm,
+                easyrpg_order_scene_redo,
+                easyrpg_battle2k3_double_attack,
+                easyrpg_battle2k3_defend,
+                easyrpg_battle2k3_observe,
+                easyrpg_battle2k3_charge,
+                easyrpg_battle2k3_selfdestruct,
+                easyrpg_battle2k3_escape,
+                easyrpg_battle2k3_special_combat_back,
+                easyrpg_battle2k3_skill,
+                easyrpg_battle2k3_item,
+            );
 
-        self.flush_translation(ID);
+            self.flush_translation(TERMS_ID);
+        }
+
+        if self.get_translation_map(GAME_TITLE_ID).is_break() {
+            if self.mode.is_purge() {
+                processed = true;
+            }
+        } else {
+            processed = true;
+
+            // Only tag the section when there's an actual title, so a project
+            // that never passed one doesn't get a permanent empty "Game Title"
+            // header in every terms.txt - `process_rm2k_game_title` itself is
+            // always safe to call regardless (it no-ops when empty).
+            if !self.game_title.is_empty() {
+                self.update_metadata(GAME_TITLE_ID, Vec::from([(CommentPos::Name, "Game Title")]));
+            }
+
+            self.process_rm2k_game_title();
+
+            self.flush_translation(GAME_TITLE_ID);
+        }
+
+        if !processed {
+            return Ok(None);
+        }
 
         if self.mode.is_write() {
             Ok(None)
         } else {
             Ok(Some(self.finish_translation()))
+        }
+    }
+
+    /// Handles the title override set through [`Base::set_game_title`], recorded as
+    /// its own `<!>ID`/`<!>Name` section of `terms.txt` by
+    /// [`Base::process_rm2k_terms`] - the same shape
+    /// [`core::system::Base::process_system`](super::super::system) gives MV/VX/XP's
+    /// game title, just without a source field to read a fallback from.
+    ///
+    /// Unlike MV/VX/XP, RPG Maker 2000/2003 has no title field anywhere in
+    /// `RPG_RT.ldb` - `rm2k-lib` doesn't expose one - the title lives solely in
+    /// `RPG_RT.ini`, which this crate never reads or writes itself (see
+    /// [`crate::get_ini_title_rm2k`]). On write there's no field to write the
+    /// result back into, so the looked-up translation is only recorded onto
+    /// `self.game_title` for a caller to read back out and apply to
+    /// `RPG_RT.ini` itself.
+    fn process_rm2k_game_title(&mut self) {
+        if self.game_title.is_empty() {
+            return;
+        }
+
+        if self.mode.is_write() {
+            let translated = self.get_key(&self.game_title).map(|t| t.translation.to_string());
+
+            if let Some(translated) = translated {
+                self.game_title = translated;
+            }
+        } else {
+            let title = take(&mut self.game_title);
+            self.insert_string(Cow::Owned(title));
         }
     }
 }

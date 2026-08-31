@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
-    CommentPos, ProcessedData,
-    get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_line_separator,
+    CommentPos, ProcessedData, get_event_id_comment, get_event_name_comment, get_event_pos_comment, get_line_separator,
     types::{Error, RPGMFileType, TranslationEntry, TranslationMap},
 };
 use rm2k::{engine::SaveOpt, file, rpg::TreeMap};
 use smallvec::SmallVec;
+use std::borrow::Cow;
 
 impl Base {
     /// Prepares this base to process a run of `MapNNNN.lmu` files.
@@ -96,29 +96,29 @@ impl Base {
                     SmallVec::default(),
                     FlushedLines::EMPTY,
                     TranslationMap::from_iter([(
-                        String::new(),
+                        Cow::Borrowed(""),
                         TranslationEntry {
                             comments: vec![
-                                format!(
+                                Cow::Owned(format!(
                                     "{comment}{sep}{event_id}",
                                     sep = get_line_separator(),
                                     comment = get_event_id_comment(),
                                     event_id = event.id
-                                ),
-                                format!(
+                                )),
+                                Cow::Owned(format!(
                                     "{comment}{sep}{event_name}",
                                     sep = get_line_separator(),
                                     comment = get_event_name_comment()
-                                ),
-                                format!(
+                                )),
+                                Cow::Owned(format!(
                                     "{comment}{sep}{x},{y}",
                                     sep = get_line_separator(),
                                     comment = get_event_pos_comment(),
                                     x = event.x,
                                     y = event.y
-                                ),
+                                )),
                             ],
-                            translation: String::new(),
+                            translation: Cow::Borrowed(""),
                         },
                     )]),
                 ));

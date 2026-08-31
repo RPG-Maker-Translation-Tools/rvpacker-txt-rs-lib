@@ -8,6 +8,7 @@ use crate::{
 };
 use marshal_rs::value::ValueRef;
 use smallvec::SmallVec;
+use std::borrow::Cow;
 
 impl Base {
     /// Prepares this base to process a run of map files.
@@ -198,26 +199,26 @@ impl Base {
                         SmallVec::default(),
                         FlushedLines::EMPTY,
                         TranslationMap::from_iter([(
-                            String::new(),
+                            Cow::Borrowed(""),
                             TranslationEntry {
                                 comments: vec![
-                                    format!(
+                                    Cow::Owned(format!(
                                         "{comment}{sep}{event_id}",
                                         sep = get_line_separator(),
                                         comment = get_event_id_comment()
-                                    ),
-                                    format!(
+                                    )),
+                                    Cow::Owned(format!(
                                         "{comment}{sep}{event_name}",
                                         sep = get_line_separator(),
                                         comment = get_event_name_comment()
-                                    ),
-                                    format!(
+                                    )),
+                                    Cow::Owned(format!(
                                         "{comment}{sep}{event_x},{event_y}",
                                         sep = get_line_separator(),
                                         comment = get_event_pos_comment()
-                                    ),
+                                    )),
                                 ],
-                                translation: String::new(),
+                                translation: Cow::Borrowed(""),
                             },
                         )]),
                     ));
@@ -281,7 +282,11 @@ impl Base {
     ///
     fn is_map_unused(&self, id: u16) -> bool {
         // If map ID can't be found in mapinfos, then it is unused in game.
-        match self.mapinfos.as_ref().expect("mapinfos is parsed before is_map_unused is ever called") {
+        match self
+            .mapinfos
+            .as_ref()
+            .expect("mapinfos is parsed before is_map_unused is ever called")
+        {
             RpgmData::Json(v) => v.as_array().and_then(|a| a.get(id as usize)).is_none(),
             RpgmData::Marshal(arena) => ValueRef::root(arena)
                 .entries()

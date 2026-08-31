@@ -182,6 +182,39 @@ impl Value<'_> {
         }
     }
 
+    /// Takes ownership of this value's text content without cloning it,
+    /// leaving `null`/an empty string behind - sound only when nothing reads
+    /// this node again afterward (read-mode extraction, which never
+    /// re-serializes the source tree). Mirrors [`Value::as_str`]'s
+    /// UTF-8-validity classification; returns [`None`] for anything else
+    /// (non-string, or Marshal bytes that aren't valid UTF-8 - those still
+    /// go through [`Base::extract_string`](crate::core::Base) and its
+    /// decode-with-fallback path, which already produces an owned `String`
+    /// with no extra copy to avoid).
+    pub(crate) fn take_str(&mut self) -> Option<String> {
+        match self {
+            Self::Json(v) => {
+                if !v.is_string() {
+                    return None;
+                }
+
+                match core::mem::take::<JsonValue>(v) {
+                    JsonValue::String(s) => Some(s),
+                    _ => unreachable!(),
+                }
+            }
+            Self::Marshal { arena, id, .. } => {
+                if !matches!(marshal_text_kind(arena, *id), TextKind::String(_)) {
+                    return None;
+                }
+
+                let bytes = arena.take_bytes_content(*id);
+                // SAFETY: `marshal_text_kind` just validated these exact bytes as UTF-8.
+                Some(unsafe { String::from_utf8_unchecked(bytes) })
+            }
+        }
+    }
+
     /// The raw bytes of a value classified as opaque (non-UTF-8) text. Only
     /// meaningful for Marshal - JSON has no such concept.
     #[must_use]

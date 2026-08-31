@@ -4,7 +4,10 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 
 impl Base {
-    pub(super) fn process_parameter(&self, code: Code, mut parameter: &str) -> Option<String> {
+    /// Returns a borrow of `parameter` itself on read, when nothing had to be
+    /// stripped off it - the common case - so the caller doesn't have to pay for a
+    /// clone it may not need.
+    pub(super) fn process_parameter<'a>(&self, code: Code, mut parameter: &'a str) -> Option<Cow<'a, str>> {
         if string_is_only_symbols(parameter) {
             return None;
         }
@@ -87,19 +90,19 @@ impl Base {
                     translation = format!("{prefix}=\"{translation}\"");
                 }
 
-                translation
+                Cow::Owned(translation)
             })
         } else {
-            Some(parameter.to_string())
+            Some(Cow::Borrowed(parameter))
         }
     }
 
     /// Applies an already-processed parameter, produced by [`Base::process_parameter`].
-    pub(super) fn process_param(&mut self, value: &mut Value<'_>, parsed: String) {
+    pub(super) fn process_param(&mut self, value: &mut Value<'_>, parsed: Cow<'_, str>) {
         if self.mode.is_write() {
-            self.write_translated(value, parsed, self.engine_type.is_mvmz());
+            self.write_translated(value, parsed.into_owned(), self.engine_type.is_mvmz());
         } else {
-            self.insert_string(Cow::Owned(parsed));
+            self.insert_string(parsed);
         }
     }
 
@@ -123,7 +126,9 @@ impl Base {
 
             for (i, &index) in dialogue_line_indices.iter().enumerate() {
                 let Some(mut item) = list.at(index) else { continue };
-                let Some(mut params) = item.member(self.labels.parameters) else { continue };
+                let Some(mut params) = item.member(self.labels.parameters) else {
+                    continue;
+                };
                 let Some(mut slot) = params.at(0) else { continue };
 
                 if i < split_line_count {
@@ -148,7 +153,7 @@ impl Base {
                 }
             }
         } else if let Some(parsed) = self.process_parameter(Code::Dialogue, &joined) {
-            self.insert_string(Cow::Owned(parsed));
+            self.insert_string(parsed);
         }
     }
 
@@ -170,7 +175,12 @@ impl Base {
             // SAFETY: Each item must contain code.
             let code = {
                 let mut item = unsafe { list.at(item_idx).unwrap_unchecked() };
-                let code = unsafe { item.member(self.labels.code).unwrap_unchecked().as_int().unwrap_unchecked() };
+                let code = unsafe {
+                    item.member(self.labels.code)
+                        .unwrap_unchecked()
+                        .as_int()
+                        .unwrap_unchecked()
+                };
                 Code::from(code as u16)
             };
 
@@ -234,25 +244,49 @@ impl Base {
                 let mut choices = unsafe { parameters.at(value_index).unwrap_unchecked() };
 
                 for choice_idx in 0..choices.len() {
-                    // Scoped so that the borrow of `choices.at(choice_idx)` ends
-                    // before we write back into it; `process_parameter` returns
-                    // owned data, so nothing outlives the scope.
-                    let parsed = {
-                        let Some(choice) = choices.at(choice_idx) else {
+                    if self.mode.is_write() {
+                        // Scoped so that the borrow of `choices.at(choice_idx)` ends
+                        // before we write back into it - `process_parameter` may
+                        // borrow from `string`, which doesn't outlive the scope, so
+                        // it's forced owned here.
+                        let parsed = {
+                            let Some(choice) = choices.at(choice_idx) else {
+                                continue;
+                            };
+
+                            let Some(string) = self.extract_string(&choice, true) else {
+                                continue;
+                            };
+
+                            self.process_parameter(code, &string).map(Cow::into_owned)
+                        };
+
+                        if let Some(parsed) = parsed
+                            && let Some(mut choice) = choices.at(choice_idx)
+                        {
+                            self.process_param(&mut choice, Cow::Owned(parsed));
+                        }
+                    } else {
+                        // Read/purge never write back to `choice`, so there's no
+                        // need to re-fetch it after reading - handle it in one pass,
+                        // taking the text directly instead of cloning it out.
+                        let Some(mut choice) = choices.at(choice_idx) else {
                             continue;
                         };
 
-                        let Some(string) = self.extract_string(&choice, true) else {
-                            continue;
+                        let text = if let Some(taken) = choice.take_str() {
+                            taken
+                        } else {
+                            let Some(string) = self.extract_string(&choice, true) else {
+                                continue;
+                            };
+
+                            string.into_owned()
                         };
 
-                        self.process_parameter(code, &string)
-                    };
-
-                    if let Some(parsed) = parsed
-                        && let Some(mut choice) = choices.at(choice_idx)
-                    {
-                        self.process_param(&mut choice, parsed);
+                        if let Some(parsed) = self.process_parameter(code, &text) {
+                            self.insert_string(parsed);
+                        }
                     }
                 }
             } else {
@@ -260,7 +294,20 @@ impl Base {
                     continue;
                 };
 
-                let parameter_string = {
+                // Fast path: move the value's own text out directly instead of
+                // extracting a borrow and cloning it - a plain move whenever the
+                // source is a JSON string or valid-UTF-8 Marshal text (the common
+                // case; declared-non-UTF8/decoded text still has no clone to avoid,
+                // so it falls back to the borrow+clone path unchanged). Sound in
+                // both modes: nothing reads `value`'s old content again below -
+                // write mode only ever overwrites it via `process_param`.
+                let parameter_string = if let Some(taken) = value.take_str() {
+                    if !code.is_credit() && taken.is_empty() {
+                        continue;
+                    }
+
+                    taken
+                } else {
                     let Some(parameter_string) = self.extract_string(&value, false) else {
                         continue;
                     };

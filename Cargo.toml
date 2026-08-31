@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "16.1.0"
+version = "16.2.0"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.87.0"
@@ -30,12 +30,12 @@ flate2 = { version = "1.1.10", default-features = false, features = [
 gxhash = { version = "3.5.0", features = ["deterministic"] }
 indexmap = "2.14.1"
 log = "0.4.34"
-marshal-rs = { version = "3.0.0" }
+marshal-rs = { version = "3.2.0" }
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
 quick-xml = { version = "0.42.0", optional = true }
 regex = "1.13.1"
-rm2k-lib = "1.0.0"
+rm2k-lib = { version = "1.0.0", features = ["serde"] }
 rust_xlsxwriter = { version = "0.99.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }

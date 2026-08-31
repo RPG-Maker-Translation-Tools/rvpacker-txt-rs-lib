@@ -54,7 +54,10 @@ fn translate_nickname(content: &[u8], nickname: &str, translation: &str) -> Vec<
     let text = String::from_utf8(data.as_ref().to_vec()).unwrap();
 
     let source_line = format!("{nickname}<#>");
-    assert!(text.contains(&source_line), "expected an untranslated {source_line:?} line in:\n{text}");
+    assert!(
+        text.contains(&source_line),
+        "expected an untranslated {source_line:?} line in:\n{text}"
+    );
     let translation_line = format!("{nickname}<#>{translation}");
     let translation_text = text.replace(&source_line, &translation_line);
 
@@ -83,7 +86,10 @@ fn declared_encoding_is_trusted_over_a_guess_or_override_on_read() {
         .expect("actors list is non-empty, so there should be output");
 
     let text = String::from_utf8(data.as_ref().to_vec()).unwrap();
-    assert!(text.contains("Иван"), "expected the Windows-1251-decoded name in output:\n{text}");
+    assert!(
+        text.contains("Иван"),
+        "expected the Windows-1251-decoded name in output:\n{text}"
+    );
 }
 
 #[test]
@@ -98,7 +104,11 @@ fn write_defaults_to_utf8_regardless_of_the_source_declared_encoding() {
 
     let reloaded = marshal_rs::load(&rewritten_bytes).unwrap();
     let root = marshal_rs::value::ValueRef::root(&reloaded);
-    let nickname = root.at(1).expect("actor entry").get("nickname").expect("nickname field");
+    let nickname = root
+        .at(1)
+        .expect("actor entry")
+        .get("nickname")
+        .expect("nickname field");
 
     // Tagged UTF-8 - not left declaring Windows-1251 (impossible for this
     // text), and not left untagged/implicitly ASCII-8BIT either, which would

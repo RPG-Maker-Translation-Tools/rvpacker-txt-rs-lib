@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
-    BaseFlags, Comments, IndexSetExt, ProcessedData,
-    get_ignore_entry_comment, get_line_separator,
+    BaseFlags, Comments, IndexSetExt, ProcessedData, get_ignore_entry_comment, get_line_separator,
     marshal_compat::{RpgmData, Value},
     types::{
         DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode, RPGMFileType,
@@ -32,6 +31,18 @@ pub(super) struct Translation {
 
     pub(super) metadata: HashMap<u16, Comments>,
     pub(super) top_level_comments: HashMap<u16, Vec<String>>,
+
+    /// Owns the raw text of the current translation `.txt` file, so that
+    /// [`TranslationMap`] entries can borrow `&'static str` slices out of it instead
+    /// of allocating a copy per parsed line.
+    ///
+    /// SAFETY invariant this crate must uphold: every `Cow::Borrowed` reachable from
+    /// `maps`/`write_lookup` (and from [`Output::accumulated`]) is a slice of
+    /// *this* `Box<str>` - a stable heap allocation that doesn't move when replaced -
+    /// and every one of those borrowers is cleared by [`Translation::reset`] in the
+    /// same call that replaces this field (see [`Base::initialize_translation`]),
+    /// so a `'static`-transmuted borrow is never observed after its buffer is gone.
+    pub(super) buffer: Option<Box<str>>,
 }
 
 impl Default for Translation {
@@ -45,6 +56,7 @@ impl Default for Translation {
             write_lookup: TranslationMap::default(),
             metadata: HashMap::default(),
             top_level_comments: HashMap::default(),
+            buffer: None,
         }
     }
 }
@@ -112,6 +124,9 @@ impl Translation {
         self.map_index = usize::MAX;
         self.write_lookup.clear();
         self.metadata.clear();
+        // Every borrower of the old buffer was just cleared above; drop the buffer
+        // itself before `initialize_translation` installs the next one.
+        self.buffer = None;
     }
 }
 
@@ -504,7 +519,10 @@ impl Base {
             let decoded = value
                 .declared_encoding()
                 .and_then(encoding_rs::Encoding::for_label)
-                .map_or_else(|| self.decode_with_fallback(bytes), |encoding| encoding.decode(bytes).0.into_owned());
+                .map_or_else(
+                    || self.decode_with_fallback(bytes),
+                    |encoding| encoding.decode(bytes).0.into_owned(),
+                );
 
             Cow::Owned(decoded)
         };
