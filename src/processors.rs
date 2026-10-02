@@ -305,7 +305,7 @@ impl Processor {
                 base.map_events = self.map_events;
                 base.skip_maps = take(&mut self.skip_maps).into_iter().collect();
 
-                base.begin_maps();
+                base.begin_maps(&mapinfos, translation.as_deref())?;
 
                 for entry in filter_maps(entries.iter(), engine_extension) {
                     let path = entry.path();
@@ -324,7 +324,7 @@ impl Processor {
                         skipped = true;
                     }
 
-                    let result = base.process_map(filename, &content, &mapinfos, translation.as_deref())?;
+                    let result = base.process_map(filename, &content)?;
 
                     if mode.is_write() {
                         if let Some(result) = result {

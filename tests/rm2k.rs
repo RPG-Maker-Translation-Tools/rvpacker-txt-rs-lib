@@ -239,3 +239,40 @@ fn rm2k_batch_json_round_trips() {
         assert_eq!(original, rebuilt, "{name:?} should round-trip byte-identically");
     }
 }
+
+#[test]
+fn rm2k_entity_names_come_from_the_database() {
+    use rvpacker_txt_rs_lib::core::{Rm2kEntity, get_rm2k_entity_name};
+
+    let content = read(source_dir().join("RPG_RT.ldb")).expect("no RPG_RT.ldb");
+    let database = rm2k::file::load_database(&content).expect("RPG_RT.ldb does not parse");
+
+    let actor = database.actors.0.first().expect("the project has no actors");
+    let variable = database.variables.0.first().expect("the project has no variables");
+
+    // The codepage of the project is unknown here; what matters is that the right entry is found and decoded.
+    let decode = |bytes: &[u8]| encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned();
+
+    assert_eq!(
+        get_rm2k_entity_name(&content, Rm2kEntity::Actors, actor.id, Some(encoding_rs::SHIFT_JIS)).unwrap(),
+        decode(actor.name.as_bytes())
+    );
+    assert_eq!(
+        get_rm2k_entity_name(&content, Rm2kEntity::Variables, variable.id, Some(encoding_rs::SHIFT_JIS)).unwrap(),
+        decode(variable.name.as_bytes())
+    );
+    assert!(get_rm2k_entity_name(&content, Rm2kEntity::Actors, i32::MAX, None).is_err());
+}
+
+#[test]
+fn rm2k_system_graphic_name_comes_from_the_database() {
+    use rvpacker_txt_rs_lib::core::get_rm2k_system_graphic_name;
+
+    let content = read(source_dir().join("RPG_RT.ldb")).expect("no RPG_RT.ldb");
+    let database = rm2k::file::load_database(&content).expect("RPG_RT.ldb does not parse");
+
+    assert_eq!(
+        get_rm2k_system_graphic_name(&content, Some(encoding_rs::SHIFT_JIS)).unwrap(),
+        encoding_rs::SHIFT_JIS.decode(database.system.system_name.as_bytes()).0
+    );
+}

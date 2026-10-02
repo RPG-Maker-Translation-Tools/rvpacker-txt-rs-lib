@@ -393,6 +393,8 @@ pub enum Error {
     NoTranslation,
     #[error("`{0}` does not resolve to a value in the file.")]
     InvalidPath(String),
+    #[error("The file is not a valid save file of this engine.")]
+    InvalidSave,
 }
 
 impl Serialize for Error {

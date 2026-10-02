@@ -23,17 +23,18 @@ fn main() -> Result<(), Error> {
 /// output accumulates into one `maps.txt`.
 fn map_example() -> Result<(), Error> {
     let mut base = Base::new(Mode::read(), EngineType::VXAce);
-    base.begin_maps();
 
     let mapinfos_content =
         read("C:/Game/Data/MapInfos.rvdata2").map_err(|e| Error::Io("MapInfos.rvdata2".into(), e))?;
+
+    // `None` on read: nothing to translate yet, so this only extracts.
+    base.begin_maps(&mapinfos_content, None)?;
 
     for filename in ["Map001.rvdata2", "Map002.rvdata2"] {
         let path = format!("C:/Game/Data/{filename}");
         let content = read(&path).map_err(|e| Error::Io(path.into(), e))?;
 
-        // `None` on read: nothing to translate yet, so this only extracts.
-        base.process_map(filename, &content, &mapinfos_content, None)?;
+        base.process_map(filename, &content)?;
     }
 
     let ProcessedData::TranslationData(maps_txt) = base.finish_maps() else {
@@ -43,19 +44,16 @@ fn map_example() -> Result<(), Error> {
     let maps_txt = String::from_utf8(maps_txt).unwrap();
     println!("maps.txt ({len} bytes)", len = maps_txt.len());
 
-    // Writing back mirrors this shape: `begin_maps`, then one `process_map`
-    // per file with `Some(&translation)`, writing each file's own returned
+    // Writing back mirrors this shape: `begin_maps` with `Some(&translation)`,
+    // then one `process_map` per file, writing each file's own returned
     // `ProcessedData::RPGMData` bytes out; `finish_maps` isn't called on write,
     // since there's no shared output left to flush.
     let mut write_base = Base::new(Mode::Write, EngineType::VXAce);
-    write_base.begin_maps();
+    write_base.begin_maps(&mapinfos_content, Some(&maps_txt))?;
 
-    if let Some(ProcessedData::RPGMData(rewritten)) = write_base.process_map(
-        "Map001.rvdata2",
-        &content_for("Map001.rvdata2")?,
-        &mapinfos_content,
-        Some(&maps_txt),
-    )? {
+    if let Some(ProcessedData::RPGMData(rewritten)) =
+        write_base.process_map("Map001.rvdata2", &content_for("Map001.rvdata2")?)?
+    {
         println!("Map001.rvdata2 rewritten ({len} bytes)", len = rewritten.len());
     }
 

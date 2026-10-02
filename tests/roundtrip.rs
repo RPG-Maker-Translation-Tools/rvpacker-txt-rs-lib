@@ -194,8 +194,8 @@ mod maps {
         let mut base = Base::new(Mode::read(), EngineType::MVMZ);
         // Event ids, names and positions are only emitted on request.
         base.map_events = true;
-        base.begin_maps();
-        base.process_map("Map001.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), None)
+        base.begin_maps(MAPINFOS.as_bytes(), None).expect("begin_maps failed");
+        base.process_map("Map001.json", MAP001.as_bytes())
             .expect("map read failed");
 
         let data = base.finish_maps();
@@ -221,9 +221,10 @@ mod maps {
         let translated = translate_all(&text, |source| format!("[{source}]"));
 
         let mut base = Base::new(Mode::Write, EngineType::MVMZ);
-        base.begin_maps();
+        base.begin_maps(MAPINFOS.as_bytes(), Some(&translated))
+            .expect("begin_maps failed");
         let data = base
-            .process_map("Map001.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), Some(&translated))
+            .process_map("Map001.json", MAP001.as_bytes())
             .expect("map write failed")
             .expect("nothing was processed");
 
@@ -235,13 +236,85 @@ mod maps {
         assert_eq!(json["displayName"], "[Riverside]");
     }
 
+    /// rpgmtranslate-qt#20: an untranslated map section used to leave the section id unchanged, so the map after it
+    /// was parsed as part of it - the translation of map N ended up written to the first untranslated map before it.
+    #[test]
+    fn untranslated_maps_do_not_shift_the_translations_after_them() {
+        const MAPINFOS: &str = r#"[null,
+{"id":1,"name":"Town","order":1,"parentId":0},
+{"id":2,"name":"Cave","order":2,"parentId":0},
+{"id":3,"name":"Castle","order":3,"parentId":0}]"#;
+
+        let maps = [
+            ("Map001.json", "Town"),
+            ("Map002.json", "Cave"),
+            ("Map003.json", "Castle"),
+        ]
+        .map(|(name, place)| {
+            let content = format!(
+                r#"{{"displayName":"{place}","events":[null,
+{{"id":1,"name":"EV001","x":5,"y":7,"pages":[
+{{"list":[{{"code":101,"parameters":["",0,0,2]}},
+{{"code":401,"parameters":["Hello {place}."]}},
+{{"code":0,"parameters":[]}}]}}]}}]}}"#
+            );
+            (name, content)
+        });
+
+        let mut base = Base::new(Mode::read(), EngineType::MVMZ);
+        base.begin_maps(MAPINFOS.as_bytes(), None).expect("begin_maps failed");
+
+        for (name, content) in &maps {
+            base.process_map(name, content.as_bytes()).expect("map read failed");
+        }
+
+        let text = String::from_utf8(base.finish_maps().as_ref().to_vec()).expect("not UTF-8");
+
+        // Translate every map but the second one.
+        let mut translated = String::new();
+
+        for (i, piece) in text.split("<!>ID<#>").enumerate() {
+            if i == 0 {
+                translated.push_str(piece);
+                continue;
+            }
+
+            let section = format!("<!>ID<#>{piece}");
+
+            if piece.starts_with("2\n") || piece.starts_with("2\r\n") {
+                translated.push_str(&section);
+            } else {
+                translated.push_str(&translate_all(&section, |source| format!("[{source}]")));
+            }
+        }
+
+        let mut base = Base::new(Mode::Write, EngineType::MVMZ);
+        base.begin_maps(MAPINFOS.as_bytes(), Some(&translated))
+            .expect("begin_maps failed");
+
+        let written = maps.map(|(name, content)| base.process_map(name, content.as_bytes()).expect("map write failed"));
+
+        assert!(written[1].is_none(), "the untranslated map must not be written");
+
+        for (index, place) in [(0, "Town"), (2, "Castle")] {
+            let data = written[index].as_ref().expect("a translated map must be written");
+            let json: Json = from_slice(data.as_ref()).expect("not valid JSON");
+
+            assert_eq!(
+                json["events"][1]["pages"][0]["list"][1]["parameters"][0],
+                format!("[Hello {place}.]")
+            );
+            assert_eq!(json["displayName"], format!("[{place}]"));
+        }
+    }
+
     #[test]
     fn a_map_missing_from_mapinfos_is_skipped() {
         let mut base = Base::new(Mode::read(), EngineType::MVMZ);
-        base.begin_maps();
+        base.begin_maps(MAPINFOS.as_bytes(), None).expect("begin_maps failed");
 
         let data = base
-            .process_map("Map009.json", MAP001.as_bytes(), MAPINFOS.as_bytes(), None)
+            .process_map("Map009.json", MAP001.as_bytes())
             .expect("map read failed");
 
         assert!(data.is_none());

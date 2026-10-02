@@ -337,7 +337,7 @@ impl Base {
     /// (namely [`Base::decode_scripts`]) that decode more than one blob per
     /// call and would otherwise have to thread `&self` through a static
     /// method just to reach one field.
-    pub(super) fn decode_bytes_with(bytes: &[u8], encoding: Option<&'static encoding_rs::Encoding>) -> String {
+    pub(crate) fn decode_bytes_with(bytes: &[u8], encoding: Option<&'static encoding_rs::Encoding>) -> String {
         if let Some(encoding) = encoding {
             return encoding.decode(bytes).0.into_owned();
         }

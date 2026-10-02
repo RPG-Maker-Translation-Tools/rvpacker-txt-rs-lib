@@ -125,6 +125,7 @@ pub mod core;
 pub mod json;
 pub(crate) mod marshal_compat;
 pub mod processors;
+pub mod save;
 pub mod serde;
 pub mod types;
 

@@ -98,6 +98,8 @@ impl Base {
         for (i, line) in translation_lines {
             if line.starts_with(get_id_comment()) {
                 if id != 0 {
+                    let mut skip_entry = false;
+
                     if scratch.is_empty() {
                         let metadata_entry = self
                             .translation
@@ -110,16 +112,18 @@ impl Base {
                         if self.mode.is_write()
                             && (display_name.is_empty() || display_name.ends_with(get_line_separator()))
                         {
-                            continue;
+                            skip_entry = true;
+                        } else {
+                            self.translation
+                                .maps
+                                .entry(id)
+                                .or_insert(TranslationMap::with_capacity(512));
                         }
-
-                        self.translation
-                            .maps
-                            .entry(id)
-                            .or_insert(TranslationMap::with_capacity(512));
                     }
 
-                    self.translation.maps.insert(id, scratch.drain(..).collect());
+                    if !skip_entry {
+                        self.translation.maps.insert(id, scratch.drain(..).collect());
+                    }
                 }
 
                 id = line

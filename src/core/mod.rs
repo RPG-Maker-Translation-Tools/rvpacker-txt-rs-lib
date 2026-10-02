@@ -30,7 +30,7 @@ pub mod text;
 mod translation;
 
 pub use base::Base;
-pub use entity::{PathSegment, get_entity_values};
+pub use entity::{PathSegment, Rm2kEntity, get_entity_values, get_rm2k_entity_name, get_rm2k_system_graphic_name};
 pub use file::{
     filter_maps, filter_other, filter_rm2k_maps, get_ini_title, get_ini_title_rm2k, get_system_title, parse_ignore,
 };

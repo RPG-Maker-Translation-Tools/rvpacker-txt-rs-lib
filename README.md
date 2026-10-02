@@ -123,11 +123,12 @@ use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut base = Base::new(Mode::Read { append: false, force: true }, EngineType::VXAce);
-    base.begin_maps();
 
     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
+    base.begin_maps(&mapinfos, None)?;
+
     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
-    base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    base.process_map("Map001.rvdata2", &map_file_content)?;
 
     // The translation is only available once every map has been processed.
     let translation_data = base.finish_maps();
@@ -170,7 +171,7 @@ RM2K's project layout doesn't fit the `data`/`Data` convention either: `RPG_RT.l
 
 ### Reading one value out of a raw file
 
-[`core::get_entity_values`] resolves a dotted key/index path inside a raw, unprocessed RPG Maker data file (any engine) to the scalar value(s) at the end of it - for a consumer that wants to show one field's current value (a tooltip, say) without running the full translation pipeline.
+[`core::get_entity_values`] resolves a dotted key/index path inside a raw, unprocessed RPG Maker data file (any engine but RM2K/RM2K3, see below) to the scalar value(s) at the end of it - for a consumer that wants to show one field's current value (a tooltip, say) without running the full translation pipeline.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{EngineType, core::{PathSegment, get_entity_values}};
@@ -186,6 +187,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[PathSegment::Key("variables")],
         &[PathSegment::Index(3)],
     )?;
+
+    Ok(())
+}
+```
+
+RM2K/RM2K3 keep their whole database in one binary `RPG_RT.ldb` instead of one file per entity, so there is no tree to walk by a path. [`core::get_rm2k_entity_name`] looks up the name of one entry of a list instead (actors and variables, the two a message code refers to), decoded with the project's read encoding:
+
+```rust no_run
+use rvpacker_txt_rs_lib::core::{Rm2kEntity, get_rm2k_entity_name};
+use std::fs::read;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let content = read("C:/Game/RPG_RT.ldb")?;
+
+    // What `\V[3]` stands for.
+    let name = get_rm2k_entity_name(&content, Rm2kEntity::Variables, 3, Some(encoding_rs::SHIFT_JIS))?;
 
     Ok(())
 }
@@ -280,9 +297,8 @@ As for RPG Maker 2000, [OFF English Translation 3.0](https://www.mediafire.com/f
 
 If you could, please consider supporting us through:
 
+- [Boosty](https://boosty.to/mcdeimos) (has lower fees)
 - [Ko-fi](https://ko-fi.com/savannstm)
-- [Patreon](https://www.patreon.com/cw/savannstm)
-- [Boosty](https://boosty.to/mcdeimos)
 
 Even if you don't, it's fine. We'll continue to do as we right now.
 

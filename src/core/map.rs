@@ -15,10 +15,23 @@ impl Base {
     ///
     /// Maps accumulate into one translation file, so they are processed as a run:
     /// call this, then [`Base::process_map`] per file, then [`Base::finish_maps`].
-    pub fn begin_maps(&mut self) {
+    ///
+    /// # Parameters
+    ///
+    /// - `mapinfos` - `MapInfos` file content that corresponds to the maps being processed.
+    /// - `translation` - Contents of the translation file corresponding to maps. Isn't used with [`Mode::Read`]. Requires to be set with any other [`Mode`].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
+    /// - [`Error::JsonParse`] - if unable to parse the JSON data.
+    /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
+    pub fn begin_maps(&mut self, mapinfos: &[u8], translation: Option<&str>) -> Result<(), Error> {
         self.reset();
         self.file_type = RPGMFileType::Map;
-        self.mapinfos = None;
+        self.mapinfos = Some(parse_rpgm_file(mapinfos, self.engine_type)?);
+        self.initialize_translation(translation)?;
+        Ok(())
     }
 
     /// Returns the translation data, accumulated after processing multiple maps.
@@ -35,12 +48,13 @@ impl Base {
     ///     let mut base = Base::new(Mode::read(), EngineType::VXAce);
     ///
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
+    ///     base.begin_maps(&mapinfos, None)?;
     ///
     ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
-    ///     let data = base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     let data = base.process_map("Map001.rvdata2", &map_file_content)?;
     ///
     ///     let map_file_content = read("C:/Game/Data/Map002.rvdata2")?;
-    ///     let data = base.process_map("Map002.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     let data = base.process_map("Map002.rvdata2", &map_file_content)?;
     ///
     ///     let translation_data = base.finish_maps();
     ///     Ok(())
@@ -52,14 +66,13 @@ impl Base {
 
     /// Processes the RPG Maker map file content.
     ///
-    /// To get the translation data, you need to call [`Base::finish_maps`] after processing required maps.
+    /// [`Base::begin_maps`] must be called first. To get the translation data, you need to call [`Base::finish_maps`]
+    /// after processing required maps.
     ///
     /// # Parameters
     ///
     /// - `filename` - Filename of the file that's being processed.
     /// - `content` - Content of the file that's being processed.
-    /// - `mapinfos` - `MapInfos` file content that corresponds to the file being parsed.
-    /// - `translation` - Contents of the translation file corresponding to maps. Isn't used with [`Mode::Read`]. Requires to be set with any other [`Mode`].
     ///
     /// # Returns
     ///
@@ -71,7 +84,6 @@ impl Base {
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -86,28 +98,18 @@ impl Base {
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let mut base = Base::new(Mode::read(), EngineType::VXAce);
     ///
-    ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
     ///     let mapinfos = read("C:/Game/Data/MapInfos.rvdata2")?;
-    ///     let data = base.process_map("Map001.rvdata2", &map_file_content, &mapinfos, None)?;
+    ///     base.begin_maps(&mapinfos, None)?;
+    ///
+    ///     let map_file_content = read("C:/Game/Data/Map001.rvdata2")?;
+    ///     let data = base.process_map("Map001.rvdata2", &map_file_content)?;
     ///
     ///     // Required only when reading.
     ///     let translation_data = base.finish_maps();
     ///     Ok(())
     /// }
     /// ```
-    pub fn process_map(
-        &mut self,
-        filename: &str,
-        content: &[u8],
-        mapinfos: &[u8],
-        translation: Option<&str>,
-    ) -> Result<Option<ProcessedData>, Error> {
-        if self.mapinfos.is_none() {
-            self.mapinfos = Some(parse_rpgm_file(mapinfos, self.engine_type)?);
-        }
-
-        self.initialize_translation(translation)?;
-
+    pub fn process_map(&mut self, filename: &str, content: &[u8]) -> Result<Option<ProcessedData>, Error> {
         let id = Self::parse_map_id(filename);
         if self.is_map_unused(id) {
             return Ok(None);

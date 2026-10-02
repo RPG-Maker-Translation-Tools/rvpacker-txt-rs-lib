@@ -56,6 +56,10 @@ pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Erro
 
                 result
             }))
+    } else if filename.starts_with("Save") {
+        // A save is a series of `Marshal.dump` streams in one file, not one.
+        let arenas = marshal_rs::load_many(file_content)?;
+        Ok(unsafe { to_string_pretty(&arenas).unwrap_unchecked() })
     } else {
         let arena = marshal_rs::load(file_content)?;
         Ok(unsafe { to_string_pretty(&arena).unwrap_unchecked() })
@@ -101,6 +105,18 @@ pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
 #[must_use = "the JSON representation is discarded if not used"]
 pub fn generate_rm2k_database_file(file_content: &[u8]) -> Result<String, Error> {
     let loaded = rm2k_file::load_database(file_content)?;
+    Ok(unsafe { to_string_pretty(&loaded.value).unwrap_unchecked() })
+}
+
+/// Generates a JSON representation of an RPG Maker 2000/2003 save file (`SaveNN.lsd`). Unlike the other RM2K files, it
+/// is for looking at only: there is no way back.
+///
+/// # Errors
+///
+/// - [`Error::Rm2kLoad`] - if unable to load the LCF data.
+#[must_use = "the JSON representation is discarded if not used"]
+pub fn generate_rm2k_save_file(file_content: &[u8]) -> Result<String, Error> {
+    let loaded = rm2k_file::load_save(file_content)?;
     Ok(unsafe { to_string_pretty(&loaded.value).unwrap_unchecked() })
 }
 
