@@ -1,17 +1,28 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "17.0.0"
+version = "17.0.1"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.88.0"
 description = "Library that allows you to generate text files from RPG Maker files."
 documentation = "https://docs.rs/rvpacker-txt-rs-lib"
 readme = "README.md"
-repository = "https://github.com/savannstm/rvpacker-txt-rs-lib"
-license-file = "LICENSE.md"
+repository = "https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs-lib"
+homepage = "https://crates.io/crates/rvpacker-txt-rs-lib"
+license = "WTFPL"
+keywords = ["rpgmaker", "translation", "rvpacker", "parser", "text"]
+categories = ["game-development", "parser-implementations"]
+exclude = [
+    "/.gitignore",
+    "/.gitattributes",
+    "/.github",
+    "/.cargo",
+    "/rustfmt.toml",
+    "/tests",
+]
 
 [package.metadata.cargo-machete]
-ignored = ["strum"]
+ignored = ["strum", "rm2k-lib"]
 
 [features]
 serde-csv = ["dep:csv"]
@@ -30,12 +41,12 @@ flate2 = { version = "1.1.10", default-features = false, features = [
 gxhash = { version = "3.5.0", features = ["deterministic"] }
 indexmap = "2.14.2"
 log = "0.4.34"
-marshal-rs = { version = "3.3.0" }
+marshal-rs = { version = "3.3.1" }
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
 quick-xml = { version = "0.42.0", optional = true }
 regex = "1.13.1"
-rm2k-lib = { version = "1.0.0", features = ["serde"] }
+rm2k-lib = { version = "1.0.1", features = ["serde"] }
 rust_xlsxwriter = { version = "0.99.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }

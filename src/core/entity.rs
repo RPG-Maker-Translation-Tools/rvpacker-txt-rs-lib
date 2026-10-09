@@ -88,7 +88,7 @@ fn walk(mut cursor: Value<'_>, path: &[PathSegment<'_>], leaves: &[PathSegment<'
 }
 
 /// The name-bearing lists of `RPG_RT.ldb` that [`get_rm2k_entity_name`] can look an entry up in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Rm2kEntity {
     Actors,
