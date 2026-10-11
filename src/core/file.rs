@@ -139,7 +139,7 @@ pub fn filter_rm2k_maps<'a>(entries: impl Iterator<Item = &'a DirEntry>) -> impl
 ///
 /// # Parameters
 ///
-/// - `ignore_file_path` - Path to the `.rvpacker-ignore` file.
+/// - `ignore_file_content` - Content of the `.rvpacker-ignore` file.
 /// - `duplicate_mode` - [`DuplicateMode`], which was used during read.
 /// - `read` - Parse for reading or purging.
 ///

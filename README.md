@@ -12,6 +12,17 @@ This library backs [RPGMTranslate GUI](https://github.com/RPG-Maker-Translation-
 cargo add rvpacker-txt-rs-lib
 ```
 
+## Features
+
+No feature is enabled by default. The optional ones add [`serde`](https://docs.rs/rvpacker-txt-rs-lib/latest/rvpacker_txt_rs_lib/serde/index.html) module converters between the `.txt` translation files and other formats (`export_*`/`import_*` functions):
+
+- `serde-csv` - CSV.
+- `serde-xml` - XML.
+- `serde-xlsx` - XLSX.
+- `serde-yaml` - YAML.
+
+JSON export/import (`export_json`/`import_json`) is always available.
+
 ## Quick start
 
 [`Processor`](#processor---the-high-level-api) is the entry point for most uses: configure the fields you care about, then call [`Processor::process`] once per operation.
@@ -143,7 +154,7 @@ RM2K's data is parsed via [`rm2k-lib`](https://crates.io/crates/rm2k-lib), which
 
 | Method                                                                                                                                    | Corresponds to                                                                                                                                                                                                                          |
 | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `begin_rm2k_maps` / `process_rm2k_map` / `finish_rm2k_maps`                                                                               | `begin_maps` / `process_map` / `finish_maps`, taking a `rm2k::rpg::TreeMap` (the `RPG_RT.lmt` map tree) in place of `MapInfos.*`'s raw bytes.                                                                                           |
+| `begin_rm2k_maps` / `process_rm2k_map` / `finish_rm2k_maps`                                                                               | `begin_maps` / `process_map` / `finish_maps`. `begin_rm2k_maps` takes no arguments; `process_rm2k_map` takes a `&rm2k::rpg::TreeMap` (the `RPG_RT.lmt` map tree) in place of `MapInfos.*`'s raw bytes.                                  |
 | `process_rm2k_actors`, `process_rm2k_skills`, `process_rm2k_items`, `process_rm2k_enemies`, `process_rm2k_classes`, `process_rm2k_states` | `process_other`, one method per entity kind since `RPG_RT.ldb` bundles every kind into one file instead of one file per kind. Each takes `&mut rm2k::field::List<T>` (mutated in place on write) plus that kind's own translation text. |
 | `process_rm2k_troops`, `process_rm2k_commonevents`                                                                                        | `process_other`'s `Troops`/`CommonEvents` handling - name plus event-command dialogue, both under one id.                                                                                                                               |
 | `process_rm2k_terms`                                                                                                                      | `process_system`'s fixed-section handling, for RM2K's ~150-field vocabulary struct.                                                                                                                                                     |
@@ -207,6 +218,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+[`core::get_rm2k_system_graphic_name`] returns the name of the system graphic (`System/<name>.png`) that an RM2K/RM2K3 database selects - where the text colors of `\C[n]` live. It reads `RPG_RT.ldb` and decodes the name the same way; an empty name (a database selecting no graphic) is returned as is:
+
+```rust no_run
+use rvpacker_txt_rs_lib::core::get_rm2k_system_graphic_name;
+use std::fs::read;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let content = read("C:/Game/RPG_RT.ldb")?;
+    let name = get_rm2k_system_graphic_name(&content, None)?;
+
+    Ok(())
+}
+```
+
+### `save` module
+
+[`save`] reads the save files of every supported engine, independent of the translation workflow - for a consumer (a GUI tooltip, say) that wants to show what a message code like `\P[1]` or `\playtime` would print. [`save::get_save_summary`] takes a save file's raw bytes and its [`EngineType`], and returns a normalized [`save::SaveSummary`] whatever the engine's storage:
+
+- MV/MZ - the LZString-compressed JSON of `.rpgsave` (pass the file as is; it is decompressed for you).
+- XP/VX/VX Ace - several `Marshal.dump` streams in one file. Objects are located by class name rather than position, since what the streams hold differs between the three engines.
+- RM2K/RM2K3 - the LCF `.lsd`.
+
+[`save::SaveSummary`] holds the playtime in frames (`frames`, 60 per second), `map_id`, `gold`, the `party` as actor ids, every actor the save holds ([`save::SaveActorSummary`]: id, name, nickname, class, level, HP/MP/TP), the carried `items`, `weapons` and `armors` ([`save::SaveStack`]: id and count), and `switches`/`variables` indexed by in-game id (index 0 is unused). Anything an engine doesn't store (nicknames and TP before VX Ace, say) stays at its default; RM2K has no separate weapons and armors, so all of them are in `items`, and it stores an actor's name only when the game changed it - an empty `name` means "fall back to the database". `read_encoding` decodes strings as in [Text encoding](#text-encoding), `None` guessing between the common codepages.
+
+```rust no_run
+use rvpacker_txt_rs_lib::{EngineType, save::get_save_summary};
+use std::fs::read;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let content = read("C:/Game/save/file1.rvdata2")?;
+    let summary = get_save_summary(&content, EngineType::VXAce, None)?;
+
+    println!("{} gold on map {}", summary.gold, summary.map_id);
+    Ok(())
+}
+```
+
+The module also exposes the compression MV/MZ saves use: [`save::load`] decompresses a save's content into its JSON (`None` if it isn't valid LZString output), and [`save::dump`] compresses JSON back, its inverse.
 
 ### `json` module
 
@@ -283,7 +333,7 @@ With `DuplicateMode::Remove` the `: id` suffix is ignored and a section applies 
 
 ## Serialization
 
-Every public enum and struct in this crate implements `serde`'s `Serialize`/`Deserialize`. Flat enums with only number variants (and [`FileFlags`]/[`BaseFlags`]) use `#[serde(into = "u8", try_from = "u8")]` (or `u16` for `FileFlags`), serializing as a single integer rather than a tagged representation.
+The option and data types of this crate (`Mode`, `EngineType`, `DuplicateMode`, `FileFlags`, `BaseFlags` and the like) implement `serde`'s `Serialize`/`Deserialize`; `Error`, `core::Base` and `core::Rm2kEntity` do not. Flat enums with only number variants (and [`FileFlags`]/[`BaseFlags`]) use `#[serde(into = "u8", try_from = "u8")]` (or `u16` for `FileFlags`), serializing as a single integer rather than a tagged representation.
 
 ## Tests
 
@@ -300,8 +350,8 @@ If you could, please consider supporting us through:
 - [Boosty](https://boosty.to/mcdeimos) (has lower fees)
 - [Ko-fi](https://ko-fi.com/savannstm)
 
-Even if you don't, it's fine. We'll continue to do as we right now.
+Even if you don't, we will still continue working on the project anyways.
 
 ## License
 
-Project is licensed under [WTFPL](https://www.wtfpl.net).
+Project is licensed under [WTFPL](https://www.wtfpl.net/).

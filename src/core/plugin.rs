@@ -46,11 +46,8 @@ impl Base {
     /// # Errors
     ///
     /// - [`Error::JsonParse`] - if parsing plugin JSON content fails.
+    /// - [`Error::InvalidPlugins`] - if the content is not `plugins = [...]`, or a plugin has no name.
     /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
-    ///
-    /// # Panics
-    ///
-    /// May panic if passed content is not `plugins.js`.
     ///
     /// # Example
     ///
@@ -75,18 +72,16 @@ impl Base {
         self.file_type = RPGMFileType::Plugins;
         self.initialize_translation(translation)?;
 
-        // SAFETY: Plugins content should always be like `plugins = [...]`, and JSON is always valid UTF-8.
-        let plugins_array_str = unsafe {
-            std::str::from_utf8_unchecked(content)
-                .split_once('=')
-                .unwrap_unchecked()
-                .1
-                .trim_end_matches([';', '\r', '\n'])
-        };
+        // Plugins content should be like `plugins = [...]`.
+        let plugins_array_str = std::str::from_utf8(content)
+            .ok()
+            .and_then(|text| text.split_once('='))
+            .ok_or(Error::InvalidPlugins("expected `plugins = [...]`"))?
+            .1
+            .trim_end_matches([';', '\r', '\n']);
 
-        // SAFETY: Plugins are always array.
         let SerdeValue::Array(mut plugins_array) = from_str::<SerdeValue>(plugins_array_str)? else {
-            unsafe { std::hint::unreachable_unchecked() }
+            return Err(Error::InvalidPlugins("expected an array of plugins"));
         };
 
         let mut processed = false;
@@ -103,8 +98,9 @@ impl Base {
             }
 
             processed = true;
-            // SAFETY: Each plugin always contains name.
-            let plugin_name = unsafe { plugin_object["name"].as_str().unwrap_unchecked() };
+            let plugin_name = plugin_object["name"]
+                .as_str()
+                .ok_or(Error::InvalidPlugins("a plugin has no name"))?;
 
             self.update_metadata(id, Vec::from([(CommentPos::Name, plugin_name)]));
             self.parse_plugin(None, plugin_object);

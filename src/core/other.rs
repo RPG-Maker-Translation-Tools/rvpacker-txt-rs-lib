@@ -75,8 +75,11 @@ impl Base {
 
             // Skipping one, because the first entry is always null.
             root.for_each_element_mut(1, |object| {
-                // SAFETY: Name and ID exists on every object.
-                let id = unsafe { object.member("id").unwrap_unchecked().as_int().unwrap_unchecked() } as u16;
+                // Corrupt files may have objects without an ID or a name; they carry nothing to translate.
+                let Some(id) = object.member("id").and_then(|id| id.as_int()) else {
+                    return;
+                };
+                let id = id as u16;
 
                 if self.get_translation_map(id).is_break() {
                     if self.mode.is_purge() {
@@ -88,13 +91,11 @@ impl Base {
 
                 processed = true;
 
-                let event_name = unsafe {
-                    object
-                        .member(self.labels.name)
-                        .unwrap_unchecked()
-                        .as_str()
-                        .unwrap_unchecked()
-                        .to_owned()
+                let Some(event_name) = object
+                    .member(self.labels.name)
+                    .and_then(|name| name.as_str().map(str::to_owned))
+                else {
+                    return;
                 };
 
                 self.update_metadata(id, Vec::from([(CommentPos::Name, event_name.as_str())]));

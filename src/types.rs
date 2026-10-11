@@ -395,6 +395,12 @@ pub enum Error {
     InvalidPath(String),
     #[error("The file is not a valid save file of this engine.")]
     InvalidSave,
+    #[error("The file is not a valid scripts file: {0}")]
+    InvalidScripts(&'static str),
+    #[error("The file is not a valid plugins file: {0}")]
+    InvalidPlugins(&'static str),
+    #[error("The translation file is malformed at line {0}.")]
+    InvalidTranslation(usize),
 }
 
 impl Serialize for Error {
@@ -638,11 +644,12 @@ bitflags! {
     #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
     #[serde(into = "u16", try_from = "u16")]
     #[repr(transparent)]
-    /// There's four [`FileFlags`] variants:
+    /// The flags select which kinds of files are processed. Besides one flag per "other" file (`Actors`, `Armors`, ...), there are:
     /// - [`FileFlags::Map`] - enables `Mapxxx.ext` files processing.
     /// - [`FileFlags::other`] - enables processing files other than `Map`, `System`, `Scripts` and `plugins`.
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
+    /// - [`FileFlags::Database`] - enables RM2K's `RPG_RT.ldb` processing (its `other` and `System` equivalent).
     pub struct FileFlags: u16 {
         /// `Mapxxx.ext` files.
         const Map = 1 << 0;

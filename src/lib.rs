@@ -1,123 +1,156 @@
-#![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::needless_doctest_main)]
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
-#![allow(clippy::deref_addrof)]
-#![allow(static_mut_refs)]
 #![doc = include_str!("../README.md")]
 
-use std::sync::LazyLock;
+use std::{
+    ptr,
+    sync::{
+        LazyLock, Mutex, PoisonError,
+        atomic::{AtomicPtr, Ordering},
+    },
+};
 
-pub(crate) static mut LINE_SEPARATOR: &'static str = DEFAULT_LINE_SEPARATOR;
-pub(crate) static mut LINE_BREAK: &'static str = DEFAULT_LINE_BREAK;
-pub(crate) static mut COMMENT_PREFIX: &'static str = DEFAULT_COMMENT_PREFIX;
+/// The separators and the comment lines derived from the comment prefix.
+#[derive(Clone)]
+struct Config {
+    line_separator: &'static str,
+    line_break: &'static str,
+    comment_prefix: &'static str,
 
-pub(crate) static mut ID_COMMENT: LazyLock<String> = LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}ID") });
-pub(crate) static mut NAME_COMMENT: LazyLock<String> = LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}NAME") });
+    id_comment: String,
+    name_comment: String,
+    event_id_comment: String,
+    event_name_comment: String,
+    event_pos_comment: String,
+    map_order_comment: String,
+    map_display_name_comment_prefix: String,
+    ignore_entry_comment: String,
+    glob_entry_comment: String,
+    script_comment: String,
+}
 
-pub(crate) static mut EVENT_ID_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}EVENT ID") });
-pub(crate) static mut EVENT_NAME_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}EVENT NAME") });
-pub(crate) static mut EVENT_POS_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}EVENT POS") });
+impl Config {
+    fn new(line_separator: &'static str, line_break: &'static str, comment_prefix: &'static str) -> Self {
+        let with_prefix = |tail: &str| format!("{comment_prefix}{tail}");
 
-pub(crate) static mut MAP_ORDER_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}ORDER") });
-pub(crate) static mut MAP_DISPLAY_NAME_COMMENT_PREFIX: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: ") });
-pub(crate) static mut IGNORE_ENTRY_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}Ignore Entry") });
+        Self {
+            line_separator,
+            line_break,
+            comment_prefix,
+            id_comment: with_prefix("ID"),
+            name_comment: with_prefix("NAME"),
+            event_id_comment: with_prefix("EVENT ID"),
+            event_name_comment: with_prefix("EVENT NAME"),
+            event_pos_comment: with_prefix("EVENT POS"),
+            map_order_comment: with_prefix("ORDER"),
+            map_display_name_comment_prefix: with_prefix("IN-GAME DISPLAYED NAME: "),
+            ignore_entry_comment: with_prefix("Ignore Entry"),
+            glob_entry_comment: with_prefix("Glob"),
+            script_comment: with_prefix("SCRIPT"),
+        }
+    }
+}
 
-pub(crate) static mut GLOB_ENTRY_COMMENT: LazyLock<String> =
-    LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}Glob") });
+static DEFAULT_CONFIG: LazyLock<Config> =
+    LazyLock::new(|| Config::new(DEFAULT_LINE_SEPARATOR, DEFAULT_LINE_BREAK, DEFAULT_COMMENT_PREFIX));
 
-pub(crate) static mut SCRIPT_COMMENT: LazyLock<String> = LazyLock::new(|| unsafe { format!("{COMMENT_PREFIX}SCRIPT") });
+/// Null until a setter runs, then the newest `Config`. Configs are published once and never freed or
+/// mutated, so references to them (and to the strings inside) stay valid for the rest of the process.
+static CONFIG: AtomicPtr<Config> = AtomicPtr::new(ptr::null_mut());
+
+/// Serializes setters, so two of them cannot both start from the same old config and lose an update.
+static CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
+fn config() -> &'static Config {
+    let current = CONFIG.load(Ordering::Acquire);
+
+    if current.is_null() {
+        &DEFAULT_CONFIG
+    } else {
+        // SAFETY: the only non-null value ever stored in `CONFIG` is a `Box::leak`ed `Config` from
+        // `update_config`, which is never freed or mutated afterwards.
+        unsafe { &*current }
+    }
+}
+
+/// Publishes a changed copy of the current config. Each call leaks one small `Config`: setters are
+/// meant to run at startup, and leaking is what keeps `&'static str` results of earlier getter calls
+/// valid.
+fn update_config(change: impl FnOnce(&mut Config)) {
+    let _guard = CONFIG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+
+    let mut next = config().clone();
+    change(&mut next);
+
+    CONFIG.store(Box::leak(Box::new(next)), Ordering::Release);
+}
 
 pub fn set_line_separator(sep: &'static str) {
-    unsafe {
-        LINE_SEPARATOR = sep;
-    }
+    update_config(|config| config.line_separator = sep);
 }
 
 pub fn set_line_break(brk: &'static str) {
-    unsafe {
-        LINE_BREAK = brk;
-    }
+    update_config(|config| config.line_break = brk);
 }
 
 pub fn set_comment_prefix(prefix: &'static str) {
-    unsafe {
-        COMMENT_PREFIX = prefix;
-
-        ID_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}ID"));
-        NAME_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}NAME"));
-
-        EVENT_ID_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}EVENT ID"));
-        EVENT_NAME_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}EVENT NAME"));
-        EVENT_POS_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}EVENT POS"));
-
-        MAP_ORDER_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}ORDER"));
-        MAP_DISPLAY_NAME_COMMENT_PREFIX = LazyLock::new(|| format!("{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: "));
-        IGNORE_ENTRY_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}Ignore Entry"));
-
-        GLOB_ENTRY_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}Glob"));
-
-        SCRIPT_COMMENT = LazyLock::new(|| format!("{COMMENT_PREFIX}SCRIPT"));
-    }
+    update_config(|config| *config = Config::new(config.line_separator, config.line_break, prefix));
 }
 
+#[must_use]
 pub fn get_line_separator() -> &'static str {
-    unsafe { LINE_SEPARATOR }
+    config().line_separator
 }
 
+#[must_use]
 pub fn get_line_break() -> &'static str {
-    unsafe { LINE_BREAK }
+    config().line_break
 }
 
+#[must_use]
 pub fn get_comment_prefix() -> &'static str {
-    unsafe { COMMENT_PREFIX }
+    config().comment_prefix
 }
 
 pub(crate) fn get_id_comment() -> &'static str {
-    unsafe { &ID_COMMENT }
+    &config().id_comment
 }
 
 pub(crate) fn get_name_comment() -> &'static str {
-    unsafe { &NAME_COMMENT }
+    &config().name_comment
 }
 
 pub(crate) fn get_event_id_comment() -> &'static str {
-    unsafe { &EVENT_ID_COMMENT }
+    &config().event_id_comment
 }
 
 pub(crate) fn get_event_name_comment() -> &'static str {
-    unsafe { &EVENT_NAME_COMMENT }
+    &config().event_name_comment
 }
 
 pub(crate) fn get_event_pos_comment() -> &'static str {
-    unsafe { &EVENT_POS_COMMENT }
+    &config().event_pos_comment
 }
 
 pub(crate) fn get_map_order_comment() -> &'static str {
-    unsafe { &MAP_ORDER_COMMENT }
+    &config().map_order_comment
 }
 
 pub(crate) fn get_map_display_name_comment_prefix() -> &'static str {
-    unsafe { &MAP_DISPLAY_NAME_COMMENT_PREFIX }
+    &config().map_display_name_comment_prefix
 }
 
 pub(crate) fn get_ignore_entry_comment() -> &'static str {
-    unsafe { &IGNORE_ENTRY_COMMENT }
+    &config().ignore_entry_comment
 }
 
 pub(crate) fn get_glob_entry_comment() -> &'static str {
-    unsafe { &GLOB_ENTRY_COMMENT }
+    &config().glob_entry_comment
 }
 
 pub(crate) fn get_script_comment() -> &'static str {
-    unsafe { &SCRIPT_COMMENT }
+    &config().script_comment
 }
 
 pub mod constants;

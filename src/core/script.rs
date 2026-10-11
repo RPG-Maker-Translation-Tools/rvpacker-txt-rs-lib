@@ -73,7 +73,7 @@ impl Base {
         // SAFETY: Scripts are always array.
         let root = arena.root();
 
-        let mut scripts = Self::decode_scripts(&arena, root, self.read_encoding);
+        let mut scripts = Self::decode_scripts(&arena, root, self.read_encoding)?;
 
         // SAFETY: These regexes are valid, 100% no shit.
         let regexes = unsafe {
@@ -259,49 +259,59 @@ impl Base {
     ///
     /// A [`Scripts`] struct that holds `numbers`, `scripts` and `names` fields.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// May panic if decoder gets interrupted.
+    /// - [`Error::InvalidScripts`] - if an entry is missing a part or its source is not valid zlib data.
     ///
     #[must_use]
     pub fn decode_scripts(
         arena: &Arena<'static>,
         root: ValueId,
         encoding: Option<&'static encoding_rs::Encoding>,
-    ) -> Scripts {
+    ) -> Result<Scripts, Error> {
         let scripts_len = ValueRef::new(arena, root).len();
         let mut numbers = Vec::with_capacity(scripts_len);
         let mut contents = Vec::with_capacity(scripts_len);
         let mut names = Vec::with_capacity(scripts_len);
 
         for script in ValueRef::new(arena, root).array() {
-            // SAFETY: Scripts always have a layout like this. `0` is magic number, `1` is name and `2` is actual script data.
-            let entry0 = unsafe { script.at(0).unwrap_unchecked() };
+            // A script is `[magic number, name, zlib-compressed source]`.
+            let entry0 = script
+                .at(0)
+                .ok_or(Error::InvalidScripts("an entry has no magic number"))?;
 
             // The magic number is a plain integer in modern data, but can be
             // stored as a numeric string in older/hand-edited files.
             let script_number = if let Some(n) = entry0.as_i64() {
                 n as i32
             } else {
-                unsafe {
-                    std::str::from_utf8_unchecked(entry0.as_bytes().unwrap_unchecked())
-                        .parse::<i32>()
-                        .unwrap_unchecked()
-                }
+                entry0
+                    .as_bytes()
+                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                    .and_then(|text| text.parse::<i32>().ok())
+                    .ok_or(Error::InvalidScripts("a magic number is not an integer"))?
             };
 
-            let script_name_data = unsafe { script.at(1).unwrap_unchecked().as_bytes().unwrap_unchecked() };
-            let script_data = unsafe { script.at(2).unwrap_unchecked().as_bytes().unwrap_unchecked() };
+            let script_name_data = script
+                .at(1)
+                .and_then(|name| name.as_bytes())
+                .ok_or(Error::InvalidScripts("an entry has no name"))?;
+            let script_data = script
+                .at(2)
+                .and_then(|data| data.as_bytes())
+                .ok_or(Error::InvalidScripts("an entry has no source"))?;
 
             let mut decoded_script = Vec::with_capacity(script_data.len());
-            ZlibDecoder::new(script_data).read_to_end(&mut decoded_script).unwrap();
+            ZlibDecoder::new(script_data)
+                .read_to_end(&mut decoded_script)
+                .map_err(|_| Error::InvalidScripts("a source is not valid zlib data"))?;
 
             numbers.push(script_number);
             contents.push(Base::decode_bytes_with(&decoded_script, encoding));
             names.push(Base::decode_bytes_with(script_name_data, encoding));
         }
 
-        Scripts::new(numbers, contents, names)
+        Ok(Scripts::new(numbers, contents, names))
     }
 
     /// Encodes decoded [`Scripts`] struct back to a fresh `Arena`, rooted at

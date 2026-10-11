@@ -34,10 +34,12 @@ use std::{
 ///
 /// - [`Error::MarshalLoad`] - if parsing `file_content` Marshal data fails.
 ///
+/// - [`Error::InvalidScripts`] - if `filename` starts with "Scripts", and `file_content` is not a valid scripts file.
+///
 pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Error> {
     if filename.starts_with("Scripts") {
         let arena = marshal_rs::load(file_content)?.into_owned();
-        let scripts = Base::decode_scripts(&arena, arena.root(), None);
+        let scripts = Base::decode_scripts(&arena, arena.root(), None)?;
 
         Ok(scripts
             .numbers
@@ -82,6 +84,12 @@ pub fn generate_file(file_content: &[u8], filename: &str) -> Result<String, Erro
 /// - [`Error::JsonParse`] - if parsing `file_content` JSON fails.
 ///
 pub fn write_file(file_content: &str) -> Result<Vec<u8>, Error> {
+    // A save is a series of `Marshal.dump` streams, which `generate_file` writes as an array of arenas.
+    if file_content.trim_start().starts_with('[') {
+        let arenas = from_str::<Vec<Arena<'static>>>(file_content)?;
+        return Ok(arenas.iter().flat_map(marshal_rs::dump).collect());
+    }
+
     let arena = from_str::<Arena<'static>>(file_content)?;
     Ok(marshal_rs::dump(&arena))
 }

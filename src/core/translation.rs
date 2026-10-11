@@ -130,7 +130,7 @@ impl Base {
                     .strip_prefix(get_id_comment())
                     .and_then(|n| n.strip_prefix(get_line_separator()))
                     .and_then(|n| n.trim_end().parse::<u16>().ok())
-                    .unwrap();
+                    .ok_or(Error::InvalidTranslation(i + 1))?;
                 first = true;
                 comments = smallvec![String::new(); 3];
                 top_level_comments = Vec::new();
@@ -163,7 +163,11 @@ impl Base {
                         // already the stored form, `{source}{SEP}{translation}`.
                         comments[pos as usize] = line[get_map_display_name_comment_prefix().len()..].to_string();
                     } else {
-                        comments[pos as usize] = line.split_once(get_line_separator()).unwrap().1.to_string();
+                        comments[pos as usize] = line
+                            .split_once(get_line_separator())
+                            .ok_or(Error::InvalidTranslation(i + 1))?
+                            .1
+                            .to_string();
                     }
                 } else {
                     comments.push(line.to_string());

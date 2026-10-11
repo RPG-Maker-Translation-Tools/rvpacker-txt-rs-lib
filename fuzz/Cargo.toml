@@ -1,0 +1,57 @@
+[package]
+name = "rvpacker-txt-rs-lib-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rvpacker-txt-rs-lib = { path = "..", features = ["serde-csv", "serde-xml", "serde-xlsx", "serde-yaml"] }
+rm2k-lib = "1.1.0"
+
+[workspace]
+
+[[bin]]
+name = "marshal"
+path = "fuzz_targets/marshal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "process"
+path = "fuzz_targets/process.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "save"
+path = "fuzz_targets/save.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rm2k"
+path = "fuzz_targets/rm2k.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serde"
+path = "fuzz_targets/serde.rs"
+test = false
+doc = false
+bench = false
