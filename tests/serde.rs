@@ -183,3 +183,62 @@ fn xlsx_round_trips() {
         assert_eq!(imported, content, "{name} changed across an XLSX round trip");
     }
 }
+
+/// Found by fuzzing (`fuzz/`): a `\r` at the end of the text was taken for a CRLF line ending and dropped, so every
+/// round trip lost one more.
+#[test]
+fn a_carriage_return_at_the_end_of_the_text_survives_a_round_trip() {
+    let text = "\u{12}\u{10}\r\r";
+    let exported = export_json(text).unwrap();
+    assert_eq!(import_json(&exported).unwrap(), text);
+}
+
+#[cfg(feature = "serde-csv")]
+#[test]
+fn a_count_that_is_not_a_number_is_an_error() {
+    use rvpacker_txt_rs_lib::serde::import_csv;
+
+    let csv = "type,source,translation_count,translation_1\ntranslation,Hello,two,Hola\n";
+    assert!(import_csv(csv).is_err());
+}
+
+#[cfg(feature = "serde-xml")]
+#[test]
+fn xml_entries_need_a_source_and_comments_may_be_plain_text() {
+    use rvpacker_txt_rs_lib::serde::import_xml;
+
+    let without_source =
+        "<entries><entry><translations><translation>Hola</translation></translations></entry></entries>";
+    assert!(import_xml(without_source).is_err());
+
+    let plain = "<entries><comment>Plain &amp; text</comment></entries>";
+    assert_eq!(import_xml(plain).unwrap(), "Plain & text");
+}
+
+#[cfg(feature = "serde-xml")]
+#[test]
+fn xml_comment_with_a_cdata_end_marker_round_trips() {
+    use rvpacker_txt_rs_lib::serde::{export_xml, import_xml};
+
+    let content = "<!> see [[a]]> and ]]>]]> twice\nsource<#>translation";
+
+    assert_eq!(
+        import_xml(&export_xml(content).expect("export failed")).expect("import failed"),
+        content
+    );
+}
+
+#[cfg(feature = "serde-csv")]
+#[test]
+fn csv_cells_a_spreadsheet_would_run_are_guarded_and_restored() {
+    use rvpacker_txt_rs_lib::serde::{export_csv, import_csv};
+
+    let content = "-- Chapter 1 --<#>=== Title ===\n=HYPERLINK(\"http://x\")<#>+10 HP\n'-quoted<#>@user\n'plain<#>''=two\n<!> -note";
+    let exported = export_csv(content).expect("export failed");
+
+    for risky in ["=HYPERLINK", "-- Chapter", "+10", "@user", "=== Title"] {
+        assert!(!exported.contains(&format!(",{risky}")) && !exported.contains(&format!("\n{risky}")));
+    }
+
+    assert_eq!(import_csv(&exported).expect("import failed"), content);
+}

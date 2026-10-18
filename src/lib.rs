@@ -1,6 +1,7 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::option_if_let_else)]
 #![doc = include_str!("../README.md")]
 
 use std::{
@@ -86,28 +87,69 @@ fn update_config(change: impl FnOnce(&mut Config)) {
     CONFIG.store(Box::leak(Box::new(next)), Ordering::Release);
 }
 
+/// Whether `marker` can be told apart in a line of a `.txt` file.
+fn is_valid_marker(marker: &str) -> bool {
+    !marker.is_empty() && !marker.as_bytes().contains(&b'\n')
+}
+
+/// Sets the separator between a source and its translation in `.txt` files (default `<#>`).
+///
+/// Process-global: call it once at startup, before processing any file. See [`get_line_separator`].
+///
+/// # Panics
+///
+/// Panics if `sep` is empty or contains a line feed: every line would then split in the wrong place.
 pub fn set_line_separator(sep: &'static str) {
+    assert!(
+        is_valid_marker(sep),
+        "the line separator must be non-empty and on one line"
+    );
     update_config(|config| config.line_separator = sep);
 }
 
+/// Sets the marker that stands in for a line break in `.txt` files (default `\#`).
+///
+/// Process-global: call it once at startup, before processing any file. See [`get_line_break`].
+///
+/// # Panics
+///
+/// Panics if `brk` is empty or contains a line feed: it could not stand in for one.
 pub fn set_line_break(brk: &'static str) {
+    assert!(
+        is_valid_marker(brk),
+        "the line break marker must be non-empty and on one line"
+    );
     update_config(|config| config.line_break = brk);
 }
 
+/// Sets the prefix that starts comment lines in `.txt` files (default `<!>`). The metadata comments (`ID`, `NAME`, `ORDER`, and so on) are derived from it.
+///
+/// Process-global: call it once at startup, before processing any file. See [`get_comment_prefix`].
+///
+/// # Panics
+///
+/// Panics if `prefix` is empty or contains a line feed: every line would then read as a comment.
 pub fn set_comment_prefix(prefix: &'static str) {
+    assert!(
+        is_valid_marker(prefix),
+        "the comment prefix must be non-empty and on one line"
+    );
     update_config(|config| *config = Config::new(config.line_separator, config.line_break, prefix));
 }
 
+/// The current line separator. `<#>` unless [`set_line_separator`] was called.
 #[must_use]
 pub fn get_line_separator() -> &'static str {
     config().line_separator
 }
 
+/// The current line break marker. `\#` unless [`set_line_break`] was called.
 #[must_use]
 pub fn get_line_break() -> &'static str {
     config().line_break
 }
 
+/// The current comment prefix. `<!>` unless [`set_comment_prefix`] was called.
 #[must_use]
 pub fn get_comment_prefix() -> &'static str {
     config().comment_prefix
@@ -153,18 +195,25 @@ pub(crate) fn get_script_comment() -> &'static str {
     &config().script_comment
 }
 
+mod hasher;
+
+/// Default separators, prefixes and file names.
 pub mod constants;
 pub mod core;
+/// Conversion between RPG Maker data files and JSON.
 pub mod json;
+pub(crate) mod json_doc;
 pub(crate) mod marshal_compat;
+/// The high-level [`Processor`], which reads and writes whole game directories.
 pub mod processors;
 pub mod save;
 pub mod serde;
+/// Option types, data types and the [`Error`] type.
 pub mod types;
 
 pub use constants::{
     DEFAULT_COMMENT_PREFIX, DEFAULT_LINE_BREAK, DEFAULT_LINE_SEPARATOR, RVPACKER_IGNORE_FILE, RVPACKER_METADATA_FILE,
 };
 pub use core::{filter_maps, filter_other, get_ini_title, get_ini_title_rm2k, get_system_title, parse_ignore};
-pub use processors::Processor;
+pub use processors::{Processor, content_hash};
 pub use types::*;

@@ -25,9 +25,10 @@ fn main() -> Result<(), Error> {
         // corrupt a translation into a script the source codepage can't
         // represent - translating this Shift_JIS game into Russian, for
         // instance, cannot be re-encoded as Shift_JIS at all. Leave this
-        // `None` unless the target engine build has no Unicode-aware text
-        // renderer (true of RM2K/2003, XP and VX - they render through the
-        // OS's legacy ANSI codepage) *and* the translation's script fits in
+        // `None` unless the target game reads a legacy codepage (always true
+        // of RM2K/2003, which render through the OS's legacy ANSI codepage;
+        // XP and VX normally read UTF-8, but there can be exceptions) *and*
+        // the translation's script fits in
         // that codepage - e.g. translating this same game into French, where
         // Shift_JIS's ASCII range covers it. Forcing a write encoding also
         // means whoever runs the translated game needs their system (or a

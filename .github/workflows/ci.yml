@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so the fuzz jobs run for 20 minutes each instead of the 60 seconds of a normal run.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Formatting and clippy
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.features }})
+    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        # `--all-features` covers the gxhash default and every serde format; `--no-default-features` covers rapidhash.
+        features: ["--all-features", "--no-default-features"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --no-fail-fast --locked ${{ matrix.features }}
+
+  features:
+    name: Feature builds (${{ matrix.features }})
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The default (gxhash) is covered by the test job; these cover rapidhash and each serde format on its own.
+        features:
+          - "--no-default-features"
+          - "--no-default-features --features serde-csv"
+          - "--no-default-features --features serde-xml"
+          - "--no-default-features --features serde-xlsx"
+          - "--no-default-features --features serde-yaml"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets ${{ matrix.features }}
+
+  miri:
+    name: Miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      # The fixture tests read game files from the source tree, which Miri's isolation forbids.
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      # Without gxhash: its short-input reads are undefined under Stacked Borrows and the crate can't guard them (see
+      # src/hasher.rs). rapidhash covers the same code. The serde formats are left out too, since their parsers would take
+      # hours under Miri.
+      - run: cargo miri setup
+      - run: cargo miri test --no-fail-fast --locked --tests --no-default-features
+
+  asan:
+    name: AddressSanitizer
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # cargo-fuzz defaults to the musl target, where the sanitizer can't link; these runs use the gnu target too.
+      - name: Test under AddressSanitizer
+        env:
+          # Setting RUSTFLAGS replaces the `.cargo/config.toml` flags, so gxhash's aes/sse2 requirement is repeated here.
+          RUSTFLAGS: -Zsanitizer=address -C target-feature=+aes,+sse2
+        run: cargo test --no-fail-fast -Zbuild-std --locked --target x86_64-unknown-linux-gnu --all-features --tests
+
+  tsan:
+    name: ThreadSanitizer (parallel processing)
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # Processing fans out over rayon's pool, and this test runs it on several pool sizes.
+      - name: Test under ThreadSanitizer
+        env:
+          # Setting RUSTFLAGS replaces the `.cargo/config.toml` flags, so gxhash's aes/sse2 requirement is repeated here.
+          RUSTFLAGS: -Zsanitizer=thread -C target-feature=+aes,+sse2
+        run: cargo test --no-fail-fast -Zbuild-std --locked --target x86_64-unknown-linux-gnu --all-features --test threads
+
+  msrv:
+    name: MSRV (1.88)
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-features --all-targets
+
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [marshal, process, rm2k, save, text, serde]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The corpus is not committed; each run continues from the previous run's corpus.
+      - uses: actions/cache@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Check the fuzz lockfile
+        working-directory: fuzz
+        run: cargo fetch --locked
+      # Pull requests get a 60-second smoke run; the weekly schedule fuzzes for 20 minutes per target.
+      - name: Fuzz
+        working-directory: fuzz
+        env:
+          # cargo-fuzz replaces the `.cargo/config.toml` flags, so gxhash's aes/sse2 requirement is set here. cargo-fuzz
+          # appends this variable to its own flags.
+          RUSTFLAGS: -C target-feature=+aes,+sse2
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=${{ github.event_name == 'schedule' && 1200 || 60 }}
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

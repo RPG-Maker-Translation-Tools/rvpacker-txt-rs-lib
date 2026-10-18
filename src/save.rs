@@ -13,9 +13,8 @@
 
 use crate::{
     core::Base,
-    types::{EngineType, Error},
+    types::{EngineType, Error, HashMap, HashMapExt, HashSet, HashSetExt},
 };
-use gxhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use marshal_rs::{Arena, Kind, ValueRef};
 use serde::Serialize;
 use serde_json::Value as Json;
@@ -58,7 +57,7 @@ impl Encoder {
     }
 
     /// Widens the codes by a bit whenever the dictionary outgrows the current width.
-    fn enlarge(&mut self) {
+    const fn enlarge(&mut self) {
         self.enlarge_in -= 1;
 
         if self.enlarge_in == 0 {
@@ -202,6 +201,10 @@ impl<'a> Decoder<'a> {
     }
 }
 
+/// The most UTF-16 units [`load`] decompresses to (256 MiB). `LZString` output can grow quadratically with the input,
+/// so a crafted save of a few MiB could otherwise ask for terabytes; real saves stay far below this.
+const MAX_DECOMPRESSED_UNITS: usize = 128 << 20;
+
 fn decompress_units(input: &[u8]) -> Option<Vec<u16>> {
     let mut data = Decoder::new(input)?;
 
@@ -249,6 +252,10 @@ fn decompress_units(input: &[u8]) -> Option<Vec<u16>> {
             std::cmp::Ordering::Greater => return None,
         };
 
+        if result.len() + entry.len() > MAX_DECOMPRESSED_UNITS {
+            return None;
+        }
+
         result.extend_from_slice(&entry);
 
         let mut new_entry = previous;
@@ -287,20 +294,30 @@ pub fn dump(json: &str) -> String {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveActorSummary {
+    /// The actor's database id.
     pub actor_id: i32,
+    /// The actor's name as the save holds it, or empty to use the database name.
     pub name: String,
+    /// The actor's nickname. Empty if the engine doesn't store one.
     pub nickname: String,
+    /// The actor's class id.
     pub class_id: i32,
+    /// The actor's level.
     pub level: i32,
+    /// The actor's current HP.
     pub hp: i32,
+    /// The actor's current MP (SP on XP).
     pub mp: i32,
+    /// The actor's current TP. Zero on engines without TP.
     pub tp: i32,
 }
 
 /// `count` of the item (or weapon, or armor) `id` the party carries.
 #[derive(Debug, Default, Serialize)]
 pub struct SaveStack {
+    /// The item, weapon or armor's database id.
     pub id: i32,
+    /// How many the party carries.
     pub count: i32,
 }
 
@@ -310,7 +327,9 @@ pub struct SaveStack {
 pub struct SaveSummary {
     /// Playtime in frames (60 per second).
     pub frames: u32,
+    /// The map the party is on.
     pub map_id: i32,
+    /// The party's gold.
     pub gold: i32,
     /// IDs of the actors in the party, in order.
     pub party: Vec<i32>,
@@ -318,19 +337,24 @@ pub struct SaveSummary {
     pub actors: Vec<SaveActorSummary>,
     /// RM2K has no weapons and armors apart from items; all of them are in here.
     pub items: Vec<SaveStack>,
+    /// The weapons the party carries. Empty on RM2K.
     pub weapons: Vec<SaveStack>,
+    /// The armors the party carries. Empty on RM2K.
     pub armors: Vec<SaveStack>,
+    /// Switch values, indexed by in-game id. Index 0 is unused.
     pub switches: Vec<bool>,
+    /// Variable values, indexed by in-game id. Index 0 is unused.
     pub variables: Vec<i32>,
 }
 
 /// Reads `content` (a save file of `engine_type`) into a [`SaveSummary`]. `read_encoding` decodes the strings the
-/// same way processing the game does; `None` guesses between the common codepages.
+/// same way processing the game does; `None` means UTF-8.
 ///
 /// # Errors
 ///
 /// - [`Error::InvalidSave`] - if `content` is not a save of this engine.
 /// - [`Error::MarshalLoad`]/[`Error::Rm2kLoad`] - if `content` fails to parse.
+/// - [`Error::InvalidText`] - if a name is not valid in `read_encoding`.
 pub fn get_save_summary(
     content: &[u8],
     engine_type: EngineType,
@@ -341,13 +365,18 @@ pub fn get_save_summary(
         EngineType::RM2K => from_lsd(content, read_encoding),
         _ => {
             let arenas = marshal_rs::load_many(content)?;
-            Ok(from_marshal(&arenas, read_encoding))
+            from_marshal(&arenas, read_encoding)
         }
     }
 }
 
 fn from_lsd(content: &[u8], read_encoding: Option<&'static encoding_rs::Encoding>) -> Result<SaveSummary, Error> {
     let save = rm2k::file::load_save(content)?;
+
+    // A wrong magic still loads, with every field at its default, so it has to be refused here.
+    if save.header != &b"LcfSaveData"[..] {
+        return Err(Error::InvalidSave);
+    }
     let mut summary = SaveSummary {
         frames: save.system.frame_count.max(0) as u32,
         map_id: save.party_location.map_id,
@@ -360,7 +389,7 @@ fn from_lsd(content: &[u8], read_encoding: Option<&'static encoding_rs::Encoding
     // `\x01` is how LCF marks a name the game never changed.
     let decode = |bytes: &[u8]| {
         if bytes == b"\x01" {
-            String::new()
+            Ok(String::new())
         } else {
             Base::decode_bytes_with(bytes, read_encoding)
         }
@@ -369,17 +398,19 @@ fn from_lsd(content: &[u8], read_encoding: Option<&'static encoding_rs::Encoding
     summary.actors = save
         .actors
         .iter()
-        .map(|actor| SaveActorSummary {
-            actor_id: actor.id,
-            name: decode(actor.name.as_bytes()),
-            nickname: decode(actor.title.as_bytes()),
-            class_id: actor.class_id,
-            level: actor.level,
-            hp: actor.current_hp,
-            mp: actor.current_sp,
-            tp: 0,
+        .map(|actor| {
+            Ok(SaveActorSummary {
+                actor_id: actor.id,
+                name: decode(actor.name.as_bytes())?,
+                nickname: decode(actor.title.as_bytes())?,
+                class_id: actor.class_id,
+                level: actor.level,
+                hp: actor.current_hp,
+                mp: actor.current_sp,
+                tp: 0,
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
 
     summary.items = save
         .inventory
@@ -409,7 +440,7 @@ fn json_str(value: Option<&Json>) -> String {
     value.and_then(Json::as_str).unwrap_or_default().to_owned()
 }
 
-//// `JsonEx` writes an array that carries extra properties as `{"@a": [...]}`.
+/// `JsonEx` writes an array that carries extra properties as `{"@a": [...]}`.
 fn json_array(value: Option<&Json>) -> &[Json] {
     value
         .and_then(|value| value.as_array().or_else(|| value.get("@a")?.as_array()))
@@ -496,12 +527,26 @@ fn ivar_i32(object: &ValueRef<'_, '_>, name: &str) -> i32 {
     object.get(name).and_then(|value| value.as_i64()).unwrap_or_default() as i32
 }
 
-fn ivar_string(object: &ValueRef<'_, '_>, name: &str, read_encoding: Option<&'static encoding_rs::Encoding>) -> String {
-    object
-        .get(name)
-        .and_then(|value| value.as_bytes())
-        .map(|bytes| Base::decode_bytes_with(bytes, read_encoding))
-        .unwrap_or_default()
+fn ivar_string(
+    object: &ValueRef<'_, '_>,
+    name: &str,
+    read_encoding: Option<&'static encoding_rs::Encoding>,
+) -> Result<String, Error> {
+    let Some(value) = object.get(name) else {
+        return Ok(String::new());
+    };
+
+    let Some(bytes) = value.as_bytes() else {
+        return Ok(String::new());
+    };
+
+    // A VX Ace string declares its own encoding, which wins, as when processing the game.
+    let declared = (value.kind() == Kind::Str)
+        .then(|| value.encoding_name())
+        .flatten()
+        .and_then(encoding_rs::Encoding::for_label);
+
+    Base::decode_bytes_with(bytes, declared.or(read_encoding))
 }
 
 fn marshal_stacks(object: &ValueRef<'_, '_>, name: &str) -> Vec<SaveStack> {
@@ -520,7 +565,10 @@ fn marshal_stacks(object: &ValueRef<'_, '_>, name: &str) -> Vec<SaveStack> {
         .unwrap_or_default()
 }
 
-fn from_marshal(arenas: &[Arena<'_>], read_encoding: Option<&'static encoding_rs::Encoding>) -> SaveSummary {
+fn from_marshal(
+    arenas: &[Arena<'_>],
+    read_encoding: Option<&'static encoding_rs::Encoding>,
+) -> Result<SaveSummary, Error> {
     let mut summary = SaveSummary::default();
 
     // XP/VX dump `Graphics.frame_count` as a stream of its own; VX Ace keeps the playtime in seconds in its header.
@@ -542,20 +590,22 @@ fn from_marshal(arenas: &[Arena<'_>], read_encoding: Option<&'static encoding_rs
         summary.map_id = ivar_i32(&map, "map_id");
     }
 
-    let summarize = |actor: &ValueRef<'_, '_>| SaveActorSummary {
-        actor_id: ivar_i32(actor, "actor_id"),
-        name: ivar_string(actor, "name", read_encoding),
-        nickname: ivar_string(actor, "nickname", read_encoding),
-        class_id: ivar_i32(actor, "class_id"),
-        level: ivar_i32(actor, "level"),
-        hp: ivar_i32(actor, "hp"),
-        // XP calls it SP.
-        mp: actor
-            .get("mp")
-            .or_else(|| actor.get("sp"))
-            .and_then(|value| value.as_i64())
-            .unwrap_or_default() as i32,
-        tp: ivar_i32(actor, "tp"),
+    let summarize = |actor: &ValueRef<'_, '_>| -> Result<SaveActorSummary, Error> {
+        Ok(SaveActorSummary {
+            actor_id: ivar_i32(actor, "actor_id"),
+            name: ivar_string(actor, "name", read_encoding)?,
+            nickname: ivar_string(actor, "nickname", read_encoding)?,
+            class_id: ivar_i32(actor, "class_id"),
+            level: ivar_i32(actor, "level"),
+            hp: ivar_i32(actor, "hp"),
+            // XP calls it SP.
+            mp: actor
+                .get("mp")
+                .or_else(|| actor.get("sp"))
+                .and_then(|value| value.as_i64())
+                .unwrap_or_default() as i32,
+            tp: ivar_i32(actor, "tp"),
+        })
     };
 
     // An actor that never was instantiated is `nil`.
@@ -564,7 +614,7 @@ fn from_marshal(arenas: &[Arena<'_>], read_encoding: Option<&'static encoding_rs
             .array()
             .filter(|actor| actor.kind() == Kind::Object)
             .map(|actor| summarize(&actor))
-            .collect();
+            .collect::<Result<_, Error>>()?;
     }
 
     if let Some(party) = find_class(arenas, b"Game_Party") {
@@ -578,7 +628,7 @@ fn from_marshal(arenas: &[Arena<'_>], read_encoding: Option<&'static encoding_rs
             if member.kind() == Kind::Fixnum {
                 summary.party.push(member.as_i64().unwrap_or_default() as i32);
             } else {
-                let actor = summarize(&member);
+                let actor = summarize(&member)?;
                 summary.party.push(actor.actor_id);
 
                 if !summary.actors.iter().any(|known| known.actor_id == actor.actor_id) {
@@ -599,5 +649,5 @@ fn from_marshal(arenas: &[Arena<'_>], read_encoding: Option<&'static encoding_rs
             .collect();
     }
 
-    summary
+    Ok(summary)
 }

@@ -385,9 +385,8 @@ mod system_file {
         assert_eq!(json["currencyUnit"], "[G]");
         // The empty slot is untouched.
         assert_eq!(json["armorTypes"][0], "");
-        // The title does not come from the translation file - the caller supplies
-        // it, because it also names the output directory.
-        assert_eq!(json["gameTitle"], "Some Game");
+        // Without a title from the caller, the title is translated like any other line.
+        assert_eq!(json["gameTitle"], "[Some Game]");
     }
 
     #[test]

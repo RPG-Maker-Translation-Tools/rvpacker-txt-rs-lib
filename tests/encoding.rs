@@ -10,7 +10,7 @@
 //! non-UTF-8 declared encoding) and check both directions.
 
 use marshal_rs::arena::Arena;
-use rvpacker_txt_rs_lib::{EngineType, Mode, core::Base};
+use rvpacker_txt_rs_lib::{EngineType, Error, Mode, core::Base};
 
 /// One `Actors.rvdata2`-shaped array:
 /// `[nil, {"id" => 1, "name" => "Actor1", "nickname" => <nickname>}]`, with
@@ -37,7 +37,7 @@ fn actors_with_encoded_nickname(nickname_bytes: &[u8], encoding_name: &[u8]) -> 
     );
 
     let nil_id = arena.push_nil();
-    let array_id = arena.push_array(&[nil_id, actor_id]);
+    let array_id = arena.push_array(&[nil_id, actor_id.unwrap()]).unwrap();
     arena.set_root(array_id);
 
     marshal_rs::dump(&arena)
@@ -136,7 +136,7 @@ fn write_encoding_is_independent_of_read_encoding() {
     // the two settings don't leak into each other.
     let mut write_base = Base::new(Mode::Write, EngineType::VXAce);
     write_base.set_read_encoding(Some(encoding_rs::SHIFT_JIS));
-    write_base.set_write_encoding(Some(encoding_rs::WINDOWS_1252));
+    write_base.set_write_encoding(Some(encoding_rs::WINDOWS_1252)).unwrap();
 
     let rewritten = write_base
         .process_other("Actors.rvdata2", &content, Some(&translation_text))
@@ -153,4 +153,156 @@ fn write_encoding_is_independent_of_read_encoding() {
     let (decoded, _, had_errors) = encoding_rs::WINDOWS_1252.decode(nickname.as_bytes().unwrap());
     assert!(!had_errors);
     assert_eq!(decoded, "Jean");
+}
+
+/// XP/VX strings carry no encoding, so they are read as UTF-8 unless told otherwise, and text that isn't fails the
+/// file instead of turning into replacement characters.
+#[test]
+fn untagged_text_is_utf8_unless_a_read_encoding_is_set() {
+    let (shift_jis_bytes, _, _) = encoding_rs::SHIFT_JIS.encode("勇者");
+
+    let mut arena = Arena::builder();
+    let name_id = arena.push_string("Actor1".to_owned());
+    let nickname_id = arena.push_bytes(shift_jis_bytes.into_owned());
+    let id_id = arena.push_fixnum(1);
+    let actor_id = arena.push_object(
+        b"RPG::Actor".to_vec(),
+        &[
+            (b"@id".to_vec(), id_id),
+            (b"@name".to_vec(), name_id),
+            (b"@nickname".to_vec(), nickname_id),
+        ],
+    );
+    let nil_id = arena.push_nil();
+    let array_id = arena.push_array(&[nil_id, actor_id.unwrap()]).unwrap();
+    arena.set_root(array_id);
+    let content = marshal_rs::dump(&arena);
+
+    let Err(error) = Base::new(Mode::read(), EngineType::XP).process_other("Actors.rxdata", &content, None) else {
+        panic!("Shift-JIS bytes are not UTF-8, so the read should fail");
+    };
+    assert!(
+        matches!(error, Error::InvalidText { encoding: "UTF-8", .. }),
+        "unexpected error: {error}"
+    );
+
+    let mut base = Base::new(Mode::read(), EngineType::XP);
+    base.set_read_encoding(Some(encoding_rs::SHIFT_JIS));
+    let data = base
+        .process_other("Actors.rxdata", &content, None)
+        .expect("read should not fail")
+        .expect("actors list is non-empty, so there should be output");
+
+    assert!(String::from_utf8(data.as_ref().to_vec()).unwrap().contains("勇者"));
+}
+
+/// The bytes `C2 B1` are valid UTF-8 (`±`), but in Shift-JIS they are two half-width katakana. Untagged text is in the
+/// read encoding whether or not its bytes happen to validate as UTF-8, in a message box as well as in a plain field.
+#[test]
+fn untagged_text_that_is_also_valid_utf8_is_still_read_in_the_read_encoding() {
+    let mut arena = Arena::builder();
+
+    let line = arena.push_bytes(vec![0xC2, 0xB1]);
+    let params = arena.push_array(&[line]).unwrap();
+    let code = arena.push_fixnum(101);
+    let message = arena
+        .push_object(
+            b"RPG::EventCommand".to_vec(),
+            &[(b"@code".to_vec(), code), (b"@parameters".to_vec(), params)],
+        )
+        .unwrap();
+
+    let end_code = arena.push_fixnum(0);
+    let end_params = arena.push_array(&[]).unwrap();
+    let end = arena
+        .push_object(
+            b"RPG::EventCommand".to_vec(),
+            &[(b"@code".to_vec(), end_code), (b"@parameters".to_vec(), end_params)],
+        )
+        .unwrap();
+
+    let list = arena.push_array(&[message, end]).unwrap();
+    let id = arena.push_fixnum(1);
+    let name = arena.push_string("EV".to_owned());
+    let event = arena
+        .push_object(
+            b"RPG::CommonEvent".to_vec(),
+            &[
+                (b"@id".to_vec(), id),
+                (b"@name".to_vec(), name),
+                (b"@list".to_vec(), list),
+            ],
+        )
+        .unwrap();
+
+    let nil = arena.push_nil();
+    let root = arena.push_array(&[nil, event]).unwrap();
+    arena.set_root(root);
+    let content = marshal_rs::dump(&arena);
+
+    let mut base = Base::new(Mode::read(), EngineType::XP);
+    base.set_read_encoding(Some(encoding_rs::SHIFT_JIS));
+    let data = base
+        .process_other("CommonEvents.rxdata", &content, None)
+        .expect("read should not fail")
+        .expect("the event has text");
+    let text = String::from_utf8(data.as_ref().to_vec()).unwrap();
+
+    assert!(text.contains("ﾂｱ<#>"), "{text}");
+    assert!(!text.contains('±'), "{text}");
+}
+
+/// An entry without a name loses only its header comment, not its text.
+#[test]
+fn an_entry_without_a_name_is_still_processed() {
+    let mut arena = Arena::builder();
+    let nickname_id = arena.push_string("The Nameless".to_owned());
+    let id_id = arena.push_fixnum(1);
+    let actor_id = arena.push_object(
+        b"RPG::Actor".to_vec(),
+        &[(b"@id".to_vec(), id_id), (b"@nickname".to_vec(), nickname_id)],
+    );
+    let nil_id = arena.push_nil();
+    let array_id = arena.push_array(&[nil_id, actor_id.unwrap()]).unwrap();
+    arena.set_root(array_id);
+
+    let data = Base::new(Mode::read(), EngineType::VXAce)
+        .process_other("Actors.rvdata2", &marshal_rs::dump(&arena), None)
+        .expect("read should not fail")
+        .expect("the actor has text, so there should be output");
+
+    assert!(
+        String::from_utf8(data.as_ref().to_vec())
+            .unwrap()
+            .contains("The Nameless<#>")
+    );
+}
+
+/// A tagged string whose bytes also validate as UTF-8 is still in the encoding it declares: `C2 B1` is `±` in UTF-8,
+/// but two half-width katakana in Shift_JIS.
+#[test]
+fn a_declared_encoding_wins_over_bytes_that_validate_as_utf8() {
+    let content = actors_with_encoded_nickname(&[0xC2, 0xB1], b"Shift_JIS");
+
+    let data = Base::new(Mode::read(), EngineType::VXAce)
+        .process_other("Actors.rvdata2", &content, None)
+        .expect("read should not fail")
+        .expect("actors list is non-empty, so there should be output");
+    let text = String::from_utf8(data.as_ref().to_vec()).unwrap();
+
+    let (expected, _, _) = encoding_rs::SHIFT_JIS.decode(&[0xC2, 0xB1]);
+    assert!(text.contains(expected.as_ref()), "{text}");
+    assert!(!text.contains('±'), "{text}");
+}
+
+#[test]
+fn an_encoding_that_cannot_be_written_is_rejected() {
+    let mut base = Base::new(Mode::Write, EngineType::XP);
+
+    assert!(matches!(
+        base.set_write_encoding(Some(encoding_rs::UTF_16LE)),
+        Err(Error::UnsupportedWriteEncoding { encoding: "UTF-16LE" })
+    ));
+    assert!(base.set_write_encoding(Some(encoding_rs::SHIFT_JIS)).is_ok());
+    assert!(base.set_write_encoding(None).is_ok());
 }

@@ -51,6 +51,7 @@ fn rm2k_read_write_round_trip() {
         file_flags: FileFlags::all(),
         flags: BaseFlags::empty(),
         duplicate_mode: DuplicateMode::Allow,
+        read_encoding: Some(encoding_rs::WINDOWS_1252),
         ..Default::default()
     };
 
@@ -145,6 +146,7 @@ fn rm2k_game_title_is_its_own_terms_section() {
         flags: BaseFlags::empty(),
         duplicate_mode: DuplicateMode::Allow,
         game_title: "My Game".to_owned(),
+        read_encoding: Some(encoding_rs::WINDOWS_1252),
         ..Default::default()
     };
 
@@ -258,7 +260,13 @@ fn rm2k_entity_names_come_from_the_database() {
         decode(actor.name.as_bytes())
     );
     assert_eq!(
-        get_rm2k_entity_name(&content, Rm2kEntity::Variables, variable.id, Some(encoding_rs::SHIFT_JIS)).unwrap(),
+        get_rm2k_entity_name(
+            &content,
+            Rm2kEntity::Variables,
+            variable.id,
+            Some(encoding_rs::SHIFT_JIS)
+        )
+        .unwrap(),
         decode(variable.name.as_bytes())
     );
     assert!(get_rm2k_entity_name(&content, Rm2kEntity::Actors, i32::MAX, None).is_err());
@@ -275,4 +283,175 @@ fn rm2k_system_graphic_name_comes_from_the_database() {
         get_rm2k_system_graphic_name(&content, Some(encoding_rs::SHIFT_JIS)).unwrap(),
         encoding_rs::SHIFT_JIS.decode(database.system.system_name.as_bytes()).0
     );
+}
+
+fn read_rm2k(file_flags: FileFlags, mode: Mode, map_events: bool, translation_dir: &Path) -> Processor {
+    let mut processor = Processor {
+        mode,
+        file_flags,
+        map_events,
+        read_encoding: Some(encoding_rs::WINDOWS_1252),
+        ..Default::default()
+    };
+
+    processor
+        .process(EngineType::RM2K, source_dir(), translation_dir, None)
+        .expect("read should not fail");
+
+    processor
+}
+
+const FORCED_READ: Mode = Mode::Read {
+    append: false,
+    force: true,
+};
+
+/// An append whose hashes say no map changed must still carry every map's
+/// translation into `maps.txt`, instead of rewriting it without them.
+#[test]
+fn rm2k_unchanged_maps_survive_append() {
+    let translation_dir = workspace("unchanged_maps").join("translation");
+    let mut first = read_rm2k(FileFlags::Map, FORCED_READ, false, &translation_dir);
+    let before = read_to_string(translation_dir.join("maps.txt")).unwrap();
+
+    let mut second = Processor {
+        mode: Mode::Read {
+            append: true,
+            force: false,
+        },
+        file_flags: FileFlags::Map,
+        hashes: std::mem::take(&mut first.hashes),
+        read_encoding: Some(encoding_rs::WINDOWS_1252),
+        ..Default::default()
+    };
+
+    second
+        .process(EngineType::RM2K, source_dir(), &translation_dir, None)
+        .expect("append should not fail");
+
+    let after = read_to_string(translation_dir.join("maps.txt")).unwrap();
+
+    for line in before.lines() {
+        assert!(after.lines().any(|kept| kept == line), "append dropped: {line}");
+    }
+}
+
+/// Per-event headers must not suppress the map's own `<!>ID` line.
+#[test]
+fn rm2k_map_events_keep_map_ids() {
+    let count_ids = |text: &str| text.lines().filter(|line| line.starts_with("<!>ID<#>")).count();
+
+    let plain_dir = workspace("map_ids_plain").join("translation");
+    read_rm2k(FileFlags::Map, FORCED_READ, false, &plain_dir);
+
+    let events_dir = workspace("map_ids_events").join("translation");
+    read_rm2k(FileFlags::Map, FORCED_READ, true, &events_dir);
+
+    let plain = count_ids(&read_to_string(plain_dir.join("maps.txt")).unwrap());
+    let with_events = count_ids(&read_to_string(events_dir.join("maps.txt")).unwrap());
+
+    assert!(plain > 0, "no map ids at all");
+    assert_eq!(plain, with_events, "map_events lost map ids");
+}
+
+/// A comment the user wrote under a section header survives repeated appends,
+/// once, under the same section.
+#[test]
+fn user_comments_survive_appends() {
+    const NOTE: &str = "<!> translator note";
+
+    let translation_dir = workspace("user_comments").join("translation");
+    read_rm2k(
+        FileFlags::Database | FileFlags::Actors,
+        FORCED_READ,
+        false,
+        &translation_dir,
+    );
+
+    let actors = translation_dir.join("actors.txt");
+    let text = read_to_string(&actors).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    let name_index = lines
+        .iter()
+        .position(|line| line.starts_with("<!>NAME"))
+        .expect("no name comment");
+    lines.insert(name_index + 1, NOTE);
+    std::fs::write(&actors, lines.join("\n")).unwrap();
+
+    let section_of_note = |text: &str| {
+        let lines: Vec<&str> = text.lines().collect();
+        let note = lines.iter().position(|line| *line == NOTE).expect("the note is gone");
+        let id = lines[..note]
+            .iter()
+            .rev()
+            .find(|line| line.starts_with("<!>ID"))
+            .expect("note before any id");
+        (lines.iter().filter(|line| **line == NOTE).count(), id.to_string())
+    };
+
+    let expected = section_of_note(&lines.join("\n"));
+
+    for _ in 0..2 {
+        read_rm2k(
+            FileFlags::Database | FileFlags::Actors,
+            Mode::Read {
+                append: true,
+                force: true,
+            },
+            false,
+            &translation_dir,
+        );
+
+        assert_eq!(section_of_note(&read_to_string(&actors).unwrap()), expected);
+    }
+}
+
+/// An RM2K message box holds at most four lines, so an entry with more is two boxes glued together.
+#[test]
+fn rm2k_message_boxes_stay_separate() {
+    let translation_dir = workspace("message_boxes").join("translation");
+    read_rm2k(FileFlags::Map, FORCED_READ, false, &translation_dir);
+
+    for line in read_to_string(translation_dir.join("maps.txt")).unwrap().lines() {
+        if let Some((source, _)) = line.split_once("<#>") {
+            assert!(source.matches(r"\#").count() < 4, "more than one box in: {source}");
+        }
+    }
+}
+
+/// RM2K keeps its title in `RPG_RT.ini` only, so a write hands the translated title back through the processor.
+#[test]
+fn rm2k_write_returns_translated_title() {
+    let workspace = workspace("translated_title");
+    let translation_dir = workspace.join("translation");
+
+    let mut processor = Processor {
+        mode: FORCED_READ,
+        file_flags: FileFlags::Database,
+        game_title: "My Game".to_owned(),
+        read_encoding: Some(encoding_rs::WINDOWS_1252),
+        ..Default::default()
+    };
+
+    processor
+        .process(EngineType::RM2K, source_dir(), &translation_dir, None)
+        .expect("read should not fail");
+
+    let terms = translation_dir.join("terms.txt");
+    let text = read_to_string(&terms)
+        .unwrap()
+        .replace("My Game<#>", "My Game<#>Моя игра");
+    std::fs::write(&terms, text).unwrap();
+
+    processor.mode = Mode::Write;
+    processor
+        .process(
+            EngineType::RM2K,
+            source_dir(),
+            &translation_dir,
+            Some(&workspace.join("output")),
+        )
+        .expect("write should not fail");
+
+    assert_eq!(processor.game_title, "Моя игра");
 }

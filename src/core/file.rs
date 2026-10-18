@@ -1,11 +1,11 @@
-use super::IgnoreEntry;
+use super::Base;
 use crate::{
     get_ignore_entry_comment, get_line_separator,
     types::{DuplicateMode, Error, IgnoreMap, RPGMFileType},
 };
 use serde_json::{Value as SerdeValue, from_str};
-use smallvec::SmallVec;
 use std::{fs::DirEntry, path::Path};
+use strum::IntoEnumIterator;
 
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
@@ -45,12 +45,8 @@ pub fn filter_maps<'a>(
         })
         .collect();
 
-    result.sort_by_key(|entry| {
-        let filename = entry.file_name();
-        let filename_str = filename.to_str().unwrap_or("");
-        let digits: String = filename_str[3..].chars().take_while(|c| c.is_ascii_digit()).collect();
-        digits.parse::<u32>().unwrap_or(0)
-    });
+    // The filter above guarantees a UTF-8 name.
+    result.sort_by_cached_key(|entry| entry.file_name().to_str().map_or(0, Base::parse_map_id));
 
     result.into_iter()
 }
@@ -79,8 +75,8 @@ pub fn filter_other<'a>(
             let filename_path = Path::new(&filename);
             let basename = filename_path.file_stem().and_then(|basename| basename.to_str())?;
             let extension = filename_path.extension()?;
-            let file_type = RPGMFileType::from_filename(basename);
-            if extension == engine_extension && file_type.is_other() {
+            // The whole stem, not a prefix: `Items_backup` or `Statistics` are not game data.
+            if extension == engine_extension && is_other_stem(basename) {
                 return Some(entry);
             }
             None
@@ -89,6 +85,23 @@ pub fn filter_other<'a>(
 
     result.sort_by_key(|entry| entry.file_name());
     result.into_iter()
+}
+
+const OTHER_STEMS: [&str; 10] = [
+    "actors",
+    "armors",
+    "classes",
+    "commonevents",
+    "enemies",
+    "items",
+    "skills",
+    "states",
+    "troops",
+    "weapons",
+];
+
+fn is_other_stem(stem: &str) -> bool {
+    OTHER_STEMS.iter().any(|name| stem.eq_ignore_ascii_case(name))
 }
 
 /// Filters entries of [`std::fs::ReadDir`] and returns an iterator of only `MapNNNN.lmu`
@@ -106,7 +119,6 @@ pub fn filter_other<'a>(
 /// # Returns
 ///
 /// Filtered iterator containing only `MapNNNN.lmu` entries.
-#[must_use]
 pub fn filter_rm2k_maps<'a>(entries: impl Iterator<Item = &'a DirEntry>) -> impl Iterator<Item = &'a DirEntry> {
     let mut result: Vec<&'a DirEntry> = entries
         .filter_map(move |entry| {
@@ -126,16 +138,13 @@ pub fn filter_rm2k_maps<'a>(entries: impl Iterator<Item = &'a DirEntry>) -> impl
         })
         .collect();
 
-    result.sort_by_key(|entry| {
-        let filename = entry.file_name();
-        let filename_str = filename.to_str().unwrap_or("");
-        filename_str[3..7].parse::<u32>().unwrap_or(0)
-    });
+    // Cached: `file_name()` allocates, and a comparator would call it twice per comparison.
+    result.sort_by_cached_key(|entry| entry.file_name().to_str().map_or(0, Base::parse_map_id));
 
     result.into_iter()
 }
 
-/// Parses ignore file contents to [`IgnoreMap`].
+/// Parses ignore file contents into a map from section header to [`IgnoreEntry`](super::IgnoreEntry).
 ///
 /// # Parameters
 ///
@@ -145,7 +154,7 @@ pub fn filter_rm2k_maps<'a>(entries: impl Iterator<Item = &'a DirEntry>) -> impl
 ///
 /// # Returns
 ///
-/// Parsed [`IgnoreMap`].
+/// The parsed sections, keyed by their header line.
 ///
 #[must_use]
 pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, read: bool) -> IgnoreMap {
@@ -161,12 +170,15 @@ pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, re
             return line.to_owned();
         };
 
-        // These three are single-section files; there is nothing to collapse.
+        // Single-section kinds (`is_misc`) have nothing to collapse. Their names are the header's text, so
+        // this is the same test `Base::key` makes.
         let collapse = read
             && duplicate_mode.is_remove()
-            && !(rest.starts_with(&format!("{sep}System", sep = get_line_separator()))
-                || rest.starts_with(&format!("{sep}Scripts", sep = get_line_separator()))
-                || rest.starts_with(&format!("{sep}Plugins", sep = get_line_separator())));
+            && !rest.strip_prefix(get_line_separator()).is_some_and(|name| {
+                RPGMFileType::iter()
+                    .filter(|kind| kind.is_misc())
+                    .any(|kind| name.starts_with(&kind.to_string()))
+            });
 
         if !collapse {
             return line.to_owned();
@@ -187,7 +199,7 @@ pub fn parse_ignore(ignore_file_content: &str, duplicate_mode: DuplicateMode, re
             let entry = ignore_map.entry(section_key(line, duplicate_mode, read));
 
             current = Some(entry.index());
-            entry.or_insert_with(|| IgnoreEntry::with_capacity(128));
+            entry.or_default();
         } else if let Some(index) = current {
             // Lines before the first header belong to no section, so they are
             // dropped rather than inventing one.
@@ -261,7 +273,7 @@ pub fn get_ini_title(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// - [`Error::NoTitle`] - if no "GameTitle" entry is found in the INI file.
+/// - [`Error::NoTitle`] - if no "`GameTitle`" entry is found in the INI file.
 ///
 /// # Example
 ///
@@ -279,61 +291,18 @@ pub fn get_ini_title_rm2k(ini_file_content: &[u8]) -> Result<Vec<u8>, Error> {
     find_ini_value(ini_file_content, b"gametitle").ok_or(Error::NoTitle)
 }
 
-fn trim_bytes(bytes: &[u8]) -> &[u8] {
-    let start = bytes.iter().position(|&b| !is_ini_space(b)).unwrap_or(0);
-    let end = bytes.iter().rposition(|&b| !is_ini_space(b)).map_or(0, |i| i + 1);
-    &bytes[start..end]
-}
-
-fn is_ini_space(b: u8) -> bool {
-    b == b' ' || b == b'\t' || b == b'\r'
-}
-
-fn split_ini_lines(data: &[u8]) -> SmallVec<[&[u8]; 4]> {
-    let mut lines = SmallVec::with_capacity(4);
-    let mut start = 0;
-    let mut i = 0;
-
-    while i < data.len() {
-        if data[i] == b'\n' {
-            lines.push(&data[start..i]);
-            i += 1;
-            start = i;
-        } else if data[i] == b'\r' {
-            lines.push(&data[start..i]);
-
-            if data.get(i + 1).is_some_and(|ch| *ch == b'\n') {
-                i += 2;
-            } else {
-                i += 1;
-            }
-
-            start = i;
-        } else {
-            i += 1;
-        }
-    }
-
-    if start < data.len() {
-        lines.push(&data[start..]);
-    }
-
-    lines
-}
-
-/// Finds `key`'s value in an INI file's content. `key` must already be lowercase.
+/// Finds `key`'s value in an INI file's content. The whole key must match, ignoring case and the spaces around it,
+/// so `Title` doesn't pick up a `TitleFont=` line.
 fn find_ini_value(ini_file_content: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    for line in split_ini_lines(ini_file_content) {
-        if line.to_ascii_lowercase().starts_with(key) {
-            if let Some(pos) = line.iter().position(|&b| b == b'=') {
-                let right = &line[pos + 1..];
-                let trimmed = trim_bytes(right);
-                return Some(trimmed.to_vec());
-            }
-        }
-    }
+    // Empty pieces from a `\r\n` have no `=`, so they never match.
+    ini_file_content.split(|&b| b == b'\n' || b == b'\r').find_map(|line| {
+        let separator = line.iter().position(|&b| b == b'=')?;
 
-    None
+        line[..separator]
+            .trim_ascii()
+            .eq_ignore_ascii_case(key)
+            .then(|| line[separator + 1..].trim_ascii().to_vec())
+    })
 }
 
 /// Extracts the game title from a `System.json` file's content.

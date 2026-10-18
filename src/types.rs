@@ -1,16 +1,17 @@
 use crate::{get_map_display_name_comment_prefix, get_map_order_comment, get_name_comment};
 use bitflags::bitflags;
-use gxhash::GxBuildHasher;
 use indexmap::{IndexMap, IndexSet};
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::{borrow::Cow, convert::Infallible, hash::BuildHasher, io, ops::Deref, path::PathBuf, str::FromStr};
-use strum_macros::{Display, EnumIs, VariantNames};
+use strum_macros::{Display, EnumIs, EnumIter, VariantNames};
 use thiserror::Error;
 
-pub(crate) type IndexSetGx<K> = IndexSet<K, GxBuildHasher>;
-pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, GxBuildHasher>;
+pub use crate::hasher::{FastBuildHasher, HashMap, HashMapExt, HashSet, HashSetExt};
+
+pub(crate) type IndexSetGx<K> = IndexSet<K, FastBuildHasher>;
+pub(crate) type IndexMapGx<K, V> = IndexMap<K, V, FastBuildHasher>;
 
 pub(crate) type IgnoreMap = IndexMapGx<String, crate::core::IgnoreEntry>;
 
@@ -198,6 +199,7 @@ impl Default for Labels {
     Eq,
     Hash,
     EnumIs,
+    EnumIter,
     Display,
     TryFromPrimitive,
     IntoPrimitive,
@@ -206,41 +208,72 @@ impl Default for Labels {
 )]
 #[serde(into = "u8", try_from = "u8")]
 #[repr(u8)]
+/// The kind of RPG Maker file a name belongs to. Used to key skips and ignore entries, and to pick how a file is processed.
+// Deserializing goes through `try_from = "u8"`, so the unsafe in `from_filename` never runs on it.
+#[allow(clippy::unsafe_derive_deserialize)]
 pub enum RPGMFileType {
+    /// Matches no known file name. Never processed.
     #[default]
     Invalid,
+    /// `Actors.ext`.
     Actors,
+    /// `Armors.ext`.
     Armors,
+    /// `Classes.ext`.
     Classes,
+    /// `CommonEvents.ext`. The name is `Events` for historical reasons.
     Events,
+    /// `Enemies.ext`.
     Enemies,
+    /// `Items.ext`.
     Items,
+    /// `Mapxxx.ext`.
     Map,
+    /// `Skills.ext`.
     Skills,
+    /// `States.ext`.
     States,
+    /// `System.ext`.
     System,
+    /// `Troops.ext`.
     Troops,
+    /// `Weapons.ext`.
     Weapons,
+    /// `Scripts.ext`.
     Scripts,
+    /// `plugins.js`.
     Plugins,
+    /// RM2K's `MapNNNN.lmu`.
     Rm2kMap,
+    /// RM2K's actors list in `RPG_RT.ldb`.
     Rm2kActors,
+    /// RM2K's skills list in `RPG_RT.ldb`.
     Rm2kSkills,
+    /// RM2K's items list in `RPG_RT.ldb`.
     Rm2kItems,
+    /// RM2K's enemies list in `RPG_RT.ldb`.
     Rm2kEnemies,
+    /// RM2K's troops list in `RPG_RT.ldb`.
     Rm2kTroops,
+    /// RM2K's classes list in `RPG_RT.ldb` (RPG Maker 2003 only).
     Rm2kClasses,
+    /// RM2K's common events list in `RPG_RT.ldb`.
     Rm2kCommonEvents,
+    /// RM2K's states list in `RPG_RT.ldb`.
     Rm2kStates,
+    /// RM2K's terms (vocabulary) section in `RPG_RT.ldb`.
     Rm2kTerms,
 }
 
 impl RPGMFileType {
+    /// Identifies the file kind from a file name, comparing the first three bytes case-insensitively. Unknown names give [`RPGMFileType::Invalid`].
     #[must_use]
     pub fn from_filename(filename: &str) -> Self {
+        // SAFETY: `RPGMFileType`'s error type is `Infallible`, so `from_str` always returns `Ok`.
         unsafe { Self::from_str(filename).unwrap_unchecked() }
     }
 
+    /// Whether this is a per-entity file kind, such as `Actors` or `Enemies`.
     #[must_use]
     pub const fn is_other(self) -> bool {
         matches!(
@@ -266,11 +299,19 @@ impl RPGMFileType {
         )
     }
 
+    /// Whether this is a map file or a per-entity file, as opposed to system, scripts, plugins or the RM2K terms.
     #[must_use]
     pub const fn is_main(self) -> bool {
-        matches!(self, Self::Map | Self::Rm2kMap) || self.is_other()
+        self.is_any_map() || self.is_other()
     }
 
+    /// Whether this is a map file, for either engine family.
+    #[must_use]
+    pub const fn is_any_map(self) -> bool {
+        matches!(self, Self::Map | Self::Rm2kMap)
+    }
+
+    /// Whether this is a single-section file: system, scripts, plugins or RM2K terms. Duplicate removal doesn't apply to these.
     #[must_use]
     pub const fn is_misc(self) -> bool {
         matches!(self, Self::System | Self::Plugins | Self::Scripts | Self::Rm2kTerms)
@@ -344,7 +385,7 @@ pub(crate) struct TranslationEntry {
 
 impl From<&'static str> for TranslationEntry {
     fn from(translation: &'static str) -> Self {
-        TranslationEntry {
+        Self {
             translation: Cow::Borrowed(translation),
             ..Default::default()
         }
@@ -353,7 +394,7 @@ impl From<&'static str> for TranslationEntry {
 
 impl From<String> for TranslationEntry {
     fn from(translation: String) -> Self {
-        TranslationEntry {
+        Self {
             translation: Cow::Owned(translation),
             ..Default::default()
         }
@@ -362,7 +403,7 @@ impl From<String> for TranslationEntry {
 
 impl From<Cow<'static, str>> for TranslationEntry {
     fn from(translation: Cow<'static, str>) -> Self {
-        TranslationEntry {
+        Self {
             translation,
             ..Default::default()
         }
@@ -377,30 +418,124 @@ impl Deref for TranslationEntry {
     }
 }
 
+/// Every error the library returns.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// A file couldn't be read or written. Holds the path.
     #[error("{0}: IO error occurred: {1}")]
     Io(PathBuf, io::Error),
+    /// A Marshal (`.rxdata`/`.rvdata`/`.rvdata2`) file couldn't be parsed.
     #[error("Loading RPG Maker data failed with: {0}")]
     MarshalLoad(#[from] marshal_rs::ReadError),
+    /// A JSON (MV/MZ) file couldn't be parsed.
     #[error("Parsing JSON data failed with: {0}")]
     JsonParse(#[from] serde_json::Error),
+    /// An RPG Maker 2000/2003 (`.ldb`/`.lmt`/`.lmu`/`.lsd`) file couldn't be parsed.
     #[error("Loading RPG Maker 2000/2003 data failed with: {0}")]
     Rm2kLoad(#[from] rm2k::error::ReadError),
+    /// No title was found in the `Game.ini` or system file.
     #[error("Title couldn't be found. Ensure you've passed right `Game.ini` or `System.json` file.")]
     NoTitle,
+    /// A write, append or purge run has no translation to work from.
     #[error("Processing mode is not default read, but no translation was supplied.")]
     NoTranslation,
+    /// A map was processed before [`Base::begin_maps`](crate::core::Base::begin_maps).
+    #[error("`begin_maps` must be called before processing a map.")]
+    MapsNotBegun,
+    /// A path into a data file doesn't resolve to a value. Holds the path.
     #[error("`{0}` does not resolve to a value in the file.")]
     InvalidPath(String),
+    /// The bytes are not a save file of the requested engine.
     #[error("The file is not a valid save file of this engine.")]
     InvalidSave,
+    /// A `Scripts` file has a malformed entry. Holds what was wrong.
     #[error("The file is not a valid scripts file: {0}")]
     InvalidScripts(&'static str),
+    /// A `plugins.js` file couldn't be parsed. Holds what was wrong.
     #[error("The file is not a valid plugins file: {0}")]
     InvalidPlugins(&'static str),
+    /// A metadata line in a translation `.txt` file (such as `<!>ID`) is malformed. Holds the 1-based line number.
     #[error("The translation file is malformed at line {0}.")]
     InvalidTranslation(usize),
+    /// A translation `.txt` file has two sections with the same id. The second would replace the first, losing its
+    /// entries, so the file is rejected.
+    #[error("Section {id} appears twice in the translation file; the second one starts at line {line}.")]
+    DuplicateSection {
+        /// The repeated id.
+        id: u32,
+        /// The 1-based line number of the second id line.
+        line: usize,
+    },
+    /// A data file couldn't be parsed. Names the file and holds the parse error. Only [`Processor`](crate::Processor)
+    /// returns it; the lower-level functions return the bare error.
+    #[error("{file}: {source}")]
+    InFile {
+        /// The file that failed to parse.
+        file: String,
+        /// What went wrong.
+        source: Box<Self>,
+    },
+    /// Source text isn't valid in the read encoding. `text` is shown with the undecodable bytes replaced, to find it by.
+    /// `file` is empty until the processor that knows which file was being read fills it in.
+    #[error("Text{} is not valid {encoding}: \"{text}\". Set the read encoding to the codepage the game was made in.", if .file.is_empty() { String::new() } else { format!(" in {}", .file) })]
+    InvalidText {
+        /// The encoding the text was decoded in.
+        encoding: &'static str,
+        /// The offending text.
+        text: String,
+        /// The file the text came from, if known.
+        file: String,
+    },
+    /// Translated text has characters the write encoding cannot represent, which would be written as `&#1234;` instead.
+    /// `file` is empty until the processor that knows which file was being written fills it in.
+    #[error("Text{} cannot be written in {encoding}: \"{text}\". Use UTF-8 as the write encoding, or a codepage that has all of its characters.", if .file.is_empty() { String::new() } else { format!(" in {}", .file) })]
+    UnmappableText {
+        /// The encoding the text was to be written in.
+        encoding: &'static str,
+        /// The offending text.
+        text: String,
+        /// The file the text is for, if known.
+        file: String,
+    },
+    /// The write encoding can't be encoded into: UTF-16 and the like only decode, and `encoding_rs` would write UTF-8
+    /// in their place.
+    #[error("{encoding} cannot be used as the write encoding. Use UTF-8, or a legacy codepage.")]
+    UnsupportedWriteEncoding {
+        /// The rejected encoding.
+        encoding: &'static str,
+    },
+    /// The function doesn't work with this engine. Holds the engine's name.
+    #[error("{0} is not supported by this function.")]
+    UnsupportedEngine(&'static str),
+}
+
+impl Error {
+    /// Names `file` as the source of an [`Error::InvalidText`] that doesn't name one yet, and wraps a parse error of
+    /// the file in [`Error::InFile`].
+    #[must_use]
+    pub(crate) fn in_file(mut self, name: &str) -> Self {
+        if matches!(
+            self,
+            Self::MarshalLoad(_)
+                | Self::JsonParse(_)
+                | Self::Rm2kLoad(_)
+                | Self::InvalidScripts(_)
+                | Self::InvalidPlugins(_)
+        ) {
+            return Self::InFile {
+                file: name.to_owned(),
+                source: Box::new(self),
+            };
+        }
+
+        if let Self::InvalidText { file, .. } | Self::UnmappableText { file, .. } = &mut self
+            && file.is_empty()
+        {
+            name.clone_into(file);
+        }
+
+        self
+    }
 }
 
 impl Serialize for Error {
@@ -419,16 +554,22 @@ impl Serialize for Error {
 ///
 /// - `append` keeps the translations already in the `.txt` files and adds text
 ///   that is new since the last read, for a game that got a content update.
-///   Without it, an existing translation file is left alone.
-/// - `force` overwrites files that already exist and bypasses the hash check
-///   that would otherwise skip unchanged files.
+///   Files whose content hash is unchanged since the last read are skipped.
+/// - `force` overwrites files that already exist and, with `append`, bypasses
+///   the hash check. A plain read without `force` leaves an existing translation
+///   file alone.
 #[derive(Clone, Copy, Debug, Deserialize, EnumIs, Serialize, VariantNames)]
 #[serde(into = "u8", try_from = "u8")]
 #[strum(serialize_all = "lowercase")]
 #[repr(u8)]
 pub enum Mode {
     /// Extract text from the game's files into `.txt` files.
-    Read { append: bool, force: bool },
+    Read {
+        /// Keep existing translations and add text that is new since the last read.
+        append: bool,
+        /// Overwrite existing files, and with `append` bypass the hash check.
+        force: bool,
+    },
     /// Write translated text back into the game's files.
     Write,
     /// Drop entries that have no translation.
@@ -489,13 +630,10 @@ impl Default for Mode {
 }
 
 /// Reads occupy 0..=3, with bit 0 as `force` and bit 1 as `append`.
-///
-/// The previous encoding gave `Write` the value 3, which a force-append read
-/// also produced, so that combination could not survive a round trip.
 impl From<Mode> for u8 {
     fn from(value: Mode) -> Self {
         match value {
-            Mode::Read { append, force } => u8::from(force) | (u8::from(append) << 1),
+            Mode::Read { append, force } => Self::from(force) | (Self::from(append) << 1),
             Mode::Write => 4,
             Mode::Purge => 5,
         }
@@ -553,11 +691,13 @@ impl FromStr for Mode {
 #[repr(u8)]
 /// Sets, what to do with duplicates. Works only for map and other files.
 ///
-/// - [`DuplicateMode::Allow`]: Default and recommended. Each map/event is parsed into its own hashmap. That won't likely cause much clashes between the same lines which require different translations.
-/// - [`DuplicateMode::Remove`]: Not recommended. This mode is stable and works perfectly, but it will write the same translation into multiple places where source text is used. Recommended only when duplicates cause too much bloat.
+/// - [`DuplicateMode::Allow`]: Default. Each map/event keeps its own entries, so repeated lines can have different translations.
+/// - [`DuplicateMode::Remove`]: One entry per line, shared everywhere it occurs. Use only when duplicates bloat the files.
 pub enum DuplicateMode {
+    /// See the type docs. The default, for [`Processor`](crate::Processor) and [`Base`](crate::core::Base) alike.
     #[default]
     Allow,
+    /// See the type docs.
     Remove,
 }
 
@@ -586,32 +726,42 @@ pub enum EngineType {
     #[default]
     /// MV/MZ
     MVMZ,
+    /// VX Ace (RGSS3).
     VXAce,
+    /// VX (RGSS2).
     VX,
+    /// XP (RGSS1).
     XP,
     /// RPG Maker 2000/2003.
     RM2K,
 }
 
 impl EngineType {
+    /// The engine a data file's extension belongs to, or [`None`] for an extension no engine uses.
+    ///
+    /// `json` maps to [`EngineType::MVMZ`] and `lmu`/`ldb`/`lmt` to [`EngineType::RM2K`]. The Ruby Marshal extensions are
+    /// distinct per engine. Other extensions, including `.txt`, return [`None`].
+    #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension {
-            "json" => Some(EngineType::MVMZ),
-            "rxdata" => Some(EngineType::XP),
-            "rvdata" => Some(EngineType::VX),
-            "rvdata2" => Some(EngineType::VXAce),
-            "lmu" | "ldb" | "lmt" => Some(EngineType::RM2K),
+            "json" => Some(Self::MVMZ),
+            "rxdata" => Some(Self::XP),
+            "rvdata" => Some(Self::VX),
+            "rvdata2" => Some(Self::VXAce),
+            "lmu" | "ldb" | "lmt" => Some(Self::RM2K),
             _ => None,
         }
     }
 
-    pub fn to_str(self) -> &'static str {
+    /// The engine's display name, such as `"VX Ace"`. [`Display`](std::fmt::Display) writes the same string.
+    #[must_use]
+    pub const fn to_str(self) -> &'static str {
         match self {
-            EngineType::MVMZ => "MV/MZ",
-            EngineType::VX => "VX",
-            EngineType::VXAce => "VX Ace",
-            EngineType::XP => "XP",
-            EngineType::RM2K => "RPG Maker 2000/2003",
+            Self::MVMZ => "MV/MZ",
+            Self::VX => "VX",
+            Self::VXAce => "VX Ace",
+            Self::XP => "XP",
+            Self::RM2K => "RPG Maker 2000/2003",
         }
     }
 
@@ -623,13 +773,14 @@ impl EngineType {
     /// don't follow the "one extension per entity file" convention the other
     /// engines use - rm2k projects are routed through their own filesystem logic
     /// instead of this method.
+    #[must_use]
     pub fn extension(self) -> &'static str {
         match self {
-            EngineType::MVMZ => "json",
-            EngineType::VXAce => "rvdata2",
-            EngineType::VX => "rvdata",
-            EngineType::XP => "rxdata",
-            EngineType::RM2K => unreachable!("RM2K projects are not addressed by a single per-entity extension"),
+            Self::MVMZ => "json",
+            Self::VXAce => "rvdata2",
+            Self::VX => "rvdata",
+            Self::XP => "rxdata",
+            Self::RM2K => unreachable!("RM2K projects are not addressed by a single per-entity extension"),
         }
     }
 }
@@ -650,6 +801,8 @@ bitflags! {
     /// - [`FileFlags::System`] - enables `System.txt` file processing.
     /// - [`FileFlags::Scripts`] - enables `Scripts.ext`/`plugins.js` file processing, based on engine type.
     /// - [`FileFlags::Database`] - enables RM2K's `RPG_RT.ldb` processing (its `other` and `System` equivalent).
+    ///
+    /// The default is every flag set. Each flag also has a function form, such as `FileFlags::map()`.
     pub struct FileFlags: u16 {
         /// `Mapxxx.ext` files.
         const Map = 1 << 0;
@@ -697,7 +850,9 @@ bitflags! {
     }
 }
 
+/// Lowercase names for a flags type's bits. `FIELDS[n]` names the flag at bit `n`.
 pub trait FieldNames {
+    /// The names, in bit order.
     const FIELDS: &[&str];
 }
 
@@ -735,8 +890,9 @@ macro_rules! flag_aliases {
 }
 
 impl FileFlags {
-    /// Everything except [`FileFlags::Map`], [`FileFlags::System`] and
-    /// [`FileFlags::Scripts`].
+    /// Every per-entity file kind: [`FileFlags::Actors`] through [`FileFlags::Weapons`].
+    ///
+    /// Excludes [`FileFlags::Map`], [`FileFlags::System`], [`FileFlags::Scripts`] and [`FileFlags::Database`].
     #[must_use]
     pub const fn other() -> Self {
         Self::Actors
@@ -860,7 +1016,8 @@ bitflags! {
         /// Only used on purge.
         const CreateIgnore = 1 << 1;
 
-        /// Skip obsolete entries that are not in game files anymore on reads with [`Mode::Read`].
+        /// Skip obsolete entries and sections that are not in game files anymore. Only used on an append read; otherwise they
+        /// are kept at the end of their section.
         const SkipObsolete = 1 << 2;
     }
 }
@@ -889,7 +1046,9 @@ impl From<BaseFlags> for u8 {
 ///
 /// [`AsRef<[u8]>`] is implemented for this type, so that you can get the data without `match`ing this enum.
 pub enum ProcessedData {
+    /// The game file's bytes, produced by [`Mode::Write`].
     RPGMData(Vec<u8>),
+    /// The `.txt` translation file's bytes, produced by [`Mode::Read`] and [`Mode::Purge`].
     TranslationData(Vec<u8>),
 }
 
@@ -903,14 +1062,18 @@ impl AsRef<[u8]> for ProcessedData {
 
 /// Holds magic numbers, contents, and script names from the `Scripts.ext` file.
 pub struct Scripts {
+    /// Each script's magic number, in file order.
     pub numbers: Vec<i32>,
+    /// Each script's decompressed Ruby source, in file order.
     pub contents: Vec<String>,
+    /// Each script's name, in file order.
     pub names: Vec<String>,
 }
 
 impl Scripts {
+    /// Builds a `Scripts` from its three lists, one entry per script in file order.
     #[must_use]
-    pub fn new(numbers: Vec<i32>, contents: Vec<String>, names: Vec<String>) -> Self {
+    pub const fn new(numbers: Vec<i32>, contents: Vec<String>, names: Vec<String>) -> Self {
         Self {
             numbers,
             contents,

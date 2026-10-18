@@ -1,0 +1,23 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: contains(github.event.head_commit.message, 'Release v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          TAG=$(printf '%s\n' "$MESSAGE" | grep -oE 'Release v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | cut -d' ' -f2)
+          [ -n "$TAG" ] || { echo "no 'Release vX.Y.Z' in the commit message"; exit 1; }
+          gh release create "$TAG" --target "$GITHUB_SHA" --notes "All changes can be seen in the [CHANGELOG.md](https://github.com/$GH_REPO/blob/$TAG/CHANGELOG.md)."

@@ -9,7 +9,7 @@ fuzz_target!(|input: &[u8]| {
     };
     let name = ["Actors.rxdata", "Save01.rvdata2", "Scripts.rxdata"][selector as usize % 3];
 
-    let Ok(json) = generate_file(file, name) else {
+    let Ok(json) = generate_file(file, name, None) else {
         return;
     };
     if name.starts_with("Scripts") {
@@ -17,6 +17,6 @@ fuzz_target!(|input: &[u8]| {
     }
 
     let dumped = write_file(&json).expect("own JSON must convert back");
-    let json_again = generate_file(&dumped, name).expect("own Marshal output must load");
+    let json_again = generate_file(&dumped, name, None).expect("own Marshal output must load");
     assert!(json == json_again, "JSON is not stable across a Marshal round trip");
 });

@@ -20,12 +20,12 @@ fn main() -> Result<(), Error> {
 fn whole_directory_round_trip() -> Result<(), Error> {
     // `force: false` - skip a `.json`/`.rb` file that already exists rather
     // than overwriting it.
-    generate("C:/Game/Data", "C:/Game/json", false)?;
+    generate("C:/Game/Data", "C:/Game/json", false, None)?;
 
     // `engine_type` picks the output extension (`.rvdata2`/`.rvdata`/`.rxdata`)
     // - it does not need to match whatever engine `generate` read from, only
     // the one the caller wants to write back as.
-    write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce)?;
+    write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce, None)?;
 
     Ok(())
 }
@@ -36,7 +36,7 @@ fn single_file_round_trip() -> Result<(), Error> {
     let actors_content = read("C:/Game/Data/Actors.rvdata2").map_err(|e| Error::Io("Actors.rvdata2".into(), e))?;
 
     // Regular data file: JSON in both directions.
-    let actors_json = generate_file(&actors_content, "Actors.rvdata2")?;
+    let actors_json = generate_file(&actors_content, "Actors.rvdata2", None)?;
     println!("Actors.rvdata2 -> JSON ({len} bytes)", len = actors_json.len());
 
     let actors_rewritten = write_file(&actors_json)?;
@@ -47,7 +47,7 @@ fn single_file_round_trip() -> Result<(), Error> {
     // through `json::write`'s directory-level `Scripts.rb` handling rather
     // than `write_file`, which only understands JSON.
     let scripts_content = read("C:/Game/Data/Scripts.rvdata2").map_err(|e| Error::Io("Scripts.rvdata2".into(), e))?;
-    let scripts_rb = generate_file(&scripts_content, "Scripts.rvdata2")?;
+    let scripts_rb = generate_file(&scripts_content, "Scripts.rvdata2", None)?;
     println!("Scripts.rvdata2 -> Ruby source ({len} bytes)", len = scripts_rb.len());
 
     Ok(())

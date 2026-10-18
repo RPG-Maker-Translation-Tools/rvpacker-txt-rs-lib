@@ -7,11 +7,6 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
-[dependencies]
-libfuzzer-sys = "0.4"
-rvpacker-txt-rs-lib = { path = "..", features = ["serde-csv", "serde-xml", "serde-xlsx", "serde-yaml"] }
-rm2k-lib = "1.1.0"
-
 [workspace]
 
 [[bin]]
@@ -55,3 +50,13 @@ path = "fuzz_targets/serde.rs"
 test = false
 doc = false
 bench = false
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+rm2k-lib = "1.1.0"
+rvpacker-txt-rs-lib = { path = "..", features = [
+    "serde-csv",
+    "serde-xml",
+    "serde-xlsx",
+    "serde-yaml",
+] }

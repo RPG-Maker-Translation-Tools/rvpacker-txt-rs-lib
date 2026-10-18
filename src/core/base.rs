@@ -1,14 +1,18 @@
-use super::*;
+use super::{FlushedLines, IgnoreEntry};
 use crate::{
     BaseFlags, Comments, IndexSetExt, ProcessedData, get_ignore_entry_comment, get_line_separator,
     marshal_compat::{RpgmData, Value},
     types::{
-        DuplicateMode, EngineType, IgnoreMap, IndexMapExt, IndexMapGx, Labels, Lines, Mode, RPGMFileType,
-        TranslationEntry, TranslationMap,
+        DuplicateMode, EngineType, Error, HashMap, HashMapExt, HashSet, IgnoreMap, IndexMapExt, IndexMapGx, Labels,
+        Lines, Mode, RPGMFileType, TranslationEntry, TranslationMap,
     },
 };
-use gxhash::{HashMap, HashMapExt, HashSet};
 use std::{borrow::Cow, fmt::Write as FmtWrite};
+
+thread_local! {
+    /// The first text that didn't decode since the last take, per thread. See [`Base::decode_text`].
+    static DECODE_ERROR: std::cell::RefCell<Option<Error>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Everything parsed out of a translation `.txt`.
 ///
@@ -17,7 +21,7 @@ use std::{borrow::Cow, fmt::Write as FmtWrite};
 pub(super) struct Translation {
     pub(super) initialized: bool,
 
-    pub(super) maps: IndexMapGx<u16, TranslationMap>,
+    pub(super) maps: IndexMapGx<u32, TranslationMap>,
 
     /// Index of the currently selected map in `maps`, or `usize::MAX` when none is
     /// selected. An index rather than a reference because the map it points at is
@@ -29,8 +33,11 @@ pub(super) struct Translation {
     /// See [`Base::build_write_lookup`].
     pub(super) write_lookup: TranslationMap,
 
-    pub(super) metadata: HashMap<u16, Comments>,
-    pub(super) top_level_comments: HashMap<u16, Vec<String>>,
+    pub(super) metadata: HashMap<u32, Comments>,
+    pub(super) top_level_comments: HashMap<u32, Vec<String>>,
+
+    /// The comments after each section's last entry, which no entry carries.
+    pub(super) trailing_comments: HashMap<u32, Vec<String>>,
 
     /// Owns the raw text of the current translation `.txt` file, so that
     /// [`TranslationMap`] entries can borrow `&'static str` slices out of it instead
@@ -56,6 +63,7 @@ impl Default for Translation {
             write_lookup: TranslationMap::default(),
             metadata: HashMap::default(),
             top_level_comments: HashMap::default(),
+            trailing_comments: HashMap::default(),
             buffer: None,
         }
     }
@@ -77,14 +85,8 @@ impl Ignore {
     /// With duplicates removed on a read the whole file shares a single entry,
     /// so the id is left off; every other combination keys on the entry id.
     ///
-    /// System, Scripts and Plugins are exempt from the collapse: each is a
-    /// single section already (there is nothing to deduplicate), and
-    /// `parse_ignore` keeps their id for exactly that reason - it must match
-    /// what this function builds, or a `.rvpacker-ignore` entry written under
-    /// one of these three never matches at read time. This used to collapse
-    /// them anyway, so ignore entries silently had no effect on System and
-    /// Plugins under `DuplicateMode::Remove`.
-    pub(super) fn key(file_type: RPGMFileType, id: u16, flags: BaseFlags, duplicate_mode: DuplicateMode) -> String {
+    /// System, Scripts and Plugins always keep their id, since each is a single section. `parse_ignore` must match.
+    pub(super) fn key(file_type: RPGMFileType, id: u32, flags: BaseFlags, duplicate_mode: DuplicateMode) -> String {
         // Built in one pass. This previously formatted the name, truncated it at
         // the ':', then formatted the whole key again - two allocations per map
         // and per event.
@@ -106,24 +108,21 @@ impl Ignore {
         self.map.get_index(self.entry_index).map(|(_, entry)| entry)
     }
 
-    /// The entry for `key`, created if it is not there yet.
-    ///
-    /// Purging collects its ignore entries in [`Base::finish_translation`], by
-    /// which point the selected entry is whichever id happened to be processed
-    /// last - so that pass has to name the id it is writing rather than rely on
-    /// the selection.
+    /// The entry for `key`, created if missing. Purging names its id explicitly, since the selection is the last one processed.
     pub(super) fn entry_for(&mut self, key: String) -> &mut IgnoreEntry {
         self.map.entry(key).or_default()
     }
 }
 
 impl Translation {
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.initialized = false;
         self.maps.clear();
         self.map_index = usize::MAX;
         self.write_lookup.clear();
         self.metadata.clear();
+        self.top_level_comments.clear();
+        self.trailing_comments.clear();
         // Every borrower of the old buffer was just cleared above; drop the buffer
         // itself before `initialize_translation` installs the next one.
         self.buffer = None;
@@ -139,7 +138,7 @@ pub(super) struct Output {
     /// next flush can record the range it added.
     pub(super) total_length: usize,
 
-    pub(super) accumulated: Vec<(u16, Comments, FlushedLines, TranslationMap)>,
+    pub(super) accumulated: Vec<(u32, Comments, FlushedLines, TranslationMap)>,
 }
 
 impl Output {
@@ -159,16 +158,27 @@ pub struct Ignore {
     pub(super) entry_index: usize,
 }
 
+/// The state every file kind shares: mode, flags, the parsed translation and the output being built.
+///
+/// Create one with [`Base::new`], then call the `process_*` methods. [`Processor`](crate::Processor) does this for you.
 pub struct Base {
+    /// The operation to run.
     pub mode: Mode,
+    /// Ignore and purge options. See [`BaseFlags`].
     pub flags: BaseFlags,
+    /// The engine the files belong to.
     pub engine_type: EngineType,
+    /// What to do with repeated lines. Must match the read when writing or purging. [`Base::new`] sets [`DuplicateMode::Allow`].
     pub duplicate_mode: DuplicateMode,
 
-    pub skip_maps: HashSet<u16>,
-    pub skip_events: HashMap<RPGMFileType, HashSet<u16>>,
+    /// Map ids to leave untouched on read. Their current text is written back unchanged.
+    pub skip_maps: HashSet<u32>,
+    /// Per-file entry ids to leave untouched on read, keyed by file kind.
+    pub skip_events: HashMap<RPGMFileType, HashSet<u32>>,
+    /// Whether to record each event's id, name and coordinates ahead of its text.
     pub map_events: bool,
 
+    /// Entries read from a `.rvpacker-ignore` file, or collected on purge.
     pub ignore: Ignore,
 
     pub(super) translation: Translation,
@@ -178,6 +188,9 @@ pub struct Base {
     /// [`Base::process_map`] and reused across the run.
     pub(super) mapinfos: Option<RpgmData>,
 
+    /// `MapInfos` entries by map id, built by [`Base::begin_maps`] so lookups don't scan linearly.
+    pub(super) mapinfo_ids: HashMap<u32, marshal_rs::arena::ValueId>,
+
     /// Title override set through [`Base::set_game_title`], for engines that keep
     /// it in `Game.ini` rather than the system file.
     pub(super) game_title: String,
@@ -185,32 +198,15 @@ pub struct Base {
     pub(super) file_type: RPGMFileType,
     pub(super) labels: Labels,
 
-    /// Forces *decoding* of untagged source text to a specific codepage, set
-    /// through [`Base::set_read_encoding`].
+    /// Codepage for decoding untagged source text, set through [`Base::set_read_encoding`]. `None` means UTF-8.
     ///
-    /// XP/VX (pre-1.9 Ruby) and RM2K text carries no reliable in-file encoding
-    /// indicator, so the caller may know the codepage (e.g. from `RPG_RT.ini`)
-    /// better than the multi-encoding fallback guess ([`Base::decode_scripts`]
-    /// and the RM2K `DbStr` decoder both consult this). Deliberately separate
-    /// from [`Base::write_encoding`] - the source game's codepage and the
-    /// codepage a translation should be written back in are almost never the
-    /// same value (a `Shift_JIS` game translated into Russian can't be
-    /// re-encoded as `Shift_JIS` at all).
+    /// Kept separate from [`Base::write_encoding`]: the source codepage and the translation's codepage are rarely the same.
     pub(super) read_encoding: Option<&'static encoding_rs::Encoding>,
 
-    /// Forces *encoding* of translated text written back to the source
-    /// format, set through [`Base::set_write_encoding`]. `None` (the
-    /// default) always writes plain UTF-8, which is the only choice that
-    /// cannot silently corrupt a translation into a different script than
-    /// the source - see the "Text encoding" section of the crate
-    /// documentation for when to override this.
+    /// Codepage for encoding translated text, set through [`Base::set_write_encoding`]. `None` writes UTF-8.
     pub(super) write_encoding: Option<&'static encoding_rs::Encoding>,
 
-    /// Which RPG Maker 2000/2003 build the source targets, detected from the
-    /// database's `system.ldb_id` by [`Base::process_rm2k_database`] (or the
-    /// caller, through [`Base::set_rm2k_engine`]) and consulted when
-    /// re-serializing `.lmu`/`.ldb`/`.lmt` files - some fields only exist on
-    /// one of the two.
+    /// RPG Maker 2000/2003 build to re-serialize for. Some fields exist on only one build.
     pub(super) rm2k_engine: rm2k::engine::Engine,
 }
 
@@ -220,7 +216,7 @@ impl Default for Base {
             mode: Mode::read(),
             flags: BaseFlags::empty(),
             engine_type: EngineType::MVMZ,
-            duplicate_mode: DuplicateMode::Remove,
+            duplicate_mode: DuplicateMode::Allow,
 
             ignore: Ignore::default(),
             translation: Translation::default(),
@@ -228,6 +224,7 @@ impl Default for Base {
 
             map_events: false,
             mapinfos: None,
+            mapinfo_ids: HashMap::default(),
             game_title: String::new(),
             file_type: RPGMFileType::Invalid,
             labels: Labels::default(),
@@ -271,47 +268,77 @@ impl Base {
         }
     }
 
-    /// Forces *decoding* of untagged source text to `encoding`, instead of
-    /// guessing it.
+    /// Decodes untagged source text in `encoding` instead of UTF-8.
     ///
-    /// Affects [`Base::process_scripts`] (XP/VX/VX Ace), the RM2K database/map
-    /// processing, and any VX Ace field whose declared encoding isn't
-    /// resolvable - all of which otherwise fall back to trying a fixed list of
-    /// common codepages. Pass [`None`] to restore the guessing behavior.
-    ///
-    /// This only affects reading the source game's own text - see
-    /// [`Base::set_write_encoding`] for the independent, write-side setting.
-    /// They are almost never the same value: a game written in `Shift_JIS`
-    /// being translated into Russian cannot be re-encoded as `Shift_JIS` at
-    /// all, so reusing this for both directions would silently corrupt the
-    /// translation.
+    /// Text that isn't valid in the codepage fails the file with [`Error::InvalidText`]. Independent of
+    /// [`Base::set_write_encoding`].
     ///
     /// # Parameters
     ///
-    /// - `encoding` - Codepage to decode text with, or [`None`] to guess it.
-    pub fn set_read_encoding(&mut self, encoding: Option<&'static encoding_rs::Encoding>) {
+    /// - `encoding` - Codepage to decode text with, or [`None`] for UTF-8.
+    pub const fn set_read_encoding(&mut self, encoding: Option<&'static encoding_rs::Encoding>) {
         self.read_encoding = encoding;
     }
 
-    /// Forces *encoding* of translated text written back to the source
-    /// format, instead of always writing plain UTF-8.
+    /// Forces *encoding* of translated text written back to the source format, instead of always writing UTF-8.
     ///
-    /// Defaulting to UTF-8 is deliberate: it is the only choice that can
-    /// never corrupt a translation into a different script than the source
-    /// game's. Only override this when targeting an engine build that has
-    /// no Unicode-aware text renderer (RM2K/2003, XP, VX all render through
-    /// the OS's legacy ANSI codepage rather than decoding UTF-8) *and* the
-    /// translation stays within a script that codepage can represent - the
-    /// player then also needs their system (or a locale emulator) set to
-    /// that same codepage to see it correctly. See the "Text encoding"
-    /// section of the crate documentation.
+    /// XP and VX normally read UTF-8 (RGSS sets `$KCODE` to `"UTF8"`), though there can be exceptions. RM2K/2003 reads
+    /// the OS's legacy codepage. Only override for a game that reads a legacy codepage, and only when the translation
+    /// fits it. The player's system must then use the same codepage. See the "Text encoding" section of the crate
+    /// documentation.
     ///
     /// # Parameters
     ///
-    /// - `encoding` - Codepage to encode translated text with, or [`None`]
-    ///   to always write UTF-8.
-    pub fn set_write_encoding(&mut self, encoding: Option<&'static encoding_rs::Encoding>) {
+    /// - `encoding` - Codepage to encode translated text with, or [`None`] to always write UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnsupportedWriteEncoding`] - if `encoding` can't be encoded into, such as UTF-16.
+    pub fn set_write_encoding(&mut self, encoding: Option<&'static encoding_rs::Encoding>) -> Result<(), Error> {
+        Self::check_write_encoding(encoding)?;
+
         self.write_encoding = encoding;
+        Ok(())
+    }
+
+    /// Fails with [`Error::UnsupportedWriteEncoding`] for an encoding that can't be encoded into: UTF-16 and the
+    /// replacement encoding only decode, and `encode` writes UTF-8 for them.
+    pub(crate) fn check_write_encoding(encoding: Option<&'static encoding_rs::Encoding>) -> Result<(), Error> {
+        match encoding {
+            Some(encoding) if encoding.output_encoding() != encoding => Err(Error::UnsupportedWriteEncoding {
+                encoding: encoding.name(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Encodes `text` in `encoding`, UTF-8 if [`None`], failing on any character it doesn't have.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnsupportedWriteEncoding`] - if `encoding` can't be encoded into.
+    /// - [`Error::UnmappableText`] - if `text` has a character `encoding` can't represent.
+    pub(crate) fn encode_bytes_with(
+        text: &str,
+        encoding: Option<&'static encoding_rs::Encoding>,
+    ) -> Result<Vec<u8>, Error> {
+        Self::check_write_encoding(encoding)?;
+
+        let Some(encoding) = encoding else {
+            return Ok(text.as_bytes().to_vec());
+        };
+
+        let (bytes, _, unmappable) = encoding.encode(text);
+
+        if unmappable {
+            return Err(Error::UnmappableText {
+                encoding: encoding.name(),
+                text: text.chars().take(64).collect(),
+                file: String::new(),
+            });
+        }
+
+        Ok(bytes.into_owned())
     }
 
     /// Overrides which RPG Maker 2000/2003 build to target when re-serializing.
@@ -319,55 +346,94 @@ impl Base {
     /// Left at its default ([`rm2k::engine::Engine::R2K`]) unless the caller
     /// sets it - typically from the loaded database's `system.ldb_id`, via
     /// [`rm2k::engine::Engine::from_ldb_id`] - as [`crate::Processor::process`] does.
-    pub fn set_rm2k_engine(&mut self, engine: rm2k::engine::Engine) {
+    pub const fn set_rm2k_engine(&mut self, engine: rm2k::engine::Engine) {
         self.rm2k_engine = engine;
     }
 
-    /// Decodes `bytes` as text, honoring [`Base::set_read_encoding`] if set.
-    ///
-    /// Falls back to trying a fixed list of common codepages (UTF-8, Windows-1252,
-    /// Windows-1251, Shift-JIS, GB18030) in order and taking the first one that
-    /// decodes without errors, when no override was set.
-    pub(super) fn decode_with_fallback(&self, bytes: &[u8]) -> String {
-        Self::decode_bytes_with(bytes, self.read_encoding)
+    /// Whether Marshal text must be decoded in the read encoding, rather than moved out as it is on the grounds that its
+    /// bytes happen to be valid UTF-8. Never for MV/MZ, whose text is JSON.
+    pub(super) const fn reads_legacy_text(&self) -> bool {
+        self.read_encoding.is_some() && !self.engine_type.is_mvmz()
     }
 
-    /// The encoding logic behind [`Base::decode_with_fallback`], taking the
-    /// override explicitly instead of reading it off `self` - for callers
-    /// (namely [`Base::decode_scripts`]) that decode more than one blob per
-    /// call and would otherwise have to thread `&self` through a static
-    /// method just to reach one field.
-    pub(crate) fn decode_bytes_with(bytes: &[u8], encoding: Option<&'static encoding_rs::Encoding>) -> String {
-        if let Some(encoding) = encoding {
-            return encoding.decode(bytes).0.into_owned();
-        }
+    /// Decodes untagged text with [`Base::set_read_encoding`]'s codepage, UTF-8 if none was set.
+    ///
+    /// Called deep inside traversals that can't return an error, so text that doesn't decode is recorded instead:
+    /// the first such error fails the file being processed once it is done (see [`Base::take_decode_error`]), and
+    /// the lossy text returned meanwhile is never written anywhere.
+    pub(super) fn decode_text(&self, bytes: &[u8]) -> String {
+        Self::decode_text_in(bytes, self.read_encoding)
+    }
 
-        let encodings = [
-            encoding_rs::UTF_8,
-            encoding_rs::WINDOWS_1252,
-            encoding_rs::WINDOWS_1251,
-            encoding_rs::SHIFT_JIS,
-            encoding_rs::GB18030,
-        ];
+    /// [`Base::decode_text`] in a codepage of the caller's choosing.
+    pub(super) fn decode_text_in(bytes: &[u8], encoding: Option<&'static encoding_rs::Encoding>) -> String {
+        Self::decode_bytes_with(bytes, encoding).unwrap_or_else(|error| {
+            // Only the first error is kept; later ones are usually the same problem.
+            DECODE_ERROR.with_borrow_mut(|slot| {
+                slot.get_or_insert(error);
+            });
+            encoding
+                .unwrap_or(encoding_rs::UTF_8)
+                .decode_without_bom_handling(bytes)
+                .0
+                .into_owned()
+        })
+    }
 
-        for encoding in encodings {
-            let (decoded, _, had_errors) = encoding.decode(bytes);
+    /// Fails with the first text [`Base::decode_text`] couldn't decode since the last call.
+    pub(super) fn take_decode_error() -> Result<(), Error> {
+        Self::take_thread_decode_error().map_or(Ok(()), Err)
+    }
 
-            if !had_errors {
-                return decoded.into_owned();
-            }
-        }
+    /// The first decode error recorded on this thread. A walk runs start to finish on one thread, so taking it at the
+    /// end of the walk attributes the error to that walk's file even when several walks run at once.
+    pub(super) fn take_thread_decode_error() -> Option<Error> {
+        DECODE_ERROR.with_borrow_mut(Option::take)
+    }
 
-        // None of the fixed candidates decoded cleanly - fall back to UTF-8's
-        // lossy replacement rather than silently dropping the text.
-        encoding_rs::UTF_8.decode(bytes).0.into_owned()
+    /// Decodes `bytes` in `encoding`, UTF-8 if [`None`], failing on any byte sequence that isn't valid in it.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidText`] - if `bytes` isn't valid in `encoding`.
+    pub(crate) fn decode_bytes_with(
+        bytes: &[u8],
+        encoding: Option<&'static encoding_rs::Encoding>,
+    ) -> Result<String, Error> {
+        let encoding = encoding.unwrap_or(encoding_rs::UTF_8);
+
+        // Without BOM handling: a leading `FF FE` in a legacy string must not switch it to UTF-16.
+        encoding
+            .decode_without_bom_handling_and_without_replacement(bytes)
+            .map(Cow::into_owned)
+            .ok_or_else(|| Error::InvalidText {
+                encoding: encoding.name(),
+                text: encoding.decode_without_bom_handling(bytes).0.chars().take(64).collect(),
+                file: String::new(),
+            })
     }
 
     /// Encodes `text` back into bytes using the codepage set through
     /// [`Base::set_write_encoding`], or plain UTF-8 if none was set.
-    pub(super) fn encode_with_fallback(&self, text: &str) -> Vec<u8> {
+    pub(super) fn encode_text(&self, text: &str) -> Vec<u8> {
         match self.write_encoding {
-            Some(encoding) => encoding.encode(text).0.into_owned(),
+            Some(encoding) => {
+                let (bytes, _, unmappable) = encoding.encode(text);
+
+                // Recorded like a decode error: this is called where an error can't be returned, and the file
+                // fails once it is done, before anything of it is written.
+                if unmappable {
+                    DECODE_ERROR.with_borrow_mut(|slot| {
+                        slot.get_or_insert_with(|| Error::UnmappableText {
+                            encoding: encoding.name(),
+                            text: text.chars().take(64).collect(),
+                            file: String::new(),
+                        });
+                    });
+                }
+
+                bytes.into_owned()
+            }
             None => text.as_bytes().to_vec(),
         }
     }
@@ -382,7 +448,7 @@ impl Base {
 
     /// Inserts `string` to `self.output.lines` if `self.mode`.
     ///
-    /// Will skip inserting if `self.mode` is not [`Mode::Write`] or `self.flags` contain [`BaseFlags::Ignore`] and `self.ignore_entry` contains the string.
+    /// Will skip inserting if `self.mode` is [`Mode::Write`], or `self.flags` contain [`BaseFlags::Ignore`] and `self.ignore_entry` contains the string.
     ///
     /// # Parameters
     ///
@@ -396,7 +462,17 @@ impl Base {
             return;
         }
 
-        self.output.lines.insert(string.into_owned());
+        match string {
+            // Checked first, so a repeated line isn't copied only to be dropped.
+            Cow::Borrowed(borrowed) => {
+                if !self.output.lines.contains(borrowed) {
+                    self.output.lines.insert(borrowed.to_owned());
+                }
+            }
+            Cow::Owned(owned) => {
+                self.output.lines.insert(owned);
+            }
+        }
     }
 
     /// Gets ignore entry from `self.ignore.map` by `id`.
@@ -407,7 +483,7 @@ impl Base {
     ///
     /// - `id` - ID of the entry to get.
     ///
-    pub(super) fn get_ignore_entry(&mut self, id: u16) {
+    pub(super) fn get_ignore_entry(&mut self, id: u32) {
         if !self.flags.intersects(BaseFlags::CreateIgnore | BaseFlags::Ignore) {
             return;
         }
@@ -446,23 +522,9 @@ impl Base {
 
     /// Writes `text` into `value`'s own slot.
     ///
-    /// If `literal` is set, writes it as a UTF-8 string - [`Value::set_string`]
-    /// always tags a fresh Marshal write `E => true`, so this is unconditionally
-    /// safe. Otherwise, `text` is encoded per [`Base::set_write_encoding`]
-    /// (plain UTF-8 if none was set - deliberately *not* whatever encoding the
-    /// source field happened to declare, since a translation is not generally
-    /// representable in the source script's codepage - see
-    /// [`Base::set_write_encoding`]'s docs).
-    ///
-    /// On VX Ace, the encoded bytes are still tagged with whichever encoding
-    /// was actually used (rather than left as an untagged, implicitly
-    /// `ASCII-8BIT` blob): Ruby 1.9's interpreter raises
-    /// `Encoding::CompatibilityError` at runtime when a script concatenates an
-    /// `ASCII-8BIT` string containing genuine non-ASCII bytes against a real
-    /// `UTF-8` string (common in default RGSS3 scripts, e.g. level-up message
-    /// interpolation) - tagging the field with its true encoding avoids that.
-    /// XP/VX/RM2K have no such runtime enforcement, so they stay untagged,
-    /// matching the source file's own shape.
+    /// `literal` writes a UTF-8 string. Otherwise `text` is encoded per [`Base::set_write_encoding`], not the source
+    /// field's declared encoding. On VX Ace the bytes are tagged with the encoding used, since Ruby 1.9 raises
+    /// `Encoding::CompatibilityError` on an untagged non-ASCII blob concatenated with UTF-8.
     ///
     /// # Parameters
     ///
@@ -475,7 +537,7 @@ impl Base {
             return;
         }
 
-        let encoded = self.encode_with_fallback(&text);
+        let encoded = self.encode_text(&text);
 
         if self.engine_type.is_vx_ace() {
             let name = self.write_encoding.map_or("UTF-8", |encoding| encoding.name());
@@ -499,32 +561,25 @@ impl Base {
     /// - Nothing if the value isn't string/bytes, or `fail_if_empty` is set and `string` is empty.
     /// - [`Cow<str>`] - Parsed string.
     ///
-    /// A UTF-8 value borrows `value` rather than `self`, letting the caller drop
-    /// the `&self` borrow immediately. A non-UTF-8 value is decoded into an
-    /// owned string, in one of two ways:
-    ///
-    /// - VX Ace's Ruby 1.9+ Marshal format tags a `Str` with the `E`/`encoding`
-    ///   ivar it actually declared ([`Value::declared_encoding`]) - trust that
-    ///   over any guess. Used directly via [`encoding_rs::Encoding::for_label`]
-    ///   if it resolves to a known encoding.
-    /// - XP/VX's older Ruby 1.8 format never wrote that ivar at all (nothing to
-    ///   probe), same as RM2K - decoded per [`Base::set_read_encoding`], or the
-    ///   same fallback guess RM2K uses if none was set, via [`Base::decode_with_fallback`].
+    /// A UTF-8 value borrows `value`. A non-UTF-8 value is decoded into an owned string: with the encoding the VX Ace
+    /// `Str` declared ([`Value::declared_encoding`]) if it resolves, else per [`Base::decode_text`].
     pub(super) fn extract_string<'v>(&self, value: &'v Value<'_>, fail_if_empty: bool) -> Option<Cow<'v, str>> {
-        let string = if let Some(s) = value.as_str() {
+        // Untagged Marshal text (XP/VX) is in the read encoding even when its bytes happen to be valid UTF-8, so it only
+        // takes the borrowing path without one. JSON has no raw bytes, and a tagged string declares its own encoding.
+        let string = if let Some(s) = value.utf8_str()
+            && (self.read_encoding.is_none() || value.as_raw_bytes().is_none() || value.declared_encoding().is_some())
+        {
             Cow::Borrowed(s)
         } else {
-            let bytes = value.as_byte_vec()?;
+            let bytes = value.as_raw_bytes()?;
 
-            let decoded = value
+            // A VX Ace string declares its own encoding; an untagged one is in the read encoding.
+            let encoding = value
                 .declared_encoding()
                 .and_then(encoding_rs::Encoding::for_label)
-                .map_or_else(
-                    || self.decode_with_fallback(bytes),
-                    |encoding| encoding.decode(bytes).0.into_owned(),
-                );
+                .or(self.read_encoding);
 
-            Cow::Owned(decoded)
+            Cow::Owned(Self::decode_text_in(bytes, encoding))
         };
 
         let trimmed = string.trim();
@@ -552,8 +607,21 @@ impl Base {
     /// - [`&TranslationEntry`] - entry corresponding to the `key`.
     ///
     pub(super) fn get_key(&self, key: &str) -> Option<&TranslationEntry> {
+        self.lookup(self.selected_translation_map(), key)
+    }
+
+    /// The translation map [`Base::get_translation_map`] selected, if any.
+    pub(super) fn selected_translation_map(&self) -> Option<&TranslationMap> {
+        self.translation
+            .maps
+            .get_index(self.translation.map_index)
+            .map(|(_, map)| map)
+    }
+
+    /// [`Base::get_key`] in `map` rather than the selected one, for walks that don't select.
+    pub(super) fn lookup<'a>(&'a self, map: Option<&'a TranslationMap>, key: &str) -> Option<&'a TranslationEntry> {
         if self.duplicate_mode.is_allow() {
-            self.translation_map().get(key)
+            map?.get(key)
         } else {
             self.translation.write_lookup.get(key)
         }
@@ -572,14 +640,7 @@ impl Base {
     ///
     pub(super) fn finish(&mut self, data: RpgmData) -> ProcessedData {
         if self.mode.is_write() {
-            let is_json = data.is_json();
-            let bytes = data.into_bytes();
-
-            ProcessedData::RPGMData(if is_json && self.file_type.is_plugins() {
-                ["var $plugins =\n".as_bytes(), &bytes].concat()
-            } else {
-                bytes
-            })
+            ProcessedData::RPGMData(data.into_bytes())
         } else {
             self.finish_translation()
         }

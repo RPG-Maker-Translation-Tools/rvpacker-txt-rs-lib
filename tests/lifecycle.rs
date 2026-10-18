@@ -388,7 +388,7 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 /// The lines of one id's section, header included.
-fn block(text: &str, id: u16) -> String {
+fn block(text: &str, id: u32) -> String {
     let header = format!("<!>ID<#>{id}");
     let mut inside = false;
 
@@ -405,7 +405,7 @@ fn block(text: &str, id: u16) -> String {
 }
 
 /// The id of the first section in a translation file.
-fn first_id(text: &str) -> u16 {
+fn first_id(text: &str) -> u32 {
     text.lines()
         .find_map(|line| line.strip_prefix("<!>ID<#>"))
         .and_then(|id| id.parse().ok())
@@ -637,6 +637,67 @@ mod scenarios {
         }
     }
 
+    /// A purge with duplicates removed and ignore on adds to the sections the ignore file already has, by id. It must
+    /// not start a collapsed section (`Items` without an id) next to them.
+    pub fn purge_with_duplicates_removed(fixture: Fixture, tag: &str) {
+        let workspace = workspace(tag);
+        let translation = workspace.join("translation");
+
+        read(fixture, &translation);
+
+        for path in txt_files(&translation) {
+            let translated = translate(&slurp(&path));
+            write(&path, translated).unwrap();
+        }
+
+        let subject = translation.join(SUBJECT);
+
+        // The first purge records its ids with duplicates allowed; the second one removes duplicates.
+        for (round, (flags, duplicates)) in [
+            (BaseFlags::CreateIgnore, DuplicateMode::Allow),
+            (BaseFlags::CreateIgnore | BaseFlags::Ignore, DuplicateMode::Remove),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let translated = slurp(&subject);
+            let abandoned: Vec<String> = sources(&translated)
+                .into_iter()
+                .filter(|source| !source.is_empty())
+                .take(3)
+                .map(str::to_owned)
+                .collect();
+            // The first round needs three entries to record. The second only has to add to what the first recorded, so one
+            // left over is enough: a small project (MV's has four items) has no more.
+            let minimum = if round == 0 { 3 } else { 1 };
+            assert!(abandoned.len() >= minimum, "{SUBJECT} has too few entries to test");
+
+            let abandoned_refs: Vec<&str> = abandoned.iter().map(String::as_str).collect();
+            write(&subject, untranslate(&translated, &abandoned_refs)).unwrap();
+
+            run(fixture, Mode::Purge, flags, duplicates, &translation, None);
+        }
+
+        let ignore = slurp(&translation.join(".rvpacker-ignore"));
+        let headers: Vec<&str> = ignore
+            .lines()
+            .filter(|line| line.starts_with("<!>Ignore Entry"))
+            .collect();
+
+        assert!(
+            !headers.contains(&"<!>Ignore Entry<#>Items"),
+            "the purge wrote a collapsed section next to the id sections: {headers:?}"
+        );
+        assert!(
+            headers
+                .iter()
+                .filter(|header| header.starts_with("<!>Ignore Entry<#>Items: "))
+                .count()
+                >= 2,
+            "the purges did not record both rounds by id: {headers:?}"
+        );
+    }
+
     /// Event headers survive a translate-and-append round trip.
     ///
     /// They are carried through the pipeline as an entry with no source, which
@@ -805,8 +866,15 @@ mod scenarios {
 
         let written = slurp(&output.join("js/plugins.js"));
         assert!(
-            written.starts_with("var $plugins ="),
+            written.contains("var $plugins ="),
             "the rewritten plugins.js lost its assignment"
+        );
+
+        // Only the translated strings differ: the layout and the header comments are the original's.
+        let original = slurp(&fixture.root().join("js/plugins.js"));
+        assert!(
+            written.starts_with(original.split("var $plugins =").next().unwrap()),
+            "the rewritten plugins.js lost what comes before the assignment"
         );
 
         // Read the rewritten file back: the translations are now the sources.
@@ -1187,6 +1255,14 @@ macro_rules! engines {
                     scenarios::purge_then_ignore(
                         FIXTURE,
                         concat!($dir, "-purge"),
+                    );
+                }
+
+                #[test]
+                fn purge_with_duplicates_removed() {
+                    scenarios::purge_with_duplicates_removed(
+                        FIXTURE,
+                        concat!($dir, "-purge-remove"),
                     );
                 }
 

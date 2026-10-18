@@ -4,7 +4,7 @@ A Rust library for extracting the translatable text out of RPG Maker 2000/2003/X
 
 It also ships a `json` module that converts the older engines' binary data files to and from JSON, independent of the translation workflow.
 
-This library backs [RPGMTranslate GUI](https://github.com/RPG-Maker-Translation-Tools/rpgmtranslate-qt) and [rvpacker-txt-rs CLI](https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs); either is a more practical starting point if you just want to translate a game. Reach for this crate directly when you're building your own tool on top of it.
+This library backs [RPGMTranslate GUI](https://github.com/RPG-Maker-Translation-Tools/rpgmtranslate-qt) and [rvpacker-txt-rs CLI](https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs). If you just want to translate a game, use one of those; use this crate to build your own tool.
 
 ## Installation
 
@@ -14,18 +14,20 @@ cargo add rvpacker-txt-rs-lib
 
 ## Features
 
-No feature is enabled by default. The optional ones add [`serde`](https://docs.rs/rvpacker-txt-rs-lib/latest/rvpacker_txt_rs_lib/serde/index.html) module converters between the `.txt` translation files and other formats (`export_*`/`import_*` functions):
+`gxhash` makes the crate's [`HashMap`] and [`HashSet`] use gxhash, which needs AES-NI on x86 or the Armv8 crypto extensions. Without it, they use rapidhash.
+
+The optional `serde-*` features add [`serde`](https://docs.rs/rvpacker-txt-rs-lib/latest/rvpacker_txt_rs_lib/serde/index.html) converters between `.txt` files and other formats:
 
 - `serde-csv` - CSV.
 - `serde-xml` - XML.
 - `serde-xlsx` - XLSX.
 - `serde-yaml` - YAML.
 
-JSON export/import (`export_json`/`import_json`) is always available.
+JSON export/import (`export_json`/`import_json`) is always available. See [Serialization](#serialization-converters).
 
 ## Quick start
 
-[`Processor`](#processor---the-high-level-api) is the entry point for most uses: configure the fields you care about, then call [`Processor::process`] once per operation.
+[`Processor`](#processor---the-high-level-api) is the entry point for most uses: set the fields you need, then call [`Processor::process`] once per operation.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{EngineType, Error, FileFlags, Mode, Processor};
@@ -61,72 +63,76 @@ fn main() -> Result<(), Error> {
 
 ### Engine types
 
-[`EngineType`] tells the library which binary format and JSON field naming to expect: `MVMZ`, `VXAce`, `VX`, `XP` and `RM2K`. Nothing is auto-detected - the caller supplies it, typically by checking which of `System.json`/`System.rvdata2`/`System.rvdata`/`System.rxdata` exists, or - for `RM2K` - whether `RPG_RT.ldb` exists.
-
-`RM2K` (RPG Maker 2000/2003) is structurally different enough from the other four that it doesn't share their file layout: there's no `data`/`Data` directory, and [`EngineType::extension`] panics for it rather than returning a per-entity extension - see [RPG Maker 2000/2003](#rpg-maker-20002003) below.
+[`EngineType`] selects the binary format and JSON field naming: `MVMZ`, `VXAce`, `VX`, `XP` and `RM2K`. Nothing is auto-detected; the caller supplies it, typically by checking which of `System.json`/`System.rvdata2`/`System.rvdata`/`System.rxdata` exists, or - for `RM2K` - whether `RPG_RT.ldb` exists. [`EngineType::from_extension`] maps a data file's extension to its engine.
 
 ### File kinds
 
-[`FileFlags`] is a bitflag selecting which RPG Maker data files get processed: `Map` (`Mapxxx.ext`), `System`, `Scripts` (`Scripts.ext`/`plugins.js`, depending on engine), [`FileFlags::other()`] - everything else (`Actors`, `Armors`, `Classes`, `CommonEvents`, `Enemies`, `Items`, `Skills`, `States`, `Troops`, `Weapons`) - and `Database`, RM2K's own single-file equivalent of `other()` plus `System` (see [RPG Maker 2000/2003](#rpg-maker-20002003)). `FileFlags::default()` is `FileFlags::all()`.
+[`FileFlags`] selects which files are processed:
+
+- `Map` - `Mapxxx.ext`.
+- `System` - the system file. Ignored for RM2K, whose vocabulary is under `Database`.
+- `Scripts` - `Scripts.ext` for XP/VX/VX Ace, `plugins.js` (read from `../js` next to the data directory) for MV/MZ. Ignored for RM2K.
+- [`FileFlags::other()`] - `Actors`, `Armors`, `Classes`, `CommonEvents`, `Enemies`, `Items`, `Skills`, `States`, `Troops` and `Weapons`. Each of these also has its own flag. For RM2K, `Actors`, `Skills`, `Items`, `Enemies`, `Troops`, `Classes`, `CommonEvents` and `States` select the matching list of `RPG_RT.ldb`; `Armors` and `Weapons` have no list there.
+- `Database` - RM2K's vocabulary (`terms.txt`, with the game title as its second section). The other lists of `RPG_RT.ldb` have their own flags above. `RPG_RT.ldb` is read on every RM2K run, because its `system.ldb_id` decides the build to write.
 
 ### Text encoding
 
-Reading a game's source text and writing a translation back are two independent encoding decisions, and this crate keeps them as two separate settings - [`core::Base::set_read_encoding`]/[`core::Base::set_write_encoding`] ([`Processor::read_encoding`]/[`Processor::write_encoding`] at the higher level). Reusing one setting for both, or assuming "UTF-8 in, UTF-8 out" always works, silently corrupts translations - read on for why.
+Reading and writing use separate settings: [`core::Base::set_read_encoding`]/[`core::Base::set_write_encoding`] ([`Processor::read_encoding`]/[`Processor::write_encoding`] at the higher level). Don't assume one codepage fits both.
 
-**Reading.** XP/VX (pre-1.9 Ruby) and RM2K text carries no in-file encoding indicator at all - `Scripts.*`'s compressed blobs and every RM2K string are just raw bytes. Left alone, the library tries a fixed list of common codepages (UTF-8, Windows-1252, Windows-1251, Shift-JIS, GB18030) per string and keeps the first one that decodes without errors; [`set_read_encoding`](core::Base::set_read_encoding) forces a specific one instead of guessing, once you know (or the caller tells you, e.g. from `RPG_RT.ini`) which codepage a project actually uses. VX Ace (Ruby 1.9.2) is different: its Marshal format _does_ tag each string with the encoding it was declared under, and the library trusts that tag over any guess or override - `set_read_encoding` there only matters for the rare VX Ace string that declares an encoding `encoding_rs` doesn't recognize.
+**Reading.** XP/VX and RM2K text has no in-file encoding tag, so it is read as UTF-8 by default. For XP/VX that is almost always right, since RGSS sets Ruby's `$KCODE` to `"UTF8"`; a game whose text was saved in a legacy codepage is the exception. Text that isn't valid UTF-8 fails the read, so set the codepage once you know it. RM2K text is usually in a legacy codepage, so set it there too; nothing is guessed. VX Ace tags each string with its encoding. The library trusts that tag over `read_encoding` for text that isn't ASCII, and an unrecognized tag falls back to `read_encoding`. MV/MZ files are JSON, so they are always UTF-8 and both settings are ignored for them.
 
-For XP/VX specifically, [`get_ini_title`] doubles as a practical way to _find_ that codepage rather than only accept it as given: `Game.ini`'s every other entry is ASCII, so the title is the one field where non-ASCII bytes can appear at all, and when they do, RPG Maker's editor wrote them in whatever codepage the original developer's machine used - decode the returned bytes against each candidate codepage and see which one produces sensible text. Not foolproof (a purely-ASCII title gives no signal), but it's the same heuristic real translation tooling uses.
+For XP/VX, [`get_ini_title`] helps find the codepage: `Game.ini`'s title is the only non-ASCII field. Decode the returned bytes with each candidate codepage and pick the one that yields sensible text. A purely ASCII title gives no signal. [`get_ini_title_rm2k`] does the same for RM2K's `RPG_RT.ini`, and [`get_system_title`] reads the title out of a `System.json` for MV/MZ.
 
-**Writing defaults to UTF-8 unconditionally on every engine.** A translation is not generally representable in the source text's own codepage: a Japanese (`Shift_JIS`) game translated into Russian cannot be written back as `Shift_JIS` at all, since `Shift_JIS` has no Cyrillic. Attempting it wouldn't fail loudly either - per the WHATWG encoding standard `encoding_rs` implements, an unmappable character during encoding is replaced with a literal decimal numeric-character-reference (`П` becomes the eight bytes `&#1055;`) spliced directly into the output, which is exactly the kind of silent corruption this crate avoids by default. [`set_write_encoding`](core::Base::set_write_encoding) exists for the one case where forcing a legacy codepage is actually correct: the translation's own script fits inside it (translating into French, say, whose accented letters exist in every legacy codepage this crate guesses) _and_ the target engine build has no Unicode-aware renderer to fall back on in the first place.
+**Writing defaults to UTF-8 on every engine.** Text that doesn't fit the source codepage (e.g. Russian written into a Shift-JIS game) would otherwise be silently replaced with numeric character references. Set the write encoding only when the translation fits a legacy codepage and the game reads that codepage. A translation the write encoding can't represent fails its file's write, and UTF-16 can't be written at all.
 
-That second condition is worth spelling out, because it's easy to assume "the file declares UTF-8 (or I wrote UTF-8 into it), so it'll display correctly" and be wrong. RM2K/2003, XP and VX render text through the OS's legacy ANSI text APIs, not a real UTF-8 decode - whatever bytes end up in the data file are interpreted using the _player's_ Windows "language for non-Unicode programs" setting (`GetACP()`), independent of anything the file itself declares. Concretely, for these three engines:
+RM2K/2003 display text using the player's "language for non-Unicode programs" setting, not the file's declared encoding. For RM2K/2003, and for an XP/VX exception:
 
-- If you leave `write_encoding` at its default (UTF-8) and the target machine's non-Unicode-program codepage is _also_ UTF-8 - available on Windows 10 1903+ as the "Beta: Use Unicode UTF-8 for worldwide language support" checkbox under Region settings - text renders correctly with no further work.
-- Otherwise, force `write_encoding` to the _target language's_ legacy codepage (Windows-1251 for Russian, Shift-JIS for Japanese, and so on - not the source game's codepage), and make sure whoever runs the translated game has their system set to that same codepage, or launches it through a locale-emulation tool (e.g. Locale Emulator) configured for it.
+- If the target machine's non-Unicode codepage is UTF-8 (Windows 10 1903+, Region settings → "Beta: Use Unicode UTF-8 for worldwide language support"), the default works.
+- Otherwise, set `write_encoding` to the _target language's_ codepage (e.g. Windows-1251 for Russian), and have players match it or run the game through a locale emulator such as Locale Emulator.
 
-VX Ace (RGSS3, Ruby 1.9.2) is Unicode-native, so the UTF-8 default just works there without either of the above - forcing `write_encoding` on VX Ace is only useful for deliberately keeping a legacy-codepage-compatible translation (the French-into-`Shift_JIS`-game case above). One more VX Ace-specific detail the library handles for you: Ruby 1.9's interpreter raises `Encoding::CompatibilityError` at runtime when a script concatenates a non-ASCII-safe string tagged `ASCII-8BIT` against a real `UTF-8` string (common in default RGSS3 scripts, e.g. level-up message interpolation) - so a translated VX Ace field is always written back tagged with whichever encoding it actually ended up in, never left untagged.
+VX Ace (RGSS3) is Unicode-native, so the UTF-8 default works without either step.
 
 ### Modes
 
 [`Mode`] picks the operation:
 
-- `Mode::Read { append, force }` - extract text into `.txt` files. `append` keeps existing translations and adds anything new since the last read (for a game that received a content update); without it, an existing translation file is left untouched. `force` overwrites files that already exist and skips the hash check that would otherwise leave unchanged files alone.
+- `Mode::read()` (`Mode::Read { append: false, force: false }`) - extract text into `.txt` files. An existing translation file is left alone, and the run logs why. Use `append` or `force` to change that.
+- `Mode::Read { append: true, .. }` - `append` keeps existing translations and adds new lines, for a game that received a content update. A file whose content hash matches the previous read is skipped as unchanged. Persist [`Processor::hashes`] between runs for this to work.
+- `Mode::Read { force: true, .. }` - `force` overwrites existing translation files. With `append`, it also bypasses the hash check.
 - `Mode::Write` - write translated `.txt` files back into the game's original format.
 - `Mode::Purge` - drop translation entries that were never filled in.
 
+In every mode except a plain read, a translation file that doesn't exist is skipped with a warning, rather than failing the whole run.
+
 ### Duplicate handling
 
-[`DuplicateMode`] controls what happens when the same source line appears more than once, and only affects map and "other" files:
+[`DuplicateMode`] controls repeated source lines. It only affects map and "other" files:
 
-- `Allow` (default) - each map/event gets its own entry, so text that happens to repeat can still get different translations depending on context.
-- `Remove` - every occurrence of a line shares one entry and one translation. Cuts down on repetition in the `.txt` files at the cost of losing per-context translations; the translation is still written back everywhere the source line occurs.
+- `Allow` - the default. Each map/event keeps its own entries, so repeated text can have different translations per context.
+- `Remove` - every occurrence shares one entry and one translation. Less repetition in the `.txt` files, but no per-context translations. The translation is still written back everywhere the line occurs.
+
+Reads and writes must use the same setting.
 
 ## API
 
 ### `Processor` - the high-level API
 
-[`Processor`] wraps the `core` module and handles every system call - reading source files, calling into `core`, and writing `.txt`/game files back out. It's a plain struct: set the fields you need, `..Default::default()` the rest, and call [`Processor::process`]. See [Quick start](#quick-start) for a full example.
+[`Processor`] wraps the `core` module and handles all filesystem access: reading source files, calling into `core`, and writing `.txt`/game files. It's a plain struct: set the fields you need, `..Default::default()` the rest, and call [`Processor::process`]. [`Processor::new`] is the same as `Processor { mode, ..Default::default() }`. Each field is documented on the struct. See [Quick start](#quick-start).
 
-Key fields:
+What [`Processor::process`] does with the paths:
 
-| Field                       | Purpose                                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                      | Which operation to run - see [Modes](#modes).                                                                                                                                          |
-| `file_flags`                | Which files to process - see [File kinds](#file-kinds).                                                                                                                                |
-| `flags`                     | [`BaseFlags`] - `.rvpacker-ignore` handling and skipping obsolete entries.                                                                                                             |
-| `duplicate_mode`            | See [Duplicate handling](#duplicate-handling). Must match what was used on read when writing or purging.                                                                               |
-| `game_title`                | Overrides the title extracted from the system file - needed for XP/VX/VX Ace, whose title may only live in `Game.ini`, not necessarily as UTF-8.                                       |
-| `hashes`                    | Content hashes keyed by lowercased file stem, letting `Mode::Read` skip files unchanged since the last read. Persist [`Processor::hashes`] after a read and feed it back in next time. |
-| `skip_maps` / `skip_events` | Map ids, or per-file entry ids, to leave untouched on read.                                                                                                                            |
-| `map_events`                | Whether to record each event's id, name and coordinates ahead of its text.                                                                                                             |
-| `read_encoding`             | Forces decoding of untagged source text to a specific codepage instead of guessing - see [Text encoding](#text-encoding).                                                              |
-| `write_encoding`            | Forces encoding of translated text to a specific codepage instead of always writing UTF-8 - independent of `read_encoding`, see [Text encoding](#text-encoding).                       |
+- Translation files are named after the data file in lowercase: `maps.txt`, `actors.txt`, `commonevents.txt`, `system.txt`, `scripts.txt` (XP/VX/VX Ace) or `plugins.txt` (MV/MZ). RM2K uses `maps.txt`, `actors.txt`, `skills.txt`, `items.txt`, `enemies.txt`, `troops.txt`, `classes.txt`, `commonevents.txt`, `states.txt` and `terms.txt`. `.rvpacker-ignore` sits beside them.
+- `Mode::Write` puts rebuilt files under `output_path`, or `./output` if it is `None`: in `data` (MV/MZ) or `Data` (XP/VX/VX Ace), `js/plugins.js` for MV/MZ, and the project root for RM2K. Every other mode writes only into the translation directory.
+- A file whose translation `.txt` is missing is skipped with a warning on every mode but a plain read. A plain read skips a `.txt` that already exists unless `force` is set.
+- Source files are processed in parallel, and the output is the same on any thread count. Files are written through a temporary file and renamed, so a crash doesn't leave one cut off.
+- If a run fails, `hashes` is put back as it was, so a failed read can't make the next append skip files whose text never reached a translation.
+- `RM2K` needs `RPG_RT.ldb` in `source_path` on every run, and `RPG_RT.lmt` when maps are included.
 
 ### `core` module - the low-level API
 
-[`core::Base`] is what [`Processor`] is built on: one method per RPG Maker file kind - `process_map`, `process_other`, `process_system`, `process_scripts`, `process_plugins` - each taking raw file bytes and returning [`ProcessedData`] or translation data, with no filesystem access of its own. Reach for it when [`Processor`]'s all-files-at-once shape doesn't fit - a GUI processing one file per user action, for instance.
+[`core::Base`] is what [`Processor`] is built on. It has one method per file kind - `process_map`, `process_other`, `process_system`, `process_scripts`, `process_plugins` - each taking raw bytes and returning `Result<Option<ProcessedData>, Error>`, with no filesystem access. `None` means the file had nothing to process, such as a map that `MapInfos` doesn't list. Use it when [`Processor`]'s all-at-once shape doesn't fit, such as a GUI that processes one file per user action.
 
-Maps are the one kind processed as a run rather than one shot, because every map shares a single translation file: call `begin_maps`, then `process_map` per file, then `finish_maps`.
+Maps are processed as a run, because every map shares one translation file: call `begin_maps`, then `process_map` per file, then `finish_maps`.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType};
@@ -148,29 +154,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+[`ProcessedData`] holds either the game file's bytes (`RPGMData`, from write) or the `.txt` bytes (`TranslationData`, from read and purge). It implements `AsRef<[u8]>`, so you can get the bytes without matching on it.
+
 ### RPG Maker 2000/2003
 
-RM2K's data is parsed via [`rm2k-lib`](https://crates.io/crates/rm2k-lib), which exposes typed structs (`Database<'a>`, `Map<'a>`, `TreeMap<'a>`) rather than a generic JSON/Marshal tree, so it doesn't go through the `Value` cursor `process_map`/`process_other`/`process_system` use internally. Instead, [`core::Base`] gets its own set of methods that take `rm2k-lib`'s structs directly:
+RM2K data is parsed by [`rm2k-lib`](https://crates.io/crates/rm2k-lib) into typed structs. [`core::Base`] has its own `begin_rm2k_maps`/`process_rm2k_map`/`finish_rm2k_maps` and `process_rm2k_*` methods for them, so you only need `rm2k-lib` to load those structs yourself (it is `rm2k` in code).
 
-| Method                                                                                                                                    | Corresponds to                                                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `begin_rm2k_maps` / `process_rm2k_map` / `finish_rm2k_maps`                                                                               | `begin_maps` / `process_map` / `finish_maps`. `begin_rm2k_maps` takes no arguments; `process_rm2k_map` takes a `&rm2k::rpg::TreeMap` (the `RPG_RT.lmt` map tree) in place of `MapInfos.*`'s raw bytes.                                  |
-| `process_rm2k_actors`, `process_rm2k_skills`, `process_rm2k_items`, `process_rm2k_enemies`, `process_rm2k_classes`, `process_rm2k_states` | `process_other`, one method per entity kind since `RPG_RT.ldb` bundles every kind into one file instead of one file per kind. Each takes `&mut rm2k::field::List<T>` (mutated in place on write) plus that kind's own translation text. |
-| `process_rm2k_troops`, `process_rm2k_commonevents`                                                                                        | `process_other`'s `Troops`/`CommonEvents` handling - name plus event-command dialogue, both under one id.                                                                                                                               |
-| `process_rm2k_terms`                                                                                                                      | `process_system`'s fixed-section handling, for RM2K's ~150-field vocabulary struct.                                                                                                                                                     |
+RM2K's database methods mutate the struct you pass in and return `Ok(None)` on write. Serialize `RPG_RT.ldb` once with `rm2k::file::save_database` after every section has run. [`Processor::process`] does this for `RM2K` and is the reference for the full sequence.
 
-Because one `RPG_RT.ldb` produces many `.txt` outputs, these don't return RPG Maker bytes directly on write: they mutate the passed-in struct in place and return `Ok(None)`, and the caller re-serializes the whole `Database`/`Map`/`TreeMap` once via `rm2k::file::save_database`/`save_map`/`save_tree_map` after every section has run. [`Processor::process`] does exactly this when `engine_type` is `RM2K` - see its source for the full sequence if you're implementing this yourself.
+The engine build matters. Some fields exist only on RPG Maker 2000 or only on 2003, and `Base` writes the R2K layout unless you say otherwise. Set it from the database with [`core::Base::set_rm2k_engine`], as [`Processor`] does:
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{core::Base, Mode, EngineType};
-use rm2k::file::load_database;
+use rm2k::{engine::Engine, file::load_database};
 use std::fs::read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut base = Base::new(Mode::read(), EngineType::RM2K);
-
     let ldb_content = read("C:/Game/RPG_RT.ldb")?;
     let mut database = load_database(&ldb_content)?;
+
+    let mut base = Base::new(Mode::read(), EngineType::RM2K);
+    base.set_rm2k_engine(Engine::from_ldb_id(database.value.system.ldb_id));
 
     let translation_data = base.process_rm2k_actors(&mut database.value.actors, None)?;
 
@@ -178,11 +182,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-RM2K's project layout doesn't fit the `data`/`Data` convention either: `RPG_RT.ldb`, `RPG_RT.lmt` and every `MapNNNN.lmu` live at the project root. [`core::filter_rm2k_maps`] finds the map files there, in place of [`core::filter_maps`].
+RM2K's layout differs: `RPG_RT.ldb`, `RPG_RT.lmt` and every `MapNNNN.lmu` sit at the project root, so [`core::filter_rm2k_maps`] finds the map files there, in place of [`core::filter_maps`].
 
 ### Reading one value out of a raw file
 
-[`core::get_entity_values`] resolves a dotted key/index path inside a raw, unprocessed RPG Maker data file (any engine but RM2K/RM2K3, see below) to the scalar value(s) at the end of it - for a consumer that wants to show one field's current value (a tooltip, say) without running the full translation pipeline.
+[`core::get_entity_values`] reads scalar values out of a raw data file (MV/MZ and the Marshal engines) without running the translation pipeline. The `path` segments lead to an object or array, and the `leaves` are the fields or indices read from there. Each leaf must resolve to a boolean, number or string. It returns one string per leaf, in order. RM2K isn't a JSON or Marshal file, so use the RM2K functions below instead.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{EngineType, core::{PathSegment, get_entity_values}};
@@ -191,10 +195,11 @@ use std::fs::read;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = read("C:/Game/Data/System.json")?;
 
-    // System.json -> "variables" -> index 3
+    // Walk to `variables`, then read its element at index 3.
     let values = get_entity_values(
         &content,
         EngineType::MVMZ,
+        None,
         &[PathSegment::Key("variables")],
         &[PathSegment::Index(3)],
     )?;
@@ -203,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-RM2K/RM2K3 keep their whole database in one binary `RPG_RT.ldb` instead of one file per entity, so there is no tree to walk by a path. [`core::get_rm2k_entity_name`] looks up the name of one entry of a list instead (actors and variables, the two a message code refers to), decoded with the project's read encoding:
+RM2K keeps its database in one binary `RPG_RT.ldb`, so there is no path to walk. [`core::get_rm2k_entity_name`] returns the name of one entry instead (actors and variables, from [`core::Rm2kEntity`]), decoded with the read encoding (UTF-8 if you pass `None`):
 
 ```rust no_run
 use rvpacker_txt_rs_lib::core::{Rm2kEntity, get_rm2k_entity_name};
@@ -219,7 +224,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-[`core::get_rm2k_system_graphic_name`] returns the name of the system graphic (`System/<name>.png`) that an RM2K/RM2K3 database selects - where the text colors of `\C[n]` live. It reads `RPG_RT.ldb` and decodes the name the same way; an empty name (a database selecting no graphic) is returned as is:
+Each of these loads the database on every call. To look up several names, load it once with [`core::Rm2kDatabase::load`] and call its methods.
+
+[`core::get_rm2k_system_graphic_name`] returns the system graphic (`System/<name>.png`) that the database selects, where `\C[n]` text colors come from:
 
 ```rust no_run
 use rvpacker_txt_rs_lib::core::get_rm2k_system_graphic_name;
@@ -235,13 +242,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### `save` module
 
-[`save`] reads the save files of every supported engine, independent of the translation workflow - for a consumer (a GUI tooltip, say) that wants to show what a message code like `\P[1]` or `\playtime` would print. [`save::get_save_summary`] takes a save file's raw bytes and its [`EngineType`], and returns a normalized [`save::SaveSummary`] whatever the engine's storage:
+[`save`] reads save files of every supported engine, independent of translation. [`save::get_save_summary`] takes a save's raw bytes and its [`EngineType`], and returns a normalized [`save::SaveSummary`]:
 
-- MV/MZ - the LZString-compressed JSON of `.rpgsave` (pass the file as is; it is decompressed for you).
-- XP/VX/VX Ace - several `Marshal.dump` streams in one file. Objects are located by class name rather than position, since what the streams hold differs between the three engines.
+- MV/MZ - the LZString-compressed `.rpgsave` (pass the file as is).
+- XP/VX/VX Ace - several `Marshal.dump` streams in one file, located by class name.
 - RM2K/RM2K3 - the LCF `.lsd`.
 
-[`save::SaveSummary`] holds the playtime in frames (`frames`, 60 per second), `map_id`, `gold`, the `party` as actor ids, every actor the save holds ([`save::SaveActorSummary`]: id, name, nickname, class, level, HP/MP/TP), the carried `items`, `weapons` and `armors` ([`save::SaveStack`]: id and count), and `switches`/`variables` indexed by in-game id (index 0 is unused). Anything an engine doesn't store (nicknames and TP before VX Ace, say) stays at its default; RM2K has no separate weapons and armors, so all of them are in `items`, and it stores an actor's name only when the game changed it - an empty `name` means "fall back to the database". `read_encoding` decodes strings as in [Text encoding](#text-encoding), `None` guessing between the common codepages.
+The summary covers playtime, map, gold, party, actors, items, weapons, armors, switches and variables. Fields an engine doesn't store stay at their default. RM2K keeps all items in `items`, and an actor's `name` is empty unless the game changed it, meaning "use the database name".
+
+`read_encoding` decodes strings the same way [Text encoding](#text-encoding) describes, so pass the game's codepage for a legacy save with non-ASCII names. MV/MZ saves are JSON and ignore it.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{EngineType, save::get_save_summary};
@@ -256,35 +265,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The module also exposes the compression MV/MZ saves use: [`save::load`] decompresses a save's content into its JSON (`None` if it isn't valid LZString output), and [`save::dump`] compresses JSON back, its inverse.
-
 ### `json` module
 
-For the older engines (XP/VX/VX Ace), `json` provides [`json::generate`] and [`json::write`] to convert `.rxdata`/`.rvdata`/`.rvdata2` files to JSON and back - independent of the `.txt` translation workflow above. `Scripts.ext` is special-cased: it generates as a `.rb` file holding the decompiled, human-readable Ruby source of every script, rather than JSON.
+The `json` module converts RPG Maker data files to JSON and back, independent of the `.txt` workflow.
+
+For XP/VX/VX Ace, [`json::generate`] converts `.rxdata`/`.rvdata`/`.rvdata2` files to JSON and [`json::write`] converts them back. `Scripts.ext` generates as a `.rb` file with the decompiled Ruby source instead of JSON. Existing output is skipped unless `force` is set. RM2K has [`json::generate_rm2k`] and [`json::write_rm2k`] for an RM2K folder; `write_rm2k` takes the build from `RPG_RT.ldb.json` and writes RPG Maker 2000 files, logging a warning, if that file is missing.
 
 ```rust no_run
 use rvpacker_txt_rs_lib::{json::{generate, write}, EngineType, Error};
 
 fn main() -> Result<(), Error> {
-    generate("C:/Game/Data", "C:/Game/json", false)?;
-    write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce)?;
+    generate("C:/Game/Data", "C:/Game/json", false, None)?;
+    write("C:/Game/json", "C:/Game/json-output", EngineType::VXAce, None)?;
     Ok(())
 }
 ```
 
+For one file at a time, without touching the filesystem, use the `*_file` variants: [`json::generate_file`] and [`json::write_file`] for XP/VX/VX Ace, and the `*_rm2k_*_file` functions for RM2K. A save file is generated as an array of documents, which is written back as the same `Marshal.dump` streams. RM2K saves can be converted to JSON with [`json::generate_rm2k_save_file`], but there is no way back.
+
 ## Translation file format
 
-A `.txt` translation file is made of three kinds of lines:
+A `.txt` translation file has three kinds of lines:
 
-1. **Comment** - starts with the comment prefix (`<!>` by default). Untranslatable; leave it as-is and don't add new translations for it.
-2. **Translatable comment** - the one exception: a `{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: Source{LINE_SEPARATOR}Translation` line. It looks like a comment but names something the player actually sees, so it does need translating - and only in exactly that shape.
-3. **Translatable line** - `Source{LINE_SEPARATOR}Translation`. Everything before the first separator is source text; everything after is translation.
+1. **Comment** - starts with the comment prefix (`<!>` by default). Leave it as-is.
+2. **Translatable comment** - the exception: `{COMMENT_PREFIX}IN-GAME DISPLAYED NAME: Source{LINE_SEPARATOR}Translation`. It names something the player sees, so it is translated.
+3. **Translatable line** - `Source{LINE_SEPARATOR}Translation`. Everything before the first separator is source; everything after is translation.
 
-A single line can carry more than one translation, separated the same way: `Source{LINE_SEPARATOR}Translation 1{LINE_SEPARATOR}Translation 2`, and so on.
+A line can carry several translations: `Source{LINE_SEPARATOR}Translation 1{LINE_SEPARATOR}Translation 2`. On write, the last non-empty one is used.
 
-To avoid line-break ambiguity inside a `.txt` file, every line break in the source text is normalized to a single marker (`\#` by default) rather than left as a literal newline. Translations should use that same marker instead of pressing `Enter`.
+Line breaks in the source are normalized to a marker (`\#` by default). Use the same marker in translations rather than pressing Enter.
 
-Here's a sample `maps.txt` with the default separator/break/prefix:
+How the files are read:
+
+- Lines before the first `{COMMENT_PREFIX}ID` line belong to no section and are ignored, with a warning.
+- A section id that appears twice fails the read, and an unreadable id line fails it too.
+- A translatable line with no separator is skipped with a warning. On write, a line with an empty translation is left untranslated.
+- A UTF-8 byte order mark at the start of the file is ignored.
+- Other comments you add are kept on append, with the entry that follows them.
+- The `{COMMENT_PREFIX}EVENT ID`, `EVENT NAME` and `EVENT POS` lines appear only with `map_events`, and are regenerated on every read.
+
+Sample `maps.txt` with the default separator, break marker and prefix:
 
 ```txt
 <!>ID<#>2
@@ -296,25 +316,27 @@ This is sample\#multiline text<#>This is translated sample\#multiline text
 Multiple translations<#>The first one<#>The second one
 ```
 
-`DuplicateMode::Remove` (see [Duplicate handling](#duplicate-handling)) deduplicates lines that repeat across multiple `{COMMENT_PREFIX}ID` sections, keeping only the first appearance in the `.txt` file - e.g. if "text" appears in both `map002` and `map003`, only `map002`'s copy is kept, though the translation is still written back to both on write. This does not apply to system, scripts, plugin, or RM2K terms files, since this behavior may possibly break them.
+With `DuplicateMode::Remove`, a line that repeats across `{COMMENT_PREFIX}ID` sections is kept only at its first appearance. Translations are still written back to every occurrence. This doesn't apply to system, scripts, plugin or RM2K terms files.
 
 ### Customizing the format
 
-The comment prefix, line separator and line break marker are per-project values, not fixed constants - set once, before any processing, and they hold for every file the library touches afterward:
+The comment prefix, line separator and line break marker are per-project. Set them once at startup, before processing any file:
 
-| Setting           | Default | Setter                 | Getter                 |
-| ----------------- | ------- | ---------------------- | ---------------------- |
-| Comment prefix    | `<!>`   | [`set_comment_prefix`] | [`get_comment_prefix`] |
-| Line separator    | `<#>`   | [`set_line_separator`] | [`get_line_separator`] |
-| Line break marker | `\#`    | [`set_line_break`]     | [`get_line_break`]     |
+| Setting           | Default | Setter                 |
+| ----------------- | ------- | ---------------------- |
+| Comment prefix    | `<!>`   | [`set_comment_prefix`] |
+| Line separator    | `<#>`   | [`set_line_separator`] |
+| Line break marker | `\#`    | [`set_line_break`]     |
 
-These are process-global, not per-`Processor`/`Base` instance - call the setters once at startup, before touching any file, and don't change them mid-run. A consumer that persists a project's settings (as [rvpacker-txt-rs CLI](https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs) does, in `.rvpacker-metadata`) should apply the same values on every subsequent run against that project - translation files written under one set of values will not parse correctly under another.
+These are process-global, not per-`Processor`/`Base`. Don't change them mid-run. Apply the same values on every run against a project, since files written under one set won't parse under another.
 
 ## `.rvpacker-ignore`
 
-Lines listed in a `.rvpacker-ignore` file are skipped when reading. Set [`BaseFlags::Ignore`] to apply the file, or [`BaseFlags::CreateIgnore`] on a purge to collect untranslated entries into one instead of dropping them.
+Lines listed in a `.rvpacker-ignore` file are skipped on read. The file lives in the translation directory, next to the `.txt` files. Set [`BaseFlags::Ignore`] to apply it. A missing file is an error in that case. Set [`BaseFlags::CreateIgnore`] on purge to collect untranslated entries into one. An existing file is loaded first and rewritten with the new entries added, and sections left empty are dropped. A missing file is fine with `CreateIgnore` alone. It has no effect outside a purge.
 
-The file is a sequence of sections. A section header names the target file (and, unless duplicates are removed, the entry id); every line until the next header is an entry:
+[`BaseFlags::SkipObsolete`] only matters on an append read: it drops translation entries, and whole sections, that are no longer in the game files, instead of keeping them at the end of their section.
+
+The file is a sequence of sections. A header names the target file (and, unless duplicates are removed, the entry id); every line until the next header is an entry:
 
 ```text
 <!>Ignore Entry<#>Items: 1
@@ -325,21 +347,33 @@ Silver shilling
 makeshift2
 ```
 
-A plain line matches exactly. A line written `<!>Glob<#>pattern` matches as a shell-style pattern - `*` for any run of characters, `?` for exactly one, everything else literal - for text only recognisable by shape, like a shared prefix or suffix, rather than a fixed string.
+A plain line matches exactly. A line written `<!>Glob<#>pattern` matches as a shell-style pattern: `*` for any run of characters, `?` for one character, everything else literal.
 
-With `DuplicateMode::Remove` the `: id` suffix is ignored and a section applies to the whole file, so the id you write is arbitrary; with `DuplicateMode::Allow` it must match the entry's actual id. There is no comment syntax - any line that isn't a section header is an entry.
+With `DuplicateMode::Remove` the `: id` suffix is ignored on read, and the section applies to the whole file (system, scripts and plugin sections always keep their id). With `DuplicateMode::Allow` the id must match the entry's id. A purge always writes the id, so the same file works under either mode. RM2K headers use the RM2K kind names, such as `Rm2kItems: 1`. There are no comments. Blank lines and lines before the first header are dropped; every other line that isn't a header is an entry.
 
-[`examples/.rvpacker-ignore`](examples/.rvpacker-ignore) is a worked example, covering unused items, classes, enemies, armors and weapons - filtering that used to be hardcoded in this crate. Note that not every rule can be expressed this way: an _allowlist_ (translate only these names, drop every other actor) has no equivalent here, since an ignore file can only deny. Leaving it out costs nothing but a few extra entries to skip past.
+An ignore file can only deny, so an allowlist (translate only these names) has no equivalent.
 
-## Serialization
+[`examples/.rvpacker-ignore`](https://github.com/RPG-Maker-Translation-Tools/rvpacker-txt-rs-lib/blob/main/examples/.rvpacker-ignore) is a worked example.
 
-The option and data types of this crate (`Mode`, `EngineType`, `DuplicateMode`, `FileFlags`, `BaseFlags` and the like) implement `serde`'s `Serialize`/`Deserialize`; `Error`, `core::Base` and `core::Rm2kEntity` do not. Flat enums with only number variants (and [`FileFlags`]/[`BaseFlags`]) use `#[serde(into = "u8", try_from = "u8")]` (or `u16` for `FileFlags`), serializing as a single integer rather than a tagged representation.
+## Hashing
+
+[`content_hash`] hashes a file's bytes, seeded by the duplicate mode. It always uses rapidhash, so the result is the same on every CPU and whether or not `gxhash` is enabled. [`Processor::hashes`] stores these values between runs, which is why they must stay stable.
+
+## Serialization (converters)
+
+The [`serde`](crate::serde) module converts a translation `.txt` file to and from other formats. Each `export_*` takes the `.txt` content and returns the format, and each `import_*` takes the format and returns `.txt` content:
+
+- `export_json`/`import_json` - always available. An array of entries, each tagged `comment` or `translation`.
+- `export_csv`/`import_csv` - `serde-csv`. One row per entry, with the translation count and then each translation as a column. A text cell a spreadsheet would read as a formula (starting with `=`, `+`, `-`, `@`) gets a `'` in front, which the import removes, so opening the CSV in Excel can't mangle or run it.
+- `export_xlsx`/`import_xlsx` - `serde-xlsx`. The CSV layout, on sheet 1, with every cell stored as text, so none needs the `'`. Export returns the workbook's bytes.
+- `export_xml`/`import_xml` - `serde-xml`. An `<entries>` document.
+- `export_yaml`/`import_yaml` - `serde-yaml`. The JSON structure in YAML.
+
+Each function's docs give the exact schema. Blank lines are not kept: an exported and re-imported file comes back without them.
 
 ## Tests
 
-Tests operate on default RPG Maker project for XP, VX, VX Ace, MV and MZ.
-
-As for RPG Maker 2000, [OFF English Translation 3.0](https://www.mediafire.com/file/sx1kyo89yu0dko1/OFF_English_3.0.zip/file) is used.
+Tests use default RPG Maker projects for XP, VX, VX Ace, MV and MZ. The RM2K tests use [OFF English Translation 3.0](https://www.mediafire.com/file/sx1kyo89yu0dko1/OFF_English_3.0.zip/file).
 
 ## Support
 
@@ -354,4 +388,4 @@ Even if you don't, we will still continue working on the project anyways.
 
 ## License
 
-Project is licensed under [WTFPL](https://www.wtfpl.net/).
+Licensed under [WTFPL](https://www.wtfpl.net/).

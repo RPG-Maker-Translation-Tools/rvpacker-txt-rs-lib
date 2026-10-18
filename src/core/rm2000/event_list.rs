@@ -1,10 +1,10 @@
-use super::*;
+use super::super::list::Walker;
+use super::{Base, string_is_only_symbols};
 use crate::get_line_break;
 use rm2k::{field::DbStr, raw::EventCommandList, rpg::enums::EventCommandCode as Code};
 use smallvec::SmallVec;
-use std::borrow::Cow;
 
-impl Base {
+impl Walker<'_> {
     /// The rm2k analogue of `core::list::process_list`/`join_dialogue_lines`.
     ///
     /// `EventCommandList` is a flat `Vec<EventCommand { code, indent, string,
@@ -12,9 +12,9 @@ impl Base {
     /// `member`/`at` indirection a [`crate::marshal_compat::Value`] cursor needs -
     /// fields are mutated directly.
     ///
-    /// Consecutive `ShowMessage`(10110)/`ShowMessage_2`(20110) commands are one
+    /// A `ShowMessage`(10110) followed by its `ShowMessage_2`(20110) lines is one
     /// dialogue box split across lines, so they're grouped and joined exactly
-    /// like MV/VX's code-401/405 runs. `ShowChoiceOption`(20140) commands are
+    /// like MV/VX's code-401/405 runs; the next `ShowMessage` starts a new box. `ShowChoiceOption`(20140) commands are
     /// each their own list entry (unlike MV, where choices are one array
     /// parameter), so they're translated individually.
     pub(super) fn process_rm2k_event_list(&mut self, commands: &mut EventCommandList<'_>) {
@@ -25,12 +25,13 @@ impl Base {
             let code = commands.0[index].code;
             let is_dialogue = code == Code::SHOW_MESSAGE.0 || code == Code::SHOW_MESSAGE_2.0;
 
-            if !is_dialogue && !dialogue_lines.is_empty() {
+            // `SHOW_MESSAGE` opens a new box, so it ends the previous one even though both are dialogue.
+            if (!is_dialogue || code == Code::SHOW_MESSAGE.0) && !dialogue_lines.is_empty() {
                 self.join_rm2k_dialogue_lines(commands, &mut dialogue_lines, &mut dialogue_line_indices);
             }
 
             if is_dialogue {
-                let text = self.decode_with_fallback(commands.0[index].string.as_bytes());
+                let text = self.decode_text(commands.0[index].string.as_bytes());
 
                 if !text.is_empty() {
                     dialogue_lines.push(text);
@@ -43,8 +44,12 @@ impl Base {
                 continue;
             }
 
-            if code == Code::SHOW_CHOICE_OPTION.0 {
-                let text = self.decode_with_fallback(commands.0[index].string.as_bytes());
+            // A choice option, or the name or title a hero is given: each carries one visible string.
+            if code == Code::SHOW_CHOICE_OPTION.0
+                || code == Code::CHANGE_HERO_NAME.0
+                || code == Code::CHANGE_HERO_TITLE.0
+            {
+                let text = self.decode_text(commands.0[index].string.as_bytes());
 
                 if text.trim().is_empty() || string_is_only_symbols(&text) {
                     continue;
@@ -52,11 +57,11 @@ impl Base {
 
                 if self.mode.is_write() {
                     if let Some(translated) = self.get_key(&text) {
-                        let bytes = self.encode_with_fallback(&translated.translation);
+                        let bytes = self.encode_text(&translated.translation);
                         commands.0[index].string = DbStr::from_vec(bytes);
                     }
                 } else {
-                    self.insert_string(Cow::Owned(text));
+                    self.found.push(text);
                 }
             }
         }
@@ -74,6 +79,13 @@ impl Base {
     ) {
         let joined = dialogue_lines.join(if self.mode.is_write() { "\n" } else { get_line_break() });
 
+        // Dropped like MV/VX's symbol-only text.
+        if string_is_only_symbols(&joined) {
+            dialogue_lines.clear();
+            dialogue_line_indices.clear();
+            return;
+        }
+
         if self.mode.is_write() {
             // Cloned to end the borrow of `self.translation` before writing back
             // into `commands`, mirroring `list::join_dialogue_lines`.
@@ -83,7 +95,7 @@ impl Base {
                 let dialogue_line_count = dialogue_lines.len();
 
                 for (i, &index) in dialogue_line_indices.iter().enumerate() {
-                    let bytes = self.encode_with_fallback(if i < split_line_count {
+                    let bytes = self.encode_text(if i < split_line_count {
                         translation_lines[i]
                     } else {
                         " "
@@ -95,14 +107,25 @@ impl Base {
                     && let Some(&last_index) = dialogue_line_indices.last()
                 {
                     let remaining = translation_lines[dialogue_line_count - 1..].join("\n");
-                    commands.0[last_index].string = DbStr::from_vec(self.encode_with_fallback(&remaining));
+                    commands.0[last_index].string = DbStr::from_vec(self.encode_text(&remaining));
                 }
             }
         } else {
-            self.insert_string(Cow::Owned(joined));
+            self.found.push(joined);
         }
 
         dialogue_lines.clear();
         dialogue_line_indices.clear();
+    }
+}
+
+impl Base {
+    /// [`Walker::process_rm2k_event_list`] on the selected translation map, recording what it found.
+    pub(super) fn process_rm2k_event_list(&mut self, commands: &mut EventCommandList<'_>) {
+        let mut walker = self.walker(self.selected_translation_map());
+        walker.process_rm2k_event_list(commands);
+
+        let found = walker.found;
+        self.replay(found);
     }
 }

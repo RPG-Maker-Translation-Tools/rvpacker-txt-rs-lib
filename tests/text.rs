@@ -3,10 +3,7 @@
 
 use rvpacker_txt_rs_lib::core::{
     Glob, IgnoreEntry,
-    text::{
-        CustomReplace, TranslationLine, ends_with_if_index, latinize_string, split_translation_line,
-        string_is_only_symbols,
-    },
+    text::{CustomReplace, TranslationLine, latinize_string, split_translation_line, string_is_only_symbols},
 };
 use std::borrow::Cow;
 
@@ -124,26 +121,66 @@ mod symbols {
     }
 }
 
-mod trailing_if {
-    use super::*;
-
-    #[test]
-    fn finds_the_condition() {
-        let text = "Show text if(v[1] > 0)";
-        let index = ends_with_if_index(text).expect("condition not found");
-        assert_eq!(&text[index..], "if(v[1] > 0)");
-    }
-
-    #[test]
-    fn rejects_parentheses_that_are_not_conditions() {
-        assert!(ends_with_if_index("plain text").is_none());
-        assert!(ends_with_if_index("a parenthetical (aside)").is_none());
-        assert!(ends_with_if_index("trailing if(unclosed").is_none());
-    }
-}
-
 mod latinize {
     use super::*;
+
+    #[test]
+    fn every_mapped_character_is_latinized() {
+        for (from, to) in [
+            ("。", "."),
+            ("、", ","),
+            ("・", "·"),
+            ("＝", "—"),
+            ("「", "'"),
+            ("『", "\""),
+            ("（", "("),
+            ("）", ")"),
+            ("｛", "{"),
+            ("｝", "}"),
+            ("［", "["),
+            ("］", "]"),
+            ("〜", "~"),
+            ("？", "?"),
+            ("！", "!"),
+            ("：", ":"),
+            ("…", "..."),
+            ("　", " "),
+            ("Ⅰ", "I"),
+            ("ⅰ", "i"),
+            ("Ⅱ", "II"),
+            ("ⅱ", "ii"),
+            ("Ⅲ", "III"),
+            ("ⅲ", "iii"),
+            ("Ⅳ", "IV"),
+            ("ⅳ", "iv"),
+            ("Ⅴ", "V"),
+            ("ⅴ", "v"),
+            ("Ⅵ", "VI"),
+            ("ⅵ", "vi"),
+            ("Ⅶ", "VII"),
+            ("ⅶ", "vii"),
+            ("Ⅷ", "VIII"),
+            ("ⅷ", "viii"),
+            ("Ⅸ", "IX"),
+            ("ⅸ", "ix"),
+            ("Ⅹ", "X"),
+            ("ⅹ", "x"),
+            ("Ⅺ", "XI"),
+            ("ⅺ", "xi"),
+            ("Ⅻ", "XII"),
+            ("ⅻ", "xii"),
+            ("Ⅼ", "L"),
+            ("ⅼ", "l"),
+            ("Ⅽ", "C"),
+            ("ⅽ", "c"),
+            ("Ⅾ", "D"),
+            ("ⅾ", "d"),
+            ("Ⅿ", "M"),
+            ("ⅿ", "m"),
+        ] {
+            assert_eq!(latinize_string(from), to, "{from:?}");
+        }
+    }
 
     #[test]
     fn replaces_cjk_punctuation() {
@@ -171,6 +208,13 @@ mod globs {
     }
 
     #[test]
+    fn a_star_in_the_text_does_not_eat_the_wildcard() {
+        assert!(matches("*", "*abc"));
+        assert!(matches("*x", "*abx"));
+        assert!(matches("a*b", "a*b"));
+    }
+
+    #[test]
     fn star_spans_any_run_including_none() {
         assert!(matches("The Fellowship*", "The Fellowship"));
         assert!(matches("The Fellowship*", "The Fellowship of the Ring"));
@@ -189,6 +233,14 @@ mod globs {
         assert!(matches("test_armor?", "test_armor1"));
         assert!(!matches("test_armor?", "test_armor"));
         assert!(!matches("test_armor?", "test_armor12"));
+    }
+
+    #[test]
+    fn wildcards_step_over_whole_characters() {
+        assert!(matches("こんにちは?", "こんにちは？"));
+        assert!(!matches("こんにちは?", "こんにちは？？"));
+        assert!(matches("*？", "こんにちは？"));
+        assert!(matches("a*é", "aèé"));
     }
 
     #[test]

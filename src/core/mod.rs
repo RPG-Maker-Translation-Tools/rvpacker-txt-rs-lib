@@ -21,7 +21,6 @@ mod list;
 mod map;
 mod other;
 mod plugin;
-mod plugins;
 /// `rm2000` to avoid colliding with the `rm2k` crate name
 mod rm2000;
 mod script;
@@ -30,16 +29,19 @@ pub mod text;
 mod translation;
 
 pub use base::Base;
-pub use entity::{PathSegment, Rm2kEntity, get_entity_values, get_rm2k_entity_name, get_rm2k_system_graphic_name};
+pub use entity::{
+    PathSegment, Rm2kDatabase, Rm2kEntity, get_entity_values, get_rm2k_entity_name, get_rm2k_system_graphic_name,
+};
 pub use file::{
     filter_maps, filter_other, filter_rm2k_maps, get_ini_title, get_ini_title_rm2k, get_system_title, parse_ignore,
 };
 pub use ignore::{Glob, IgnoreEntry};
 
 pub(crate) use crate::marshal_compat::parse_rpgm_file;
+pub(crate) use map::MapWalk;
+pub(crate) use rm2000::{Rm2kMapWalk, Rm2kTree};
 pub(crate) use text::{
-    CustomReplace, TranslationLine, ends_with_if_index, push_entries, push_metadata, split_translation_line,
-    string_is_only_symbols,
+    CustomReplace, LineSplitter, TranslationLine, push_entries, push_metadata, string_is_only_symbols,
 };
 pub(crate) use translation::FlushedLines;
 
@@ -47,3 +49,6 @@ use crate::types::CommentPos;
 
 /// Index of the display-name slot in a metadata [`Comments`](crate::Comments).
 pub(crate) const DISPLAY_NAME_POS: usize = CommentPos::DisplayName as usize;
+
+/// Id of the last section of a System file, `Game Title`, which a purge leaves as it is.
+pub(crate) const SYSTEM_GAME_TITLE_ID: u32 = 8;

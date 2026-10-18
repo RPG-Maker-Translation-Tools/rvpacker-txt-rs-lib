@@ -1,5 +1,5 @@
 use rvpacker_txt_rs_lib::{
-    EngineType,
+    EngineType, Error,
     save::{dump, get_save_summary, load},
 };
 
@@ -82,4 +82,103 @@ fn mvmz_summary() {
 #[test]
 fn summary_rejects_garbage() {
     assert!(get_save_summary(b"not a save", EngineType::MVMZ, None).is_err());
+    assert!(get_save_summary(b"not a save", EngineType::VXAce, None).is_err());
+    assert!(get_save_summary(b"not a save", EngineType::RM2K, None).is_err());
+}
+
+/// Written by `tests/fixtures/saves/generate.rb`, which holds the values the tests below expect.
+const VX_ACE_SAVE: &[u8] = include_bytes!("fixtures/saves/vxace.rvdata2");
+const XP_SAVE: &[u8] = include_bytes!("fixtures/saves/xp.rxdata");
+
+#[test]
+fn a_vx_ace_save_is_summarized() {
+    let summary = get_save_summary(VX_ACE_SAVE, EngineType::VXAce, None).unwrap();
+
+    // The playtime comes from the header stream, in seconds.
+    assert_eq!(summary.frames, 1234 * 60);
+    assert_eq!(summary.map_id, 12);
+    assert_eq!(summary.gold, 99);
+    assert_eq!(summary.party, [2, 1]);
+    assert_eq!(summary.actors.len(), 2);
+    assert_eq!(summary.actors[0].name, "Harold");
+    assert_eq!(summary.actors[0].nickname, "Hero");
+    assert_eq!(summary.actors[0].mp, 12);
+    assert_eq!(summary.actors[0].tp, 5);
+    assert_eq!(summary.actors[1].name, "Marsha");
+    assert_eq!((summary.items[0].id, summary.items[0].count), (1, 3));
+    assert_eq!(summary.weapons[0].id, 4);
+    assert!(summary.armors.is_empty());
+    assert_eq!(summary.switches, [false, true, false]);
+    assert_eq!(summary.variables, [0, 5, 7]);
+}
+
+#[test]
+fn an_xp_save_is_summarized() {
+    let summary = get_save_summary(XP_SAVE, EngineType::XP, None).unwrap();
+
+    // The frame count is the first stream, a bare integer.
+    assert_eq!(summary.frames, 5400);
+    assert_eq!(summary.map_id, 7);
+    assert_eq!(summary.gold, 150);
+    assert_eq!(summary.party, [2, 1]);
+    // Harold comes from `Game_Actors`; the party's copy of him is not added twice.
+    assert_eq!(summary.actors.len(), 2);
+    assert_eq!(summary.actors[0].name, "Harold");
+    assert_eq!(summary.actors[1].name, "Marsha");
+    // XP calls the magic points SP, and stores no nickname or TP.
+    assert_eq!(summary.actors[1].mp, 8);
+    assert!(summary.actors[1].nickname.is_empty());
+    assert_eq!(summary.actors[1].tp, 0);
+    assert!(summary.switches.is_empty());
+}
+
+#[test]
+fn a_mvmz_save_that_is_not_utf8_or_not_compressed_is_invalid() {
+    assert!(matches!(
+        get_save_summary(&[0xff, 0xfe], EngineType::MVMZ, None),
+        Err(Error::InvalidSave)
+    ));
+    assert!(matches!(
+        get_save_summary(b"not base64!", EngineType::MVMZ, None),
+        Err(Error::InvalidSave)
+    ));
+}
+
+#[test]
+fn a_mvmz_payload_that_is_not_json_is_a_parse_error() {
+    assert!(matches!(
+        get_save_summary(dump("not json").as_bytes(), EngineType::MVMZ, None),
+        Err(Error::JsonParse(_))
+    ));
+}
+
+#[test]
+fn a_mvmz_save_with_odd_values_is_read_leniently() {
+    // Each malformed value falls back to its default or is skipped, and the rest of the save still reads.
+    let json = r#"{
+        "system": {"_framesOnSave": -3},
+        "switches": {"_data": ["yes"]},
+        "variables": {"_data": 5},
+        "actors": {"_data": [null, {"_name": "Solo"}]},
+        "party": {"_actors": [1, "x"], "_items": {"oops": 1, "2": 4}}
+    }"#;
+
+    let summary = get_save_summary(dump(json).as_bytes(), EngineType::MVMZ, None).unwrap();
+
+    assert_eq!(summary.frames, 0);
+    assert_eq!(summary.party, [1]);
+    assert_eq!(summary.gold, 0);
+    assert_eq!(
+        summary
+            .items
+            .iter()
+            .map(|stack| (stack.id, stack.count))
+            .collect::<Vec<_>>(),
+        [(2, 4)]
+    );
+    assert_eq!(summary.switches, [false]);
+    assert!(summary.variables.is_empty());
+    assert_eq!(summary.actors.len(), 1);
+    assert_eq!(summary.actors[0].name, "Solo");
+    assert_eq!(summary.actors[0].actor_id, 0);
 }

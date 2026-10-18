@@ -3,8 +3,8 @@
 //! their serialized forms.
 
 use rvpacker_txt_rs_lib::{
-    DuplicateMode, EngineType, Error, FileFlags, Mode, RPGMFileType, core::Base, get_ini_title, get_system_title,
-    parse_ignore,
+    DuplicateMode, EngineType, Error, FileFlags, Mode, RPGMFileType, core::Base, filter_other, get_ini_title,
+    get_system_title, parse_ignore,
 };
 use std::str::FromStr;
 
@@ -187,6 +187,12 @@ mod titles {
     }
 
     #[test]
+    fn a_longer_key_starting_with_the_name_is_not_the_title() {
+        assert_eq!(get_ini_title(b"TitleFont=Arial\nTitle=Game\n").unwrap(), b"Game");
+        assert!(matches!(get_ini_title(b"TitleFont=Arial\n"), Err(Error::NoTitle)));
+    }
+
+    #[test]
     fn an_ini_without_a_title_errors() {
         assert!(matches!(get_ini_title(b"[Game]\nRTP=RPGVXAce\n"), Err(Error::NoTitle)));
     }
@@ -301,4 +307,50 @@ mod file_flags {
         let flags = FileFlags::Map | FileFlags::other();
         assert_eq!(FileFlags::try_from(u16::from(flags)).unwrap(), flags);
     }
+}
+
+#[test]
+fn map_ids_go_past_u16_and_never_overflow() {
+    assert_eq!(Base::parse_map_id("Map070000.json"), 70_000);
+    assert_eq!(Base::parse_map_id("Map99999999999999.json"), u32::MAX);
+    assert_eq!(Base::parse_map_id("Ma"), 0);
+}
+
+#[test]
+fn other_files_must_be_named_exactly() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/filter-other");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Only the exact stems count: `Statistics` and `Items_backup` start like game data but aren't.
+    for name in [
+        "Items.json",
+        "Items_backup.json",
+        "Statistics.json",
+        "CommonEvents.json",
+        "Items.rxdata",
+    ] {
+        std::fs::write(dir.join(name), "").unwrap();
+    }
+
+    let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+    let names: Vec<String> = filter_other(entries.iter(), "json")
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+
+    assert_eq!(names, ["CommonEvents.json", "Items.json"]);
+}
+
+#[test]
+fn single_section_rm2k_terms_keep_their_id_when_duplicates_are_removed() {
+    // `Rm2kTerms` has one section, so its id stays on the key, as `Base` builds it.
+    let map = parse_ignore("<!>Ignore Entry<#>Rm2kTerms: 1\nTerm\n", DuplicateMode::Remove, true);
+
+    assert!(map.contains_key("<!>Ignore Entry<#>Rm2kTerms: 1"));
+}
+
+#[test]
+fn base_and_processor_both_default_to_allow_duplicates() {
+    assert!(Base::new(Mode::read(), EngineType::MVMZ).duplicate_mode.is_allow());
+    assert!(rvpacker_txt_rs_lib::Processor::default().duplicate_mode.is_allow());
 }

@@ -1,21 +1,16 @@
-use super::*;
+use super::{Base, parse_rpgm_file, string_is_only_symbols};
 use crate::{
     CommentPos, ProcessedData, get_line_break,
-    marshal_compat::Value,
+    marshal_compat::{RpgmData, Value},
     types::{Error, RPGMFileType, Variable},
 };
 use regex::Regex;
-use std::{borrow::Cow, cell::LazyCell, fmt::Write as FmtWrite};
+use std::{borrow::Cow, sync::LazyLock};
 
-thread_local! {
-    static IS_INVALID_MULTILINE_VARIABLE_RE: LazyCell<Regex> =
-        LazyCell::new(|| unsafe {
-            Regex::new(r"^#? ?<.*>.?$|^[a-z]\d$").unwrap_unchecked()
-        });
-    static IS_INVALID_VARIABLE_RE: LazyCell<Regex> = LazyCell::new(|| unsafe {
-        Regex::new(r"^[+-]?$|^///|---|restrict eval").unwrap_unchecked()
-    });
-}
+static IS_INVALID_MULTILINE_VARIABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| unsafe { Regex::new(r"^#? ?<.*>.?$|^[a-z]\d$").unwrap_unchecked() });
+static IS_INVALID_VARIABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| unsafe { Regex::new(r"^[+-]?$|^///|---|restrict eval").unwrap_unchecked() });
 
 impl Base {
     /// Processes the RPG Maker other file content.
@@ -24,19 +19,19 @@ impl Base {
     ///
     /// - `filename` - Filename of the file that's being processed.
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`Mode::Read`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Translation file contents. Ignored with [`crate::Mode::Read`], required otherwise.
     ///
     /// # Returns
     ///
-    /// - Nothing if `mode` is [`Mode::Write`] and no translation exists.
-    /// - [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
+    /// - Nothing if `mode` is [`crate::Mode::Write`] and no translation exists.
+    /// - [`ProcessedData`], which contains RPG Maker data if `mode` is [`crate::Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
     /// # Errors
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`crate::Mode::Read`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -62,12 +57,27 @@ impl Base {
         content: &[u8],
         translation: Option<&str>,
     ) -> Result<Option<ProcessedData>, Error> {
+        self.process_parsed_other(filename, content, None, translation)
+    }
+
+    /// [`Base::process_other`] for a file that may already be parsed: `parsed` is `content` parsed ahead of time,
+    /// or [`None`] to parse it here.
+    pub(crate) fn process_parsed_other(
+        &mut self,
+        filename: &str,
+        content: &[u8],
+        parsed: Option<RpgmData>,
+        translation: Option<&str>,
+    ) -> Result<Option<ProcessedData>, Error> {
         self.file_type = RPGMFileType::from_filename(filename);
 
         self.reset();
         self.initialize_translation(translation)?;
 
-        let mut data = parse_rpgm_file(content, self.engine_type)?;
+        let mut data = match parsed {
+            Some(data) => data,
+            None => parse_rpgm_file(content, self.engine_type)?,
+        };
         let mut processed = false;
 
         {
@@ -75,11 +85,14 @@ impl Base {
 
             // Skipping one, because the first entry is always null.
             root.for_each_element_mut(1, |object| {
-                // Corrupt files may have objects without an ID or a name; they carry nothing to translate.
+                // Corrupt files may have objects without an ID; they carry nothing to translate.
                 let Some(id) = object.member("id").and_then(|id| id.as_int()) else {
                     return;
                 };
-                let id = id as u16;
+                let id = id as u32;
+
+                // Only with duplicates removed does a missing section still have lines to translate, through another section.
+                let missing_section = self.mode.is_write() && !self.translation.maps.contains_key(&id);
 
                 if self.get_translation_map(id).is_break() {
                     if self.mode.is_purge() {
@@ -89,26 +102,34 @@ impl Base {
                     return;
                 }
 
-                processed = true;
-
-                let Some(event_name) = object
+                // Decoded like any other text, so a name in the read encoding counts. A missing one only loses the
+                // header comment: the entry is still processed and flushed, or an append would drop its translations.
+                let entry_name = object
                     .member(self.labels.name)
-                    .and_then(|name| name.as_str().map(str::to_owned))
-                else {
-                    return;
-                };
+                    .and_then(|name| self.extract_string(&name, false).map(Cow::into_owned));
 
-                self.update_metadata(id, Vec::from([(CommentPos::Name, event_name.as_str())]));
-
-                if self.file_type.is_events() || self.file_type.is_troops() {
-                    self.process_object(object);
-                } else {
-                    self.process_array(object);
+                if let Some(entry_name) = &entry_name {
+                    self.update_metadata(id, &[(CommentPos::Name, entry_name)]);
                 }
 
+                let translated = if self.file_type.is_events() || self.file_type.is_troops() {
+                    self.process_object(object)
+                } else {
+                    self.process_array(object)
+                };
+
                 self.flush_translation(id);
+
+                // A missing section is written only if one of its lines was translated, as with maps.
+                if !missing_section || translated {
+                    processed = true;
+                }
             });
         }
+
+        // Text that failed to decode fails this file, before anything of it is written.
+
+        Self::take_decode_error()?;
 
         if !processed {
             return Ok(None);
@@ -128,20 +149,22 @@ impl Base {
         if !self.engine_type.is_mvmz() {
             if variable_text
                 .lines()
-                .all(|line| line.is_empty() || IS_INVALID_MULTILINE_VARIABLE_RE.with(|r| r.is_match(line)))
-                || IS_INVALID_VARIABLE_RE.with(|r| r.is_match(&variable_text))
+                .all(|line| line.is_empty() || IS_INVALID_MULTILINE_VARIABLE_RE.is_match(line))
+                || IS_INVALID_VARIABLE_RE.is_match(&variable_text)
             {
                 return None;
             }
 
-            variable_text = Cow::Owned(variable_text.replace("\r\n", "\n"));
+            if variable_text.contains('\r') {
+                variable_text = Cow::Owned(variable_text.replace("\r\n", "\n"));
+            }
         }
 
         if self.mode.is_read() {
             return Some(variable_text.into_owned());
         }
 
-        let translated = self.get_key(&variable_text).map(|translated| {
+        self.get_key(&variable_text).map(|translated| {
             let mut result = translated.to_string();
 
             if variable_type.is_any_message() && !(variable_type.is_message_2() && self.file_type.is_skills()) {
@@ -149,32 +172,37 @@ impl Base {
             }
 
             result
-        });
+        })
+    }
+
+    /// Processes an object from `CommonEvents` or `Troops` file.
+    /// Returns whether any line of `object` was translated.
+    fn process_object(&mut self, object: &mut Value<'_>) -> bool {
+        let mut walker = self.walker(self.selected_translation_map());
+
+        if self.file_type.is_troops() {
+            if let Some(mut pages) = object.member(self.labels.pages) {
+                pages.for_each_element_mut(0, |page| {
+                    if let Some(mut list_array) = page.member(walker.labels.list) {
+                        walker.process_list(&mut list_array);
+                    }
+                });
+            }
+        } else if let Some(mut list) = object.member(self.labels.list) {
+            walker.process_list(&mut list);
+        }
+
+        let translated = walker.hits.get() > 0;
+        let found = walker.found;
+        self.replay(found);
 
         translated
     }
 
-    /// Processes an object from `CommonEvents` or `Troops` file.
-    fn process_object(&mut self, object: &mut Value<'_>) {
-        if self.file_type.is_troops() {
-            // SAFETY: Troops always include pages.
-            let mut pages = unsafe { object.member(self.labels.pages).unwrap_unchecked() };
-
-            pages.for_each_element_mut(0, |page| {
-                if let Some(mut list_array) = page.member(self.labels.list) {
-                    self.process_list(&mut list_array);
-                }
-            });
-        } else {
-            // SAFETY: CommonEvents always include list.
-            let mut list = unsafe { object.member(self.labels.list).unwrap_unchecked() };
-
-            self.process_list(&mut list);
-        }
-    }
-
     /// Processes an object array from `Actors`, `Armors`, `Classes`, `Enemies`, `Items`, `States`, `Weapons` files.
-    fn process_array(&mut self, array: &mut Value<'_>) {
+    ///
+    /// Returns whether any of its fields was translated.
+    fn process_array(&mut self, array: &mut Value<'_>) -> bool {
         let variable_pairs = [
             (self.labels.name, Variable::Name),
             (self.labels.nickname, Variable::Nickname),
@@ -185,6 +213,8 @@ impl Base {
             (self.labels.message4, Variable::Message4),
             (self.labels.note, Variable::Note),
         ];
+
+        let mut translated = false;
 
         for (variable_label, variable_type) in variable_pairs {
             let Some(mut object) = array.member(variable_label) else {
@@ -209,8 +239,9 @@ impl Base {
 
             if self.mode.is_write() {
                 self.write_translated(&mut object, parsed, self.engine_type.is_mvmz());
+                translated = true;
             } else {
-                let folded = parsed
+                let mut folded = parsed
                     .lines()
                     .fold(String::with_capacity(parsed.len() * 2), |mut output, line| {
                         let trimmed = if variable_type.is_any_message() {
@@ -219,15 +250,19 @@ impl Base {
                             line
                         };
 
-                        let _ = write!(output, "{trimmed}{brk}", brk = get_line_break());
+                        output.push_str(trimmed);
+                        output.push_str(get_line_break());
 
                         output
                     });
 
-                let replaced = unsafe { folded.strip_suffix(get_line_break()).unwrap_unchecked() };
+                // Every line ended with a break; dropping the last one in place keeps the buffer instead of copying it.
+                folded.truncate(folded.len().saturating_sub(get_line_break().len()));
 
-                self.insert_string(Cow::Borrowed(replaced));
+                self.insert_string(Cow::Owned(folded));
             }
         }
+
+        translated
     }
 }

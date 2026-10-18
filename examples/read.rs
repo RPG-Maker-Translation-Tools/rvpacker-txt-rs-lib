@@ -1,7 +1,8 @@
 //! `Processor` read, exercising every option it exposes.
 
-use gxhash::HashMap;
-use rvpacker_txt_rs_lib::{BaseFlags, DuplicateMode, EngineType, Error, FileFlags, Mode, Processor, RPGMFileType};
+use rvpacker_txt_rs_lib::{
+    BaseFlags, DuplicateMode, EngineType, Error, FileFlags, HashMap, Mode, Processor, RPGMFileType,
+};
 
 fn main() -> Result<(), Error> {
     let mut processor = Processor {
@@ -44,7 +45,7 @@ fn main() -> Result<(), Error> {
 
         // Per-file entry ids to skip, keyed by `RPGMFileType`. Has no effect on
         // `RPGMFileType::Map` - use `skip_maps` for that.
-        skip_events: Vec::from([(RPGMFileType::Enemies, Vec::from([1u16, 2, 3]))]),
+        skip_events: Vec::from([(RPGMFileType::Enemies, Vec::from([1u32, 2, 3]))]),
 
         // Record each event's id, name and coordinates immediately before its
         // dialogue, so a translator working straight in the `.txt` can tell

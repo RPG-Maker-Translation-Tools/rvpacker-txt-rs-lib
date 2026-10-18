@@ -1,33 +1,28 @@
-use super::*;
+use super::{Base, parse_rpgm_file};
 use crate::{
     CommentPos, ProcessedData,
     marshal_compat::Value,
-    types::{Error, RPGMFileType, TranslationEntry},
+    types::{Error, RPGMFileType},
 };
-use std::{borrow::Cow, mem::take};
+use std::borrow::Cow;
 
 impl Base {
-    /// This function exists for compatibility with RPG Maker XP, VX and VX Ace. It should be called only when reading.
+    /// Sets the game title for RPG Maker XP, VX and VX Ace, whose title may only live in `Game.ini`.
     ///
-    /// RPG Maker XP/VX/VXA games may not contain game title in their respective system file. Instead, they may only contain the title in `Game.ini` file. This file is not necessarily UTF-8 encoded.
-    ///
-    /// Since there's no way to tell the encoding, it's user responsibility to call [`get_ini_title`], find title's encoding through trial-and-error, and pass it here.
-    ///
-    /// Passed title overrides automatic extraction; that means that passed title will be preferred over the title from the system file, if title even exists there.
+    /// Overrides the title found in the system file. Find the title's encoding with [`get_ini_title`](crate::get_ini_title).
     ///
     /// # Parameters
     ///
     /// `title` - UTF-8 encoded [`&str`] title.
-    ///
-    /// # Note
-    ///
-    /// On [`Mode::Read`] the title becomes an entry in the translation file; on
-    /// [`Mode::Write`] it is written into the system file as-is. It used to be
-    /// dropped on write, which left [`Base::process_system`]'s write branch
-    /// unreachable and silently ignored the title callers passed.
-    ///
     pub fn set_game_title(&mut self, title: &str) {
         self.game_title = title.to_string();
+    }
+
+    /// The title set through [`Base::set_game_title`]. After an RM2K write, its translation from `terms.txt`, for
+    /// the caller to put into `RPG_RT.ini`.
+    #[must_use]
+    pub fn game_title(&self) -> &str {
+        &self.game_title
     }
 
     /// Processes the RPG Maker system file content.
@@ -35,19 +30,19 @@ impl Base {
     /// # Parameters
     ///
     /// - `content` - Content of the file that's being processed.
-    /// - `translation` - Contents of the translation file corresponding to the file. Isn't used with [`Mode::Read`]. Requires to be set with any other [`Mode`].
+    /// - `translation` - Translation file contents. Ignored with [`crate::Mode::Read`], required otherwise.
     ///
     /// # Returns
     ///
-    /// - Nothing if `mode` is [`Mode::Write`] and no translation exists.
-    /// - [`ProcessedData`], which contains RPG Maker data if `mode` is [`Mode::Write`] and translation data otherwise.
+    /// - Nothing if `mode` is [`crate::Mode::Write`] and no translation exists.
+    /// - [`ProcessedData`], which contains RPG Maker data if `mode` is [`crate::Mode::Write`] and translation data otherwise.
     /// - [`Error`], if unable to parse the content.
     ///
     /// # Errors
     ///
     /// - [`Error::MarshalLoad`] - if unable to load the Marshal data.
     /// - [`Error::JsonParse`] - if unable to parse the JSON data.
-    /// - [`Error::NoTranslation`] - if mode is not [`Mode::Read`], and no translation was passed.
+    /// - [`Error::NoTranslation`] - if mode is not [`crate::Mode::Read`], and no translation was passed.
     ///
     /// # Panics
     ///
@@ -92,7 +87,7 @@ impl Base {
         .into_iter()
         .enumerate()
         {
-            let id = entry_id as u16 + 1;
+            let id = entry_id as u32 + 1;
 
             if self.get_translation_map(id).is_break() {
                 if self.mode.is_purge() {
@@ -104,7 +99,7 @@ impl Base {
 
             processed = true;
 
-            self.update_metadata(id, Vec::from([(CommentPos::Name, entry_name)]));
+            self.update_metadata(id, &[(CommentPos::Name, entry_name)]);
 
             let mut root = data.root();
 
@@ -132,6 +127,10 @@ impl Base {
 
             self.flush_translation(id);
         }
+
+        // Text that failed to decode fails this file, before anything of it is written.
+
+        Self::take_decode_error()?;
 
         if !processed {
             return Ok(None);
@@ -173,7 +172,7 @@ impl Base {
         // Read/purge: move the value's own text out directly instead of
         // extracting a borrow and cloning it - see the equivalent comment in
         // `list.rs`'s `process_list`.
-        let text = if let Some(taken) = value.take_str() {
+        let text = if let Some(taken) = (!self.reads_legacy_text()).then(|| value.take_str()).flatten() {
             if taken.trim().is_empty() {
                 return;
             }
@@ -187,12 +186,8 @@ impl Base {
             extracted.into_owned()
         };
 
-        if self.mode.is_read() {
-            self.insert_string(Cow::Owned(text));
-        } else {
-            self.translation_map_mut()
-                .insert(Cow::Owned(text), TranslationEntry::default());
-        }
+        // Purge never gets here: `get_translation_map` breaks before any value is visited.
+        self.insert_string(Cow::Owned(text));
     }
 
     fn process_currency_unit(&mut self, system_value: &mut Value<'_>) {
@@ -205,15 +200,30 @@ impl Base {
 
     fn process_game_title(&mut self, system_value: &mut Value<'_>) {
         if self.mode.is_write() {
-            if !self.game_title.is_empty()
-                && let Some(mut value) = system_value.member(self.labels.game_title)
-            {
-                value.set_string(self.game_title.clone());
-            }
+            let Some(mut value) = system_value.member(self.labels.game_title) else {
+                return;
+            };
+
+            // The title set through `set_game_title` wins; without one, the title is translated like any other line.
+            let title = if self.game_title.is_empty() {
+                let Some(current) = self.extract_string(&value, true) else {
+                    return;
+                };
+
+                let Some(translated) = self.get_key(&current) else {
+                    return;
+                };
+
+                translated.to_string()
+            } else {
+                self.game_title.clone()
+            };
+
+            self.write_translated(&mut value, title, self.engine_type.is_mvmz());
         } else {
             // User previously set the game title through set_game_title
             if !self.game_title.is_empty() {
-                let title = take(&mut self.game_title);
+                let title = self.game_title.clone();
                 self.insert_string(Cow::Owned(title));
                 return;
             }

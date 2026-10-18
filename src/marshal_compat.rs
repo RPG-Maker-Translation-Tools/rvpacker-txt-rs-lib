@@ -14,6 +14,7 @@
 //!
 //! Every mutation this crate performs is a scalar leaf replacement.
 
+use crate::json_doc::{JsonDoc, NodeId};
 use crate::types::EngineType;
 use marshal_rs::{
     Kind, ReadError,
@@ -21,29 +22,26 @@ use marshal_rs::{
     load as marshal_load,
     value::ValueRef,
 };
-use serde_json::Value as JsonValue;
 
-/// Owns a whole parsed RPG Maker document - either a native JSON tree (MV/MZ)
+/// Owns a whole parsed RPG Maker document - either a [`JsonDoc`] (MV/MZ)
 /// or a Marshal `Arena` (everything older). Cheap to build (see the module
 /// docs), and dumped back with [`RpgmData::into_bytes`].
-pub(crate) enum RpgmData {
-    Json(JsonValue),
+// One value per file, so the size gap doesn't matter.
+#[allow(clippy::large_enum_variant)]
+pub enum RpgmData {
+    Json(JsonDoc),
     Marshal(Arena<'static>),
 }
 
 impl RpgmData {
-    pub(crate) fn from_json(json: JsonValue) -> Self {
-        Self::Json(json)
-    }
-
     pub(crate) fn from_marshal(bytes: &[u8]) -> Result<Self, ReadError> {
         Ok(Self::Marshal(marshal_load(bytes)?.into_owned()))
     }
 
     /// A cursor over the document root, for reading and/or mutating.
-    pub(crate) fn root(&mut self) -> Value<'_> {
+    pub(crate) const fn root(&mut self) -> Value<'_> {
         match self {
-            Self::Json(json) => Value::Json(json),
+            Self::Json(doc) => Value::Json { id: doc.root(), doc },
             Self::Marshal(arena) => {
                 let id = arena.root();
                 Value::Marshal {
@@ -55,19 +53,11 @@ impl RpgmData {
         }
     }
 
-    #[must_use]
-    pub(crate) fn is_json(&self) -> bool {
-        matches!(self, Self::Json(_))
-    }
-
-    /// Serializes the document back to its wire format - `serde_json::to_vec`
-    /// for JSON, `marshal_rs::dump` for Marshal.
+    /// Serializes the document back to its wire format - the source with its
+    /// replacements spliced in for JSON, `marshal_rs::dump` for Marshal.
     pub(crate) fn into_bytes(self) -> Vec<u8> {
         match self {
-            // SAFETY: every `JsonValue` this crate builds or loads is valid
-            // UTF-8 JSON - `serde_json::to_vec` only fails on a writer error
-            // or a non-string map key, neither possible for `Vec<u8>`/`Value`.
-            Self::Json(json) => unsafe { serde_json::to_vec(&json).unwrap_unchecked() },
+            Self::Json(doc) => doc.into_bytes(),
             Self::Marshal(arena) => marshal_rs::dump(&arena),
         }
     }
@@ -75,17 +65,17 @@ impl RpgmData {
 
 /// How to overwrite a [`Value::Marshal`] cursor's own slot, if it's ever
 /// assigned to - i.e. which parent array/object it came from. Not needed for
-/// [`Value::Json`]: a real `&mut serde_json::Value` can already be assigned
-/// through directly.
+/// [`Value::Json`]: a [`JsonDoc`] node is replaced by its own id.
 #[derive(Clone)]
-pub(crate) enum Slot {
+pub enum Slot {
     Array {
         parent: ValueId,
         index: usize,
     },
+    /// By position rather than name, so navigating doesn't allocate; the name is only looked up again on a write.
     Member {
         parent: ValueId,
-        name: String,
+        index: usize,
     },
     /// The document root, or a value read in a context that never writes
     /// back (e.g. an event pulled out of a Marshal `Hash` for its metadata
@@ -101,8 +91,11 @@ pub(crate) enum Slot {
 /// Navigation (`member`/`at`/`for_each_*`) takes `&mut self` uniformly, even
 /// when only reading - the underlying access is trivial either way, and one
 /// method shape means callers don't need to know which mode they're in.
-pub(crate) enum Value<'r> {
-    Json(&'r mut JsonValue),
+pub enum Value<'r> {
+    Json {
+        doc: &'r mut JsonDoc,
+        id: NodeId,
+    },
     Marshal {
         arena: &'r mut Arena<'static>,
         id: ValueId,
@@ -125,7 +118,7 @@ enum TextKind<'r> {
 /// declared. Exposed for code that reads `Arena` data directly (mapinfos,
 /// `Scripts.*`) without going through the [`Value`] cursor.
 #[must_use]
-pub(crate) fn marshal_as_text<'r>(v: ValueRef<'r, 'static>) -> Option<&'r str> {
+pub fn marshal_as_text<'r>(v: ValueRef<'r, 'static>) -> Option<&'r str> {
     match v.kind() {
         Kind::Str | Kind::Bytes => core::str::from_utf8(v.as_bytes().unwrap_or_default()).ok(),
         _ => None,
@@ -146,11 +139,26 @@ fn marshal_text_kind<'r>(arena: &'r Arena<'static>, id: ValueId) -> TextKind<'r>
     }
 }
 
+/// Translations are UTF-8, so this takes the bytes as they are; anything else is replaced rather than lost.
+fn utf8_string(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+}
+
+/// Bare name of `parent`'s `index`-th member, as the arena's by-name setters expect it.
+fn member_name(arena: &Arena<'static>, parent: ValueId, index: usize) -> Vec<u8> {
+    let (name, _) = ValueRef::new(arena, parent)
+        .members()
+        .nth(index)
+        .expect("field existed when this cursor was created");
+
+    name.strip_prefix(b"@").unwrap_or(name).to_vec()
+}
+
 impl Value<'_> {
     #[must_use]
     pub(crate) fn is_null(&self) -> bool {
         match self {
-            Self::Json(v) => v.is_null(),
+            Self::Json { doc, id } => doc.is_null(*id),
             Self::Marshal { arena, id, .. } => ValueRef::new(arena, *id).is_nil(),
         }
     }
@@ -158,7 +166,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn as_int(&self) -> Option<i32> {
         match self {
-            Self::Json(v) => v.as_i64().map(|n| n as i32),
+            Self::Json { doc, id } => doc.as_i64(*id).map(|n| n as i32),
             Self::Marshal { arena, id, .. } => ValueRef::new(arena, *id).as_i64().map(|n| n as i32),
         }
     }
@@ -166,7 +174,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn as_bool(&self) -> Option<bool> {
         match self {
-            Self::Json(v) => v.as_bool(),
+            Self::Json { doc, id } => doc.as_bool(*id),
             Self::Marshal { arena, id, .. } => ValueRef::new(arena, *id).as_bool(),
         }
     }
@@ -174,7 +182,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
-            Self::Json(v) => v.as_str(),
+            Self::Json { doc, id } => doc.as_str(*id),
             Self::Marshal { arena, id, .. } => match marshal_text_kind(arena, *id) {
                 TextKind::String(s) => Some(s),
                 _ => None,
@@ -182,6 +190,20 @@ impl Value<'_> {
         }
     }
 
+    /// [`Value::as_str`], unless the value declares an encoding other than UTF-8 and holds non-ASCII bytes, which
+    /// then mean something else than the UTF-8 they happen to validate as.
+    #[must_use]
+    pub(crate) fn utf8_str(&self) -> Option<&str> {
+        let text = self.as_str()?;
+
+        let declares_other = !text.is_ascii()
+            && self
+                .declared_encoding()
+                .and_then(encoding_rs::Encoding::for_label)
+                .is_some_and(|encoding| encoding != encoding_rs::UTF_8);
+
+        (!declares_other).then_some(text)
+    }
     /// Takes ownership of this value's text content without cloning it,
     /// leaving `null`/an empty string behind - sound only when nothing reads
     /// this node again afterward (read-mode extraction, which never
@@ -189,26 +211,22 @@ impl Value<'_> {
     /// UTF-8-validity classification; returns [`None`] for anything else
     /// (non-string, or Marshal bytes that aren't valid UTF-8 - those still
     /// go through [`Base::extract_string`](crate::core::Base) and its
-    /// decode-with-fallback path, which already produces an owned `String`
-    /// with no extra copy to avoid).
+    /// decoding path, which already produces an owned `String` with no extra
+    /// copy to avoid).
     pub(crate) fn take_str(&mut self) -> Option<String> {
-        match self {
-            Self::Json(v) => {
-                if !v.is_string() {
-                    return None;
-                }
+        // A string declaring another encoding is left for the caller's decoding path, which honours it.
+        if self.as_str().is_some() && self.utf8_str().is_none() {
+            return None;
+        }
 
-                match core::mem::take::<JsonValue>(v) {
-                    JsonValue::String(s) => Some(s),
-                    _ => unreachable!(),
-                }
-            }
+        match self {
+            // The text is a slice of the source, so there is nothing to move out.
+            Self::Json { doc, id } => doc.as_str(*id).map(str::to_owned),
             Self::Marshal { arena, id, .. } => {
                 if !matches!(marshal_text_kind(arena, *id), TextKind::String(_)) {
                     return None;
                 }
-
-                let bytes = arena.take_bytes_content(*id);
+                let bytes = arena.take_bytes_content(*id)?;
                 // SAFETY: `marshal_text_kind` just validated these exact bytes as UTF-8.
                 Some(unsafe { String::from_utf8_unchecked(bytes) })
             }
@@ -218,12 +236,13 @@ impl Value<'_> {
     /// The raw bytes of a value classified as opaque (non-UTF-8) text. Only
     /// meaningful for Marshal - JSON has no such concept.
     #[must_use]
-    pub(crate) fn as_byte_vec(&self) -> Option<&[u8]> {
+    pub(crate) fn as_raw_bytes(&self) -> Option<&[u8]> {
         match self {
-            Self::Json(_) => None,
+            Self::Json { .. } => None,
             Self::Marshal { arena, id, .. } => match marshal_text_kind(arena, *id) {
+                TextKind::String(s) => Some(s.as_bytes()),
                 TextKind::Bytes(b) => Some(b),
-                _ => None,
+                TextKind::Other => None,
             },
         }
     }
@@ -232,14 +251,14 @@ impl Value<'_> {
     /// one was present at load time - `Kind::Str` per `marshal-rs`. `None`
     /// for JSON (no such concept), and for `Kind::Bytes` - Ruby 1.8-era
     /// Marshal (XP/VX) never wrote the ivar at all, so there is nothing to
-    /// probe and the caller should fall back to guessing/[`Base::set_read_encoding`]
-    /// instead. This is deliberately independent of whether the bytes
+    /// probe and the caller should decode in [`Base::set_read_encoding`]'s
+    /// codepage instead. This is deliberately independent of whether the bytes
     /// happen to validate as UTF-8 - [`Value::as_str`]/[`Value::as_byte_vec`]
     /// classify by that; this classifies by what the file actually declared.
     #[must_use]
     pub(crate) fn declared_encoding(&self) -> Option<&[u8]> {
         match self {
-            Self::Json(_) => None,
+            Self::Json { .. } => None,
             Self::Marshal { arena, id, .. } => {
                 let v = ValueRef::new(arena, *id);
                 (v.kind() == Kind::Str).then(|| v.encoding_name()).flatten()
@@ -250,7 +269,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn is_string(&self) -> bool {
         match self {
-            Self::Json(v) => v.is_string(),
+            Self::Json { doc, id } => doc.as_str(*id).is_some(),
             Self::Marshal { arena, id, .. } => matches!(marshal_text_kind(arena, *id), TextKind::String(_)),
         }
     }
@@ -258,7 +277,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn is_bytes(&self) -> bool {
         match self {
-            Self::Json(_) => false,
+            Self::Json { .. } => false,
             Self::Marshal { arena, id, .. } => matches!(marshal_text_kind(arena, *id), TextKind::Bytes(_)),
         }
     }
@@ -269,7 +288,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn is_container(&self) -> bool {
         match self {
-            Self::Json(v) => v.is_array(),
+            Self::Json { doc, id } => doc.is_array(*id),
             Self::Marshal { arena, id, .. } => matches!(ValueRef::new(arena, *id).kind(), Kind::Array | Kind::Hash),
         }
     }
@@ -280,16 +299,26 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn member(&mut self, name: &str) -> Option<Value<'_>> {
         match self {
-            Self::Json(v) => v.get_mut(name).map(Value::Json),
+            Self::Json { doc, id } => {
+                let child = doc.member(*id, name)?;
+                Some(Value::Json { doc, id: child })
+            }
             Self::Marshal { arena, id, .. } => {
-                let child = ValueRef::new(arena, *id).get(name)?.id();
+                // Same match as `ValueRef::get`, keeping the position for `Slot::Member`.
+                let wanted = name.as_bytes();
+                let (index, child) = ValueRef::new(arena, *id)
+                    .members()
+                    .enumerate()
+                    // Object ivars nearly always carry the `@`, so that form goes first and costs one length check.
+                    .find(|(_, (n, _))| {
+                        n.len() == wanted.len() + 1 && n[0] == b'@' && n[1..] == *wanted || *n == wanted
+                    })
+                    .map(|(index, (_, child))| (index, child.id()))?;
+
                 Some(Value::Marshal {
                     arena,
                     id: child,
-                    slot: Slot::Member {
-                        parent: *id,
-                        name: name.to_owned(),
-                    },
+                    slot: Slot::Member { parent: *id, index },
                 })
             }
         }
@@ -299,7 +328,10 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn at(&mut self, index: usize) -> Option<Value<'_>> {
         match self {
-            Self::Json(v) => v.get_mut(index).map(Value::Json),
+            Self::Json { doc, id } => {
+                let child = doc.at(*id, index)?;
+                Some(Value::Json { doc, id: child })
+            }
             Self::Marshal { arena, id, .. } => {
                 let child = ValueRef::new(arena, *id).at(index)?.id();
                 Some(Value::Marshal {
@@ -314,7 +346,7 @@ impl Value<'_> {
     #[must_use]
     pub(crate) fn len(&self) -> usize {
         match self {
-            Self::Json(v) => v.as_array().map_or(0, Vec::len),
+            Self::Json { doc, id } => doc.len(*id),
             Self::Marshal { arena, id, .. } => ValueRef::new(arena, *id).len(),
         }
     }
@@ -322,16 +354,17 @@ impl Value<'_> {
     /// Replaces this value's own slot with a UTF-8 string.
     pub(crate) fn set_string(&mut self, text: String) {
         match self {
-            Self::Json(v) => **v = JsonValue::String(text),
+            Self::Json { doc, id } => doc.set_string(*id, text),
             Self::Marshal { arena, id, slot } => {
                 let new_id = match slot {
                     Slot::Array { parent, index } => arena.set_array_string(*parent, *index, text),
-                    Slot::Member { parent, name } => arena
-                        .set_member_string(*parent, name.as_bytes(), text)
-                        .expect("field existed when this cursor was created"),
+                    Slot::Member { parent, index } => {
+                        let name = member_name(arena, *parent, *index);
+                        arena.set_member_string(*parent, &name, text)
+                    }
                     Slot::Root => panic!("cannot replace the document root"),
                 };
-                *id = new_id;
+                *id = new_id.expect("field existed when this cursor was created");
             }
         }
     }
@@ -342,16 +375,17 @@ impl Value<'_> {
     /// known to be valid UTF-8 (a translation), so nothing is lost.
     pub(crate) fn set_bytes(&mut self, bytes: Vec<u8>) {
         match self {
-            Self::Json(v) => **v = JsonValue::String(String::from_utf8_lossy(&bytes).into_owned()),
+            Self::Json { doc, id } => doc.set_string(*id, utf8_string(bytes)),
             Self::Marshal { arena, id, slot } => {
                 let new_id = match slot {
                     Slot::Array { parent, index } => arena.set_array_bytes(*parent, *index, bytes),
-                    Slot::Member { parent, name } => arena
-                        .set_member_bytes(*parent, name.as_bytes(), bytes)
-                        .expect("field existed when this cursor was created"),
+                    Slot::Member { parent, index } => {
+                        let name = member_name(arena, *parent, *index);
+                        arena.set_member_bytes(*parent, &name, bytes)
+                    }
                     Slot::Root => panic!("cannot replace the document root"),
                 };
-                *id = new_id;
+                *id = new_id.expect("field existed when this cursor was created");
             }
         }
     }
@@ -364,13 +398,16 @@ impl Value<'_> {
     /// to the same lossy-UTF-8 behavior [`Value::set_bytes`] uses there.
     pub(crate) fn set_bytes_with_encoding(&mut self, bytes: Vec<u8>, encoding_name: &[u8]) {
         match self {
-            Self::Json(v) => **v = JsonValue::String(String::from_utf8_lossy(&bytes).into_owned()),
+            Self::Json { doc, id } => doc.set_string(*id, utf8_string(bytes)),
             Self::Marshal { arena, id, slot } => {
                 let new_id = arena.push_str_with_encoding_name(bytes, encoding_name);
 
                 let repointed = match slot {
-                    Slot::Array { parent, index } => Some(arena.set_array_value(*parent, *index, new_id)),
-                    Slot::Member { parent, name } => arena.set_member_value(*parent, name.as_bytes(), new_id),
+                    Slot::Array { parent, index } => arena.set_array_value(*parent, *index, new_id),
+                    Slot::Member { parent, index } => {
+                        let name = member_name(arena, *parent, *index);
+                        arena.set_member_value(*parent, &name, new_id)
+                    }
                     Slot::Root => panic!("cannot replace the document root"),
                 };
 
@@ -382,10 +419,10 @@ impl Value<'_> {
     /// Visits every array element from `skip` onward.
     pub(crate) fn for_each_element_mut(&mut self, skip: usize, mut f: impl FnMut(&mut Value<'_>)) {
         match self {
-            Self::Json(v) => {
-                let Some(arr) = v.as_array_mut() else { return };
-                for item in arr.iter_mut().skip(skip) {
-                    f(&mut Value::Json(item));
+            Self::Json { doc, id } => {
+                for index in skip..doc.len(*id) {
+                    let Some(child) = doc.at(*id, index) else { continue };
+                    f(&mut Value::Json { doc, id: child });
                 }
             }
             Self::Marshal { arena, id, .. } => {
@@ -416,7 +453,7 @@ impl Value<'_> {
     /// neither shape.
     pub(crate) fn for_each_event_mut(&mut self, mut f: impl FnMut(&mut Value<'_>)) -> bool {
         match self {
-            Self::Json(_) => {
+            Self::Json { .. } => {
                 if !self.is_container() {
                     return false;
                 }
@@ -432,12 +469,13 @@ impl Value<'_> {
                         true
                     }
                     Kind::Hash => {
-                        let len = ValueRef::new(arena, parent).len();
-                        for index in 0..len {
-                            let Some((_, value)) = ValueRef::new(arena, parent).entries().nth(index) else {
-                                continue;
-                            };
-                            let child_id = value.id();
+                        // Collected once: `entries().nth(i)` per event walked the hash from the start each time.
+                        let child_ids: Vec<ValueId> = ValueRef::new(arena, parent)
+                            .entries()
+                            .map(|(_, value)| value.id())
+                            .collect();
+
+                        for child_id in child_ids {
                             // Hash values are never assigned back to in this
                             // crate - `Slot::Root` makes that a hard error if
                             // that ever changes, rather than a silent no-op.
@@ -459,10 +497,13 @@ impl Value<'_> {
     /// Visits every `(name, value)` member of an object.
     pub(crate) fn for_each_member_mut(&mut self, mut f: impl FnMut(&str, &mut Value<'_>)) {
         match self {
-            Self::Json(v) => {
-                let Some(obj) = v.as_object_mut() else { return };
-                for (name, value) in obj.iter_mut() {
-                    f(name, &mut Value::Json(value));
+            Self::Json { doc, id } => {
+                // Collected first: `f` needs the document mutably.
+                let members: Vec<(String, NodeId)> =
+                    doc.members(*id).map(|(name, value)| (name.to_owned(), value)).collect();
+
+                for (name, child) in members {
+                    f(&name, &mut Value::Json { doc, id: child });
                 }
             }
             Self::Marshal { arena, id, .. } => {
@@ -472,20 +513,18 @@ impl Value<'_> {
                     .map(|(name, _)| String::from_utf8_lossy(name.strip_prefix(b"@").unwrap_or(name)).into_owned())
                     .collect();
 
-                for name in names {
-                    let Some(child) = ValueRef::new(arena, parent).get(&name) else {
+                for (index, name) in names.iter().enumerate() {
+                    // Re-read each time, in case `f` replaced an earlier member.
+                    let Some((_, child)) = ValueRef::new(arena, parent).members().nth(index) else {
                         continue;
                     };
                     let child_id = child.id();
                     let mut cursor = Value::Marshal {
                         arena,
                         id: child_id,
-                        slot: Slot::Member {
-                            parent,
-                            name: name.clone(),
-                        },
+                        slot: Slot::Member { parent, index },
                     };
-                    f(&name, &mut cursor);
+                    f(name, &mut cursor);
                 }
             }
         }
@@ -501,19 +540,10 @@ impl Value<'_> {
 ///
 /// - [`crate::types::Error::MarshalLoad`] - if unable to load the Marshal data.
 /// - [`crate::types::Error::JsonParse`] - if unable to parse the JSON data.
-pub(crate) fn parse_rpgm_file(mut content: &[u8], engine_type: EngineType) -> Result<RpgmData, crate::types::Error> {
-    const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-
+pub fn parse_rpgm_file(content: &[u8], engine_type: EngineType) -> Result<RpgmData, crate::types::Error> {
     if engine_type.is_mvmz() {
-        // MZ includes Byte Order Mark in files.
-        if content.starts_with(BOM) {
-            content = &content[3..];
-        }
-
-        // SAFETY: JSON is always valid UTF-8.
-        let parsed = serde_json::from_str::<JsonValue>(unsafe { std::str::from_utf8_unchecked(content) })?;
-
-        Ok(RpgmData::from_json(parsed))
+        // A byte order mark, which MZ files carry, is skipped by the parser and kept in the document.
+        Ok(RpgmData::Json(JsonDoc::parse(content.to_vec())?))
     } else {
         Ok(RpgmData::from_marshal(content)?)
     }

@@ -12,7 +12,9 @@ mod database;
 mod event_list;
 mod map;
 
-use super::*;
+pub use map::{Rm2kMapWalk, Rm2kTree};
+
+use super::{Base, string_is_only_symbols};
 use crate::ProcessedData;
 use std::borrow::Cow;
 
@@ -40,7 +42,7 @@ impl Base {
             return;
         }
 
-        let text = self.decode_with_fallback(field.as_bytes());
+        let text = self.decode_text(field.as_bytes());
         let trimmed = text.trim();
 
         if trimmed.is_empty() || string_is_only_symbols(trimmed) {
@@ -49,7 +51,7 @@ impl Base {
 
         if self.mode.is_write() {
             if let Some(translated) = self.get_key(&text) {
-                let bytes = self.encode_with_fallback(&translated.translation);
+                let bytes = self.encode_text(&translated.translation);
                 *field = rm2k::field::DbStr::from_vec(bytes);
             }
         } else {
@@ -76,6 +78,9 @@ macro_rules! rm2k_entity_pass {
     ($(#[$meta:meta])* $fn_name:ident, $file_type:expr, $ty:ty, { $($field:ident),+ $(,)? }) => {
         impl Base {
             $(#[$meta])*
+            /// # Errors
+            ///
+            /// Returns [`Error`] if the translation file can't be read or parsed, or a text field fails to decode.
             pub fn $fn_name(
                 &mut self,
                 list: &mut rm2k::field::List<$ty>,
@@ -88,7 +93,7 @@ macro_rules! rm2k_entity_pass {
                 let mut processed = false;
 
                 for entity in list.iter_mut() {
-                    let id = entity.id as u16;
+                    let id = entity.id as u32;
 
                     if self.get_translation_map(id).is_break() {
                         if self.mode.is_purge() {
@@ -100,13 +105,16 @@ macro_rules! rm2k_entity_pass {
 
                     processed = true;
 
-                    let name_text = self.decode_with_fallback(entity.name.as_bytes());
-                    self.update_metadata(id, Vec::from([(CommentPos::Name, name_text.as_str())]));
+                    let name_text = self.decode_text(entity.name.as_bytes());
+                    self.update_metadata(id, &[(CommentPos::Name, name_text.as_str())]);
 
                     $( self.process_rm2k_string_field(&mut entity.$field); )+
 
                     self.flush_translation(id);
                 }
+
+                // Text that failed to decode fails this file, before anything of it is written.
+                Self::take_decode_error()?;
 
                 if !processed {
                     return Ok(None);
