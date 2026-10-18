@@ -1,0 +1,3 @@
+# `update_config` leaks each `Config` that a setter replaces, on purpose: `&'static str`s returned by earlier getters
+# must stay valid. Only the setters in tests/config.rs call it, each in a process of its own.
+leak:update_config

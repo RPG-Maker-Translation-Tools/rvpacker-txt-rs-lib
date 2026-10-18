@@ -236,15 +236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gxhash"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3ce1bab7aa741d4e7042b2aae415b78741f267a98a7271ea226cd5ba6c43d7d"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -313,6 +304,8 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "marshal-rs"
 version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc874c0cd7a6ae584c4eecd3f2ae3d5fa0d56abf9523dd6c5d94b5fa02302aae"
 dependencies = [
  "serde",
  "thiserror",
@@ -519,9 +512,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rm2k-lib"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d86f201516a2c1360f15daac25a04b30c8220fc5896b00db2a671b18bc9bb5a6"
+checksum = "f59bccae8edf214cd8aea082437fe045cf6c8df667e049b2e7ab35a16ab1906d"
 dependencies = [
  "serde",
  "thiserror",
@@ -533,7 +526,7 @@ version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c44904ffb6c57b148ffcc8ce3011c28bc49b97e1a8343b2d632283cd566e1393"
 dependencies = [
- "zip 9.0.4",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -551,7 +544,6 @@ dependencies = [
  "csv",
  "encoding_rs",
  "flate2",
- "gxhash",
  "indexmap",
  "log",
  "marshal-rs",
@@ -812,9 +804,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.0.4"
+version = "9.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
 dependencies = [
  "crc32fast",
  "flate2",

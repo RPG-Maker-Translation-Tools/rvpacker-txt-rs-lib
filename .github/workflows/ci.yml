@@ -113,6 +113,8 @@ jobs:
         env:
           # Setting RUSTFLAGS replaces the `.cargo/config.toml` flags, so gxhash's aes/sse2 requirement is repeated here.
           RUSTFLAGS: -Zsanitizer=address -C target-feature=+aes,+sse2
+          # `update_config` leaks replaced configs on purpose; see the suppression file.
+          LSAN_OPTIONS: suppressions=.github/lsan.supp
         run: cargo test --no-fail-fast -Zbuild-std --locked --target x86_64-unknown-linux-gnu --all-features --tests
 
   tsan:
