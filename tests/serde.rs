@@ -193,6 +193,18 @@ fn a_carriage_return_at_the_end_of_the_text_survives_a_round_trip() {
     assert_eq!(import_json(&exported).unwrap(), text);
 }
 
+/// Found by fuzzing (`fuzz/`): a comment line ending in `\r` kept that `\r`, which the next export read as a line
+/// ending, so the second round trip differed from the first.
+#[cfg(feature = "serde-csv")]
+#[test]
+fn a_comment_ending_in_a_carriage_return_settles_after_one_round_trip() {
+    use rvpacker_txt_rs_lib::serde::{export_csv, import_csv};
+
+    let once = import_csv(&export_csv("'\n#\r\r\n.\r\r\r").unwrap()).unwrap();
+    let twice = import_csv(&export_csv(&once).unwrap()).unwrap();
+    assert_eq!(once, twice);
+}
+
 #[cfg(feature = "serde-csv")]
 #[test]
 fn a_count_that_is_not_a_number_is_an_error() {

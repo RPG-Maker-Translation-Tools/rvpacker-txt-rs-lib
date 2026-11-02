@@ -37,10 +37,10 @@ fn parse_entries(content: &str) -> Vec<Entry> {
 
     let mut lines = content.split('\n').peekable();
     while let Some(raw_line) = lines.next() {
-        // Only a `\r` followed by `\n` ends a line. The last line has no `\n`, so its `\r` is text, and
-        // `entries_to_content` writes it back unchanged.
+        // Every `\r` before a `\n` is a line ending, so the text can't end in one: `entries_to_content` joins with `\n`,
+        // and a kept `\r` would read back as a line ending. The last line has no `\n`, so its `\r` is text.
         let line = if lines.peek().is_some() {
-            raw_line.strip_suffix('\r').unwrap_or(raw_line)
+            raw_line.trim_end_matches('\r')
         } else {
             raw_line
         };

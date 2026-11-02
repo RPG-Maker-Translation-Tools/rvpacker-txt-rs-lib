@@ -1,3 +1,9 @@
+## 19.0.1
+
+### serde
+
+- A carriage return at the end of a line is a line ending, so the CSV, XML, JSON, YAML and XLSX exports drop it. Text that ends a line in a carriage return no longer changes on each export and import.
+
 ## 19.0.0
 
 ### Breaking

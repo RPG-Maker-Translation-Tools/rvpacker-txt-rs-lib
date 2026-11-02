@@ -700,7 +700,9 @@ mod tests {
         }
     }
 
+    // 2 million bytes takes Miri hours; the parser's iterative design is the same at any depth.
     #[test]
+    #[cfg_attr(miri, ignore = "2 million bytes takes hours under Miri")]
     fn deep_nesting_does_not_overflow() {
         let source = [vec![b'['; 1_000_000], vec![b']'; 1_000_000]].concat();
         assert!(JsonDoc::parse(source).is_ok());

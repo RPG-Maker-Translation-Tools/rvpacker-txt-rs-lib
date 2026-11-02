@@ -108,6 +108,12 @@ jobs:
         with:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
+      # Without a symbolizer, LSan reports frames as bare offsets, so the `update_config` suppression can't match.
+      - name: Install llvm-symbolizer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
+          echo "ASAN_SYMBOLIZER_PATH=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer | sort -V | tail -n1)" >> "$GITHUB_ENV"
       # cargo-fuzz defaults to the musl target, where the sanitizer can't link; these runs use the gnu target too.
       - name: Test under AddressSanitizer
         env:

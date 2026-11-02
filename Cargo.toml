@@ -1,6 +1,6 @@
 [package]
 name = "rvpacker-txt-rs-lib"
-version = "19.0.0"
+version = "19.0.1"
 authors = ["savannstm <savannstm@gmail.com>"]
 edition = "2024"
 rust-version = "1.88.0"
@@ -34,16 +34,16 @@ serde-yaml = ["dep:yaml_serde"]
 
 [dependencies]
 bitflags = { version = "2.13.2", features = ["serde"] }
-calamine = { version = "0.36.1", optional = true }
+calamine = { version = "0.38.0", optional = true }
 csv = { version = "1.4.0", optional = true }
-encoding_rs = "0.8.42"
+encoding_rs = "0.8.44"
 flate2 = { version = "1.1.10", default-features = false, features = [
     "zlib-rs",
 ] }
 gxhash = { version = "3.5.0", features = ["deterministic"], optional = true }
 indexmap = "2.14.2"
-log = "0.4.34"
-marshal-rs = { version = "4.0.0" }
+log = "0.4.35"
+marshal-rs = { version = "4.0.1" }
 memchr = "2.8.3"
 num_enum = "0.7.6"
 phf = { version = "0.14.0", features = ["macros"] }
@@ -52,10 +52,10 @@ rapidhash = "4.5.1"
 rayon = "1.12.0"
 regex = "1.13.1"
 rm2k-lib = { version = "1.2.0", features = ["serde"] }
-rust_xlsxwriter = { version = "0.100.0", optional = true }
+rust_xlsxwriter = { version = "0.102.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
-smallvec = "1.16.3"
+smallvec = "1.16.4"
 strum = { version = "0.28.0", features = ["strum_macros"] }
 strum_macros = "0.28.0"
 thiserror = "2.0.21"
